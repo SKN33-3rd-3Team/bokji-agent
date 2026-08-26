@@ -8,6 +8,7 @@ from datetime import date
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Sequence
 
 from .contracts import Chunk, SourceType
@@ -164,6 +165,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
     except (EmbeddingProviderError, VectorStoreError, ValueError, OSError) as exc:
         parser.error(str(exc))
+    # Force UTF-8 on stdout: on Windows, print() otherwise encodes with the
+    # console codepage (e.g. cp949), corrupting Korean chunk text for anyone
+    # or anything reading the output as UTF-8.
+    sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
