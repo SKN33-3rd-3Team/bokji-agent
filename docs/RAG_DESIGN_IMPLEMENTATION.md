@@ -22,9 +22,10 @@
 - 계약 버전은 `1.0`이며 다른 버전은 명시적으로 거부한다.
 - JSON boolean 필드는 문자열 대체값을 허용하지 않으며, manifest `collected_at`은 timezone을 포함한 ISO 8601 datetime이어야 한다. 출처별 핵심 metadata는 정의된 문자열·목록·날짜 타입과 비어 있지 않은 값을 요구한다.
 - `doc_id`는 출처·원문 ID·버전에서, `chunk_id`는 부모·구조 위치·청킹 설정에서 재현 가능해야 한다. chunk ID는 SHA-256으로 생성하며 프로세스마다 달라지는 Python `hash()`를 사용하지 않는다. 외부 chunk 묶음은 부모 문서에서 같은 설정으로 재생성한 결과와 대조한다.
-- 본문 `content_hash`는 줄바꿈을 LF, Unicode를 NFC로 정규화한 UTF-8 본문의 SHA-256과 일치해야 한다. 같은 `source_id + source_updated_at + effective_from`, 같은 문서 ID, 같은 본문 hash와 같은 chunk ID는 중복으로 거부한다.
+- 본문 `content_hash`는 줄바꿈을 LF, Unicode를 NFC로 정규화한 UTF-8 본문의 SHA-256과 일치해야 한다. 같은 `source_id + source_updated_at + effective_from`, 같은 문서 ID, 같은 출처의 본문 hash와 같은 chunk ID는 중복으로 거부한다. 서로 다른 `source_id`의 본문 hash가 같으면 지역·기관별 별도 서비스일 수 있으므로 `duplicate_content_candidate` warning으로 기록하고 인수는 허용한다.
 - 수집 인수에는 출처별 manifest와 Document Card가 모두 필요하다. 권리·민감정보 검토가 끝난 공개 문서만 승인 대상으로 삼는다.
-- 보조금은 지원 대상·지원 내용·신청 방법 섹션과 기관·지역코드·서비스 분류를 보존한다. 법령은 법령명·일련번호·공포일·시행일·개정 상태와 조문 위치를 보존한다.
+- `HandoffReport.issues`는 인수를 거부하는 blocking 오류이고 `HandoffReport.warnings`는 검토가 필요하지만 인수를 막지 않는 non-blocking 관측값이다. warning만 있는 문서는 `accepted_document_ids`에 포함하고 `require_accepted()`도 성공한다.
+- 보조금은 지원 대상·지원 내용 섹션과 기관·지역코드·서비스 분류를 필수로 보존한다. 원천에 신청 방법이 없으면 `missing_recommended_subsidy_section` warning으로 기록하고 문서는 인수한다. 법령은 법령명·일련번호·공포일·시행일·개정 상태와 조문 위치를 보존한다.
 - 청킹은 구조 경계를 넘지 않는다. 구조 단위가 상한을 넘을 때만 `max_chars=800`, `overlap_chars=100` 기본값으로 내부 분할한다. 설정값은 chunk ID와 `chunking_version`에 포함하며 이후 Dev set 실험에서 한 조건씩 변경할 수 있다.
 - 법령 경로는 `조→항→호→목` 계층을 따르되 `조→호`도 허용하고, `목`은 반드시 `호` 다음에 둔다. 마지막 경로 수준은 section type과 일치해야 하며 모든 locator와 본문이 원문에 같은 순서로 존재해야 한다.
 - 시행 유효 구간은 `[effective_from, effective_to)`로 해석한다. 시작일에는 유효하고 종료일에는 유효하지 않다.

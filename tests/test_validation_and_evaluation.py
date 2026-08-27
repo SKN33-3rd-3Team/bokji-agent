@@ -14,6 +14,7 @@ from rag_design.contracts import (
     EvidenceStatus,
     RetrievedChunk,
     compute_content_hash,
+    compute_document_id,
 )
 from rag_design.evaluation import (
     AbstentionCase,
@@ -25,7 +26,10 @@ from rag_design.evaluation import (
     retrieval_metrics,
 )
 from rag_design.validation import (
+    HandoffReport,
+    ValidationIssue,
     validate_answer_evidence,
+    validate_chunk_batch,
     validate_collection_handoff,
     validate_evidence_check_result,
 )
@@ -40,6 +44,18 @@ def load_handoff(name: str) -> dict:
 class ValidationAndEvaluationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.subsidy, self.law = load_documents()
+
+    def test_handoff_report_two_argument_construction_defaults_warnings(self) -> None:
+        report = HandoffReport((), (self.subsidy.doc_id,))
+
+        self.assertTrue(report.accepted)
+        self.assertEqual(report.warnings, ())
+
+    def test_warning_only_handoff_require_accepted_succeeds(self) -> None:
+        warning = ValidationIssue("review", "documents[0]", "review candidate")
+        report = HandoffReport((), (self.subsidy.doc_id,), (warning,))
+
+        report.require_accepted()
 
     def test_public_fixtures_pass_handoff_validation(self) -> None:
         for document, filename in (
@@ -107,6 +123,139 @@ class ValidationAndEvaluationTests(unittest.TestCase):
             handoff["document_card"],
         )
         self.assertIn("duplicate_source_version", {issue.code for issue in report.issues})
+
+    def test_duplicate_content_across_source_ids_is_reported_as_warning(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        handoff["manifest"]["document_count"] = 2
+        handoff["document_card"]["document_count"] = 2
+        source_id = "another-public-service"
+        duplicate_content = replace(
+            self.subsidy,
+            doc_id=compute_document_id(
+                source_type=self.subsidy.source_type,
+                source_id=source_id,
+                source_updated_at=self.subsidy.source_updated_at,
+                effective_from=self.subsidy.effective_from,
+                content_hash=self.subsidy.content_hash,
+            ),
+            source_id=source_id,
+        )
+
+        report = validate_collection_handoff(
+            [self.subsidy, duplicate_content],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+
+        self.assertTrue(report.accepted, report.issues)
+        self.assertEqual(
+            {warning.code for warning in report.warnings},
+            {"duplicate_content_candidate"},
+        )
+        self.assertEqual(len(report.accepted_document_ids), 2)
+
+    def test_duplicate_content_within_source_is_rejected(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        handoff["manifest"]["document_count"] = 2
+        handoff["document_card"]["document_count"] = 2
+        source_updated_at = "2026-02-01"
+        duplicate_content = replace(
+            self.subsidy,
+            doc_id=compute_document_id(
+                source_type=self.subsidy.source_type,
+                source_id=self.subsidy.source_id,
+                source_updated_at=source_updated_at,
+                effective_from=self.subsidy.effective_from,
+                content_hash=self.subsidy.content_hash,
+            ),
+            source_updated_at=source_updated_at,
+        )
+
+        report = validate_collection_handoff(
+            [self.subsidy, duplicate_content],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+
+        self.assertFalse(report.accepted)
+        self.assertIn("duplicate_content", {issue.code for issue in report.issues})
+        self.assertEqual(report.accepted_document_ids, ())
+
+    def test_missing_application_method_is_reported_as_warning(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        without_application_method = replace(
+            self.subsidy,
+            sections=tuple(
+                section
+                for section in self.subsidy.sections
+                if section.metadata.get("section_type") != "application_method"
+            ),
+        )
+
+        report = validate_collection_handoff(
+            [without_application_method],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+
+        self.assertTrue(report.accepted, report.issues)
+        self.assertEqual(
+            {warning.code for warning in report.warnings},
+            {"missing_recommended_subsidy_section"},
+        )
+        chunks = chunk_document(without_application_method)
+        self.assertEqual(
+            validate_chunk_batch(chunks, [without_application_method]),
+            (),
+        )
+
+    def test_fatal_issue_and_warning_rejects_the_handoff(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        fatal_without_application_method = replace(
+            self.subsidy,
+            sections=tuple(
+                section
+                for section in self.subsidy.sections
+                if section.metadata.get("section_type") != "application_method"
+            ),
+            parse_warnings=("fatal: required field could not be parsed",),
+        )
+
+        report = validate_collection_handoff(
+            [fatal_without_application_method],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+
+        self.assertFalse(report.accepted)
+        self.assertEqual(report.accepted_document_ids, ())
+        self.assertIn("fatal_parse_warning", {issue.code for issue in report.issues})
+        self.assertIn(
+            "missing_recommended_subsidy_section",
+            {warning.code for warning in report.warnings},
+        )
+        with self.assertRaisesRegex(ValueError, "rejected by blocking issues"):
+            report.require_accepted()
+
+    def test_missing_core_subsidy_section_is_rejected(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        without_support_target = replace(
+            self.subsidy,
+            sections=tuple(
+                section
+                for section in self.subsidy.sections
+                if section.metadata.get("section_type") != "support_target"
+            ),
+        )
+
+        report = validate_collection_handoff(
+            [without_support_target],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+
+        self.assertFalse(report.accepted)
+        self.assertIn("missing_subsidy_section", {issue.code for issue in report.issues})
 
     def test_blank_document_card_field_is_rejected(self) -> None:
         handoff = load_handoff("law_handoff.json")

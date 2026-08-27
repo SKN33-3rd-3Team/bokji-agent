@@ -90,7 +90,7 @@ _LAW_SECTION_TYPE_RANK = {
 
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
-    """A machine-readable validation failure tied to a contract path."""
+    """A machine-readable validation diagnostic tied to a contract path."""
 
     code: str
     path: str
@@ -99,21 +99,22 @@ class ValidationIssue:
 
 @dataclass(frozen=True, slots=True)
 class HandoffReport:
-    """The all-or-nothing result of validating a collection handoff."""
+    """Blocking issues and non-blocking warnings for a collection handoff."""
 
     issues: tuple[ValidationIssue, ...]
     accepted_document_ids: tuple[str, ...]
+    warnings: tuple[ValidationIssue, ...] = ()
 
     @property
     def accepted(self) -> bool:
         return not self.issues
 
     def require_accepted(self) -> None:
-        """Raise a compact error when the handoff contains any issue."""
+        """Raise a compact error when the handoff contains a blocking issue."""
 
         if self.issues:
             summary = "; ".join(f"{issue.path}: {issue.code}" for issue in self.issues)
-            raise ValueError(f"collection handoff rejected: {summary}")
+            raise ValueError(f"collection handoff rejected by blocking issues: {summary}")
 
 
 def _issue(
@@ -232,6 +233,7 @@ def _validate_document(
     document: Document,
     index: int,
     issues: list[ValidationIssue],
+    warnings: list[ValidationIssue],
     secret_values: Sequence[str],
 ) -> None:
     """Append document-level integrity, provenance, and structure issues."""
@@ -332,7 +334,7 @@ def _validate_document(
         section_types = {
             section.metadata.get("section_type") for section in document.sections
         }
-        for required in ("support_target", "support_details", "application_method"):
+        for required in ("support_target", "support_details"):
             if required not in section_types:
                 _issue(
                     issues,
@@ -340,6 +342,13 @@ def _validate_document(
                     f"{path}.sections",
                     f"required section_type {required!r} is missing",
                 )
+        if "application_method" not in section_types:
+            _issue(
+                warnings,
+                "missing_recommended_subsidy_section",
+                f"{path}.sections",
+                "recommended section_type 'application_method' is missing",
+            )
     else:
         for key in ("law_name", "lsi_seq", "revision_status"):
             if not _is_non_empty_string(document.metadata.get(key)):
@@ -443,6 +452,7 @@ def validate_collection_handoff(
 
     secrets = tuple(str(value) for value in secret_values if value)
     issues: list[ValidationIssue] = []
+    warnings: list[ValidationIssue] = []
     if _contains_known_secret(manifest, secrets):
         _issue(
             issues,
@@ -551,10 +561,10 @@ def validate_collection_handoff(
 
     seen_doc_ids: set[str] = set()
     seen_source_versions: set[tuple[str, str | None, str | None]] = set()
-    seen_hashes: set[str] = set()
+    source_ids_by_hash: dict[str, set[str]] = {}
     accepted_ids: list[str] = []
     for index, document in enumerate(documents):
-        _validate_document(document, index, issues, secrets)
+        _validate_document(document, index, issues, warnings, secrets)
         if document.source_type.value != manifest_source:
             _issue(
                 issues,
@@ -592,17 +602,30 @@ def validate_collection_handoff(
                 "source ID and version dates duplicate another document",
             )
         seen_source_versions.add(source_version)
-        if document.content_hash in seen_hashes:
-            _issue(
-                issues,
-                "duplicate_content",
-                f"documents[{index}].content_hash",
-                "content duplicates another document",
-            )
-        seen_hashes.add(document.content_hash)
+        source_ids = source_ids_by_hash.setdefault(document.content_hash, set())
+        if source_ids:
+            if document.source_id in source_ids:
+                _issue(
+                    issues,
+                    "duplicate_content",
+                    f"documents[{index}].content_hash",
+                    "content duplicates another version of the same source",
+                )
+            else:
+                _issue(
+                    warnings,
+                    "duplicate_content_candidate",
+                    f"documents[{index}].content_hash",
+                    "content matches a document from a different source_id",
+                )
+        source_ids.add(document.source_id)
         accepted_ids.append(document.doc_id)
 
-    return HandoffReport(tuple(issues), tuple(accepted_ids) if not issues else ())
+    return HandoffReport(
+        tuple(issues),
+        tuple(accepted_ids) if not issues else (),
+        tuple(warnings),
+    )
 
 
 def validate_chunk_batch(
