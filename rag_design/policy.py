@@ -9,6 +9,8 @@ from .contracts import AbstentionReason
 
 @dataclass(frozen=True, slots=True)
 class EvidenceState:
+    """Evidence signals used to decide whether answer generation must abstain."""
+
     evidence_chunk_ids: tuple[str, ...]
     required_aspects: frozenset[str] = frozenset()
     supported_aspects: frozenset[str] = frozenset()
@@ -36,6 +38,8 @@ class EvidenceState:
 
 @dataclass(frozen=True, slots=True)
 class AbstentionDecision:
+    """An abstention reason and any unsupported required aspects."""
+
     abstain: bool
     reason: AbstentionReason | None
     missing_aspects: tuple[str, ...] = ()

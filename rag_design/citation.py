@@ -32,6 +32,8 @@ def _compact_date(value: str) -> str:
 def citation_url_for_document(
     document: Document, *, secret_values: Iterable[str] = ()
 ) -> str:
+    """Build a sanitized public citation URL for a law or subsidy document."""
+
     if document.source_type is SourceType.LAW:
         lsi_seq = str(document.metadata.get("lsi_seq", ""))
         if not _DIGITS.fullmatch(lsi_seq):
@@ -54,6 +56,8 @@ def build_citation(
     *,
     secret_values: Iterable[str] = (),
 ) -> Citation:
+    """Create a citation after verifying the chunk belongs to the document."""
+
     if chunk.doc_id != document.doc_id:
         raise ValueError("chunk and document IDs do not match")
     if chunk.source_type is not document.source_type:

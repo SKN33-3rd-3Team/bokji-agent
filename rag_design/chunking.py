@@ -40,6 +40,7 @@ def _split_with_overlap(text: str, limit: int, overlap: int) -> list[str]:
         if hard_end < len(normalized):
             window = normalized[start:hard_end]
             boundaries = [match.end() for match in _BOUNDARY_PATTERN.finditer(window)]
+            # Prefer a late semantic boundary to avoid tiny chunks; otherwise hard-cut.
             viable = [boundary for boundary in boundaries if boundary >= limit // 2]
             if viable:
                 end = start + viable[-1]
@@ -78,6 +79,8 @@ def compute_chunk_id(
     part: int,
     config_version: str,
 ) -> str:
+    """Derive a stable ID from source location and chunking configuration."""
+
     identity = "\x1f".join(
         (document.doc_id, *heading_path, str(part), config_version)
     )

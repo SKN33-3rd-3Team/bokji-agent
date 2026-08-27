@@ -158,7 +158,11 @@ class SentenceTransformerKoreanProvider:
         return result
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        """Encode passages with the asymmetric prefix required by E5 models."""
+
         return self._encode([f"passage: {text}" for text in texts])
 
     def embed_query(self, text: str) -> list[float]:
+        """Encode a query with the asymmetric prefix required by E5 models."""
+
         return self._encode([f"query: {text}"])[0]

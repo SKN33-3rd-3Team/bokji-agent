@@ -73,6 +73,8 @@ class CitationMetrics:
 
 
 def citation_metrics(cases: Sequence[CitationCase]) -> CitationMetrics:
+    """Measure valid claim-citation precision and required-claim coverage."""
+
     citation_pair_count = 0
     valid_pairs = 0
     for case in cases:
@@ -143,6 +145,8 @@ class AbstentionMetrics:
 
 
 def abstention_metrics(cases: Sequence[AbstentionCase]) -> AbstentionMetrics:
+    """Measure abstention precision and recall, excluding pipeline errors."""
+
     # Pipeline errors are measured separately, not counted as abstentions.
     evaluable = [case for case in cases if not case.error]
     true_positive = sum(case.should_abstain and case.abstained for case in evaluable)
@@ -167,6 +171,8 @@ class OperationalMetrics:
 
 
 def operational_metrics(latencies_ms: Sequence[int], errors: Iterable[bool]) -> OperationalMetrics:
+    """Calculate median latency, nearest-rank p95, and error rate."""
+
     error_values = tuple(errors)
     if len(latencies_ms) != len(error_values):
         raise ValueError("latencies and errors must have the same length")

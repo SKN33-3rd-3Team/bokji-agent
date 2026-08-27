@@ -24,6 +24,8 @@ ALLOWED_CROSS_INDEX_MERGE = frozenset({"interleave", "reciprocal_rank"})
 
 
 def route_indexes(scope: QueryScope) -> tuple[str, ...]:
+    """Return the logical indexes selected for the requested query scope."""
+
     if scope is QueryScope.SUBSIDY:
         return (LOGICAL_INDEXES[SourceType.SUBSIDY],)
     if scope is QueryScope.LAW:
@@ -32,6 +34,8 @@ def route_indexes(scope: QueryScope) -> tuple[str, ...]:
 
 
 def validate_cross_index_merge(strategy: str) -> None:
+    """Reject unsupported or incomparable cross-index merge strategies."""
+
     if strategy == "raw_score":
         raise ValueError("raw scores from different logical indexes are not comparable")
     if strategy not in ALLOWED_CROSS_INDEX_MERGE:
@@ -40,6 +44,8 @@ def validate_cross_index_merge(strategy: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class MetadataFilter:
+    """Portable source, effective-date, and region retrieval constraints."""
+
     source_type: SourceType
     as_of: date
     region_codes: tuple[str, ...] = ()
@@ -64,6 +70,8 @@ class MetadataFilter:
 
 
 def chunk_matches_filter(chunk: Chunk, policy: MetadataFilter) -> bool:
+    """Apply source, half-open effective-date, and subsidy-region filters."""
+
     if chunk.source_type is not policy.source_type:
         return False
 

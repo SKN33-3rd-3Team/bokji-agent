@@ -46,6 +46,8 @@ class EvidenceStatus(str, Enum):
 
 
 def compute_content_hash(content: str) -> str:
+    """Hash NFC-normalized content with platform-independent line endings."""
+
     canonical = unicodedata.normalize("NFC", content).replace("\r\n", "\n").replace("\r", "\n")
     return sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -109,6 +111,8 @@ def _validate_temporal(value: str | None, field_name: str, *, timezone: bool) ->
 
 @dataclass(frozen=True, slots=True)
 class Section:
+    """A source section with its hierarchical heading path preserved."""
+
     heading_path: tuple[str, ...]
     content: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -136,6 +140,8 @@ class Section:
 
 @dataclass(frozen=True, slots=True)
 class Document:
+    """A normalized, versioned source document accepted by the RAG pipeline."""
+
     schema_version: str
     doc_id: str
     source_type: SourceType
@@ -210,6 +216,8 @@ class Document:
 
 @dataclass(frozen=True, slots=True)
 class Chunk:
+    """A deterministic retrieval unit derived from one document section."""
+
     schema_version: str
     chunk_id: str
     doc_id: str
@@ -256,6 +264,8 @@ class Chunk:
 
 @dataclass(frozen=True, slots=True)
 class RetrievedChunk:
+    """A ranked retrieval result with score and index provenance."""
+
     query_id: str
     chunk: Chunk
     rank: int
@@ -302,6 +312,8 @@ class RetrievedChunk:
 
 @dataclass(frozen=True, slots=True)
 class ClaimCheck:
+    """The evidence verdict and supporting chunks for one answer claim."""
+
     claim_id: str
     status: EvidenceStatus
     evidence_chunk_ids: tuple[str, ...]
@@ -342,6 +354,8 @@ class ClaimCheck:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceCheckResult:
+    """The aggregate evidence verdict for all claims in one query."""
+
     query_id: str
     status: EvidenceStatus
     claim_checks: tuple[ClaimCheck, ...]
@@ -362,6 +376,7 @@ class EvidenceCheckResult:
             for chunk_id in check.evidence_chunk_ids
         ):
             raise ValueError("claim checks must reference declared evidence chunks")
+        # Keep the aggregate verdict consistent with every per-claim verdict.
         statuses = {check.status for check in self.claim_checks}
         if not self.claim_checks:
             raise ValueError("evidence checks require at least one claim check")
@@ -420,6 +435,8 @@ class EvidenceCheckResult:
 
 @dataclass(frozen=True, slots=True)
 class Citation:
+    """A public source reference for one evidence chunk."""
+
     chunk_id: str
     document_title: str
     locator: str
@@ -439,6 +456,8 @@ class Citation:
 
 @dataclass(frozen=True, slots=True)
 class AnswerResult:
+    """A final answer, abstention, or error together with its provenance."""
+
     query_id: str
     answer: str
     abstained: bool

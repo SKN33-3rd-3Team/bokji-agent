@@ -144,7 +144,11 @@ def _canonical_fingerprint(value: Mapping[str, Any]) -> str:
 
 
 class ChromaVectorStore:
-    """Source-separated persistent collections with explicit external embeddings."""
+    """Source-separated persistent collections with atomic snapshot promotion.
+
+    A complete content-addressed generation is staged and verified before the
+    registry pointer changes, so failed writes leave the active snapshot visible.
+    """
 
     def __init__(
         self,
@@ -378,6 +382,8 @@ class ChromaVectorStore:
         return self._active_generation(source_type).collection_fingerprint
 
     def _record_metadata(self, chunk: Chunk, snapshot_id: str) -> dict[str, Any]:
+        """Store the full contract plus scalar copies used by Chroma filters."""
+
         record: dict[str, Any] = {
             "chunk_json": json.dumps(
                 chunk.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -395,6 +401,8 @@ class ChromaVectorStore:
     def _validate_chunk_contracts(
         self, chunks: Sequence[Chunk], *, secret_values: Iterable[str] = ()
     ) -> None:
+        """Validate the complete snapshot before any embedding or write begins."""
+
         secrets = tuple(str(value) for value in secret_values if value)
         positions: set[tuple[str, int]] = set()
         ordinals: dict[str, set[int]] = {}
@@ -563,6 +571,8 @@ class ChromaVectorStore:
         snapshot_id: str,
         chunking_version: str,
     ) -> str:
+        """Build an order-independent digest for idempotency and generation naming."""
+
         return _canonical_fingerprint(
             {
                 "source_type": source_type.value,
@@ -743,7 +753,11 @@ class ChromaVectorStore:
         chunking_version: str | None = None,
         secret_values: Iterable[str] = (),
     ) -> SnapshotSyncResult:
-        """Atomically replace the visible source snapshot with a complete generation."""
+        """Stage, verify, then atomically promote a complete source generation.
+
+        If staging fails, the registry continues to point at the previous active
+        generation and readers never observe a partially written snapshot.
+        """
 
         if not isinstance(snapshot_id, str) or not snapshot_id.strip():
             raise ValueError("snapshot_id must be non-empty")
@@ -796,6 +810,7 @@ class ChromaVectorStore:
                 total_count=active.expected_count,
             )
 
+        # Counts describe the logical diff; the new generation is still written whole.
         existing_by_id = (
             self._read_records(active.collection) if active is not None else {}
         )
@@ -888,6 +903,8 @@ class ChromaVectorStore:
     def delete_snapshot(
         self, source_type: SourceType, snapshot_id: str
     ) -> SnapshotDeleteResult:
+        """Logically delete the active snapshot by promoting an empty generation."""
+
         if not isinstance(snapshot_id, str) or not snapshot_id.strip():
             raise ValueError("snapshot_id must be non-empty")
         try:
@@ -905,6 +922,8 @@ class ChromaVectorStore:
         return SnapshotDeleteResult(source_type, snapshot_id, result.deleted_count)
 
     def _query_where(self, search_filter: VectorSearchFilter) -> dict[str, Any] | None:
+        """Push snapshot and scalar equality filters down to Chroma."""
+
         clauses: list[dict[str, Any]] = []
         if search_filter.snapshot_id:
             clauses.append({"snapshot_id": search_filter.snapshot_id})
@@ -946,6 +965,8 @@ class ChromaVectorStore:
         source_type: SourceType,
         search_filter: VectorSearchFilter,
     ) -> bool:
+        """Reapply portable date, region, and metadata rules to decoded chunks."""
+
         if chunk.source_type is not source_type:
             return False
         if (
@@ -989,6 +1010,8 @@ class ChromaVectorStore:
         search_filter: VectorSearchFilter | None = None,
         expected_collection_fingerprint: str | None = None,
     ) -> tuple[RetrievedChunk, ...]:
+        """Return validated top-k chunks from one source-specific active index."""
+
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be non-empty")
         if not isinstance(query_id, str) or not query_id.strip():
@@ -1011,6 +1034,7 @@ class ChromaVectorStore:
             [self.embedding_provider.embed_query(query)], 1
         )[0]
         try:
+            # Fetch all pushdown matches so post-filtering can still return true top-k.
             result = collection.query(
                 query_embeddings=[vector],
                 n_results=count,

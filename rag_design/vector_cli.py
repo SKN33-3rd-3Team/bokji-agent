@@ -59,6 +59,8 @@ def _load_chunks(path: Path) -> list[Chunk]:
 
 
 def _metadata_filters(values: Sequence[str]) -> dict[str, str | int | float | bool]:
+    """Parse key=value filters while preserving supported JSON scalar types."""
+
     result: dict[str, str | int | float | bool] = {}
     for value in values:
         if "=" not in value:

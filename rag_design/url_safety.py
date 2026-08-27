@@ -41,6 +41,8 @@ def _normalized_query_name(value: str) -> str:
 
 
 def is_official_hostname(hostname: str | None) -> bool:
+    """Return whether a hostname is an approved official domain or subdomain."""
+
     if not hostname:
         return False
     normalized = hostname.rstrip(".").lower()
@@ -87,6 +89,8 @@ def sanitize_official_url(url: str) -> str:
 
 
 def contains_secret_query_name(url: str) -> bool:
+    """Fail closed for malformed URLs or secret-like query parameter names."""
+
     try:
         pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True)
     except (TypeError, ValueError):

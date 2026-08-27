@@ -90,6 +90,8 @@ _LAW_SECTION_TYPE_RANK = {
 
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
+    """A machine-readable validation failure tied to a contract path."""
+
     code: str
     path: str
     message: str
@@ -97,6 +99,8 @@ class ValidationIssue:
 
 @dataclass(frozen=True, slots=True)
 class HandoffReport:
+    """The all-or-nothing result of validating a collection handoff."""
+
     issues: tuple[ValidationIssue, ...]
     accepted_document_ids: tuple[str, ...]
 
@@ -105,6 +109,8 @@ class HandoffReport:
         return not self.issues
 
     def require_accepted(self) -> None:
+        """Raise a compact error when the handoff contains any issue."""
+
         if self.issues:
             summary = "; ".join(f"{issue.path}: {issue.code}" for issue in self.issues)
             raise ValueError(f"collection handoff rejected: {summary}")
@@ -174,6 +180,8 @@ def _contains_known_secret(value: Any, secret_values: Sequence[str]) -> bool:
 
 
 def _law_heading_ranks(heading_path: tuple[str, ...]) -> tuple[int, ...] | None:
+    """Map a valid 조·항·호·목 heading path to hierarchy ranks."""
+
     if not heading_path or not _ARTICLE_PATTERN.fullmatch(heading_path[0]):
         return None
     ranks: list[int] = [0]
@@ -226,6 +234,8 @@ def _validate_document(
     issues: list[ValidationIssue],
     secret_values: Sequence[str],
 ) -> None:
+    """Append document-level integrity, provenance, and structure issues."""
+
     path = f"documents[{index}]"
     if _contains_known_secret(document.to_dict(), secret_values):
         _issue(
@@ -399,6 +409,7 @@ def _validate_document(
                     f"{path}.sections[{section_index}].metadata.section_type",
                     "law section_type must match the terminal locator level",
                 )
+            # Locators and body must follow source order, not merely exist somewhere.
             section_body = " ".join(section.content.split())
             search_from = 0
             locator_matches = True
@@ -822,6 +833,7 @@ def validate_chunk_batch(
                 "chunking config version cannot be reproduced",
             )
             continue
+        # Rebuild the batch to prove every stored chunk is reproducible.
         if [chunk.to_dict() for chunk in actual] != [
             chunk.to_dict() for chunk in expected
         ]:
@@ -841,6 +853,8 @@ def _validate_result_evidence(
     retrieved_chunks: Sequence[RetrievedChunk],
     path: str,
 ) -> list[ValidationIssue]:
+    """Reject cross-query, duplicate, or non-retrieved evidence references."""
+
     issues: list[ValidationIssue] = []
     retrieved_ids: set[str] = set()
     for index, retrieved in enumerate(retrieved_chunks):
