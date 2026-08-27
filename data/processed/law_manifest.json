@@ -1,0 +1,28 @@
+{
+  "manifest": {
+    "schema_version": "1.0",
+    "source_type": "law",
+    "document_count": 1466,
+    "collected_at": "2026-08-27T18:23:47.300979+09:00",
+    "source_dataset_url": "https://open.law.go.kr/LSO/main.do",
+    "license": "국가법령정보센터 공개 법령",
+    "excluded_count": 0,
+    "parse_error_count": 0
+  },
+  "document_card": {
+    "source_type": "law",
+    "source_name": "국가법령정보센터",
+    "source_dataset_url": "https://open.law.go.kr/LSO/main.do",
+    "license": "국가법령정보센터 공개 법령",
+    "document_count": 1466,
+    "collection_scope": "복지 도메인 키워드로 로컬 필터링한 법령·행정규칙·자치법규 목록조회(lawSearch.do) 정보 - 본문(lawService.do) API는 사용하지 않음",
+    "cleaning_method": "목록 API 원본 필드 보존, metadata에 전부 포함",
+    "chunking_method": "본문 없음 - 문서당 단일 섹션(기본정보)",
+    "exclusion_criteria": [
+      "법령명 또는 ID 누락"
+    ],
+    "update_policy": "시행일별 버전 보존",
+    "rights_reviewed": true,
+    "sensitive_data_reviewed": true
+  }
+}
