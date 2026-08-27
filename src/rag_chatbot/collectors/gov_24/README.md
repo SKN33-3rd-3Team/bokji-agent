@@ -20,17 +20,18 @@ SIGUNGU_CODE_CSV=
 
 ### 한 번에 전부 실행 (권장)
 
-저장소 루트에서 `main_gov24.py` 하나로 목록조회 -> 상세조회 -> 지원조건조회 ->
-병합 -> Document 변환을 순서대로 전부 실행할 수 있다(`PYTHONPATH` 설정 불필요,
-스크립트가 알아서 `src`를 경로에 추가한다).
+저장소 루트에서 `src`를 import 경로에 넣고 패키지 진입점을 실행하면 목록조회
+-> 상세조회 -> 지원조건조회 -> 병합 -> Document 변환을 순서대로 실행한다.
 
 ```bash
+$env:PYTHONPATH="src"
+
 # 전체 실행 (10,957건 전부, 시간이 오래 걸림)
-python main_gov24.py
+python -m rag_chatbot.collectors.gov_24
 
 # 테스트: 목록 앞 50건만으로 파이프라인 전체를 빠르게 확인
-python main_gov24.py --limit 50
-python main_gov24.py -n 50   # --limit과 동일
+python -m rag_chatbot.collectors.gov_24 --limit 50
+python -m rag_chatbot.collectors.gov_24 -n 50
 ```
 
 `--limit`/`-n`을 주면 상세조회·지원조건조회뿐 아니라 병합·Document 변환까지
@@ -45,18 +46,18 @@ python main_gov24.py -n 50   # --limit과 동일
 
 ```bash
 # 1. 목록조회 (전체 정책 목록)
-PYTHONPATH=src python -m rag_chatbot.collectors.gov24 list
+PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.gov24 list
 
 # 2. 상세조회 + 지원조건조회 (서비스ID당 1건씩, 병렬 처리)
-PYTHONPATH=src python -m rag_chatbot.collectors.gov24 detail
-PYTHONPATH=src python -m rag_chatbot.collectors.gov24 conditions
+PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.gov24 detail
+PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.gov24 conditions
 
 # 3. 세 결과를 서비스ID 기준으로 병합 (테스트 시 뒤에 건수를 붙이면 앞 N건만)
-PYTHONPATH=src python -m rag_chatbot.collectors.merge_gov24
-PYTHONPATH=src python -m rag_chatbot.collectors.merge_gov24 50
+PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.merge_gov24
+PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.merge_gov24 50
 
 # 4. RAG 설계팀이 쓰는 Document 스키마로 변환
-PYTHONPATH=src python -m rag_chatbot.collectors.to_document
+PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 ```
 
 `detail`/`conditions`는 실패한 서비스ID가 있어도 그대로 다시 실행하면 된다.
@@ -81,6 +82,8 @@ PYTHONPATH=src python -m rag_chatbot.collectors.to_document
   걸린다(약 10,957건 × 2). `MAX_WORKERS`(기본 6)로 동시 요청 수를 조절한다.
 - `Document.source_url`은 반드시 공식 도메인(`data.go.kr`/`gov.kr`/`law.go.kr`)
   이어야 해서, "온라인신청사이트URL"이 아니라 "상세조회URL"(gov.kr)을 쓴다.
+  공개 URL은 공통 안전 정책으로 HTTPS canonical URL로 만들며 인증 쿼리와
+  구성된 실제 secret이 외부 문서나 경고에 노출되지 않게 한다.
 - `수정일시` 필드는 레코드마다 형식이 달라(`YYYY-MM-DD` 또는 14자리 숫자)
   `to_document.py`에서 ISO 8601로 정규화한다.
 - `BASE_URL`, 파라미터 이름은 공공데이터 API의 흔한 패턴을 예시로 적어둔
@@ -99,10 +102,12 @@ PYTHONPATH=src python -m rag_chatbot.collectors.to_document
 
 ### 지역 정보
 
-- 지역코드는 구조화된 필드가 없어 `region_utils.py`가 `소관기관명` 텍스트에서
-  시도/시군구를 정규식으로 추출한다. 매칭되는 시도가 없으면(중앙부처 등)
-  `전국`으로 표시한다.
-- 시도 2자리 코드(`region_sido_code`)는 고정 매핑으로 채워지지만, 시군구
+- 지역 범위는 구조화된 필드가 없어 `region_utils.py`가 `소관기관명`에서
+  추출한다. 확인된 중앙기관은 `region_scope=national`, `region_names=["전국"]`,
+  시도/시군구는 `regional`과 상위 지역을 포함한 계층명으로 기록한다.
+  확정할 수 없는 기관은 전국으로 확대하지 않고 `unknown`, `[]`로 보존한다.
+- 현행 시도 2자리 코드(`region_sido_code`, 강원 `51`, 전북 `52`,
+  전남광주통합특별시 `12`)는 보조정보로 채우지만, 시군구
   5자리 코드(`region_sigungu_code`)는 정확성이 중요해 하드코딩하지 않는다.
   `SIGUNGU_CODE_CSV` 환경변수로 data.go.kr "전국 법정동코드 전체자료" CSV
   경로를 지정하면 채워지고, 지정하지 않으면 `None`으로 남는다.

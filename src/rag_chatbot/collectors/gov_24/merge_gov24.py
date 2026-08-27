@@ -1,15 +1,15 @@
 """보조금24 3개 결과 파일(list/detail/conditions)을 서비스ID 기준으로 병합한다.
 
 사용법:
-    python -m rag_chatbot.collectors.merge_gov24        # 전체 병합
-    python -m rag_chatbot.collectors.merge_gov24 50      # 테스트: 앞 50건만 병합
+    python -m rag_chatbot.collectors.gov_24.merge_gov24
+    python -m rag_chatbot.collectors.gov_24.merge_gov24 50
 """
 
 import json
 import sys
 from pathlib import Path
 
-from gov24 import CONDITIONS_OUT, DETAIL_OUT, LIST_OUT
+from .gov24 import CONDITIONS_OUT, DETAIL_OUT, LIST_OUT
 
 # main_gov24.py를 어느 위치(gov_24/ 안, 리포지토리 루트 등)에서 실행하든
 # 항상 같은 data/ 폴더에 저장/조회하도록, 이 파일 위치를 기준으로 프로젝트

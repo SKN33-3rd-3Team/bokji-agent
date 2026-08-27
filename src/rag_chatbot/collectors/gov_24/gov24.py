@@ -21,11 +21,11 @@
       쌓이지 않는다.
 
 사용법:
-    python -m rag_chatbot.collectors.gov24 list       # 1번만
-    python -m rag_chatbot.collectors.gov24 detail      # 2번만 (1번 결과 파일 필요)
-    python -m rag_chatbot.collectors.gov24 conditions  # 3번만 (1번 결과 파일 필요)
-    python -m rag_chatbot.collectors.gov24 all         # 1 -> 2 -> 3 순서로 전부
-    python -m rag_chatbot.collectors.gov24 detail 50   # 테스트: 앞 50건만
+    python -m rag_chatbot.collectors.gov_24.gov24 list
+    python -m rag_chatbot.collectors.gov_24.gov24 detail
+    python -m rag_chatbot.collectors.gov_24.gov24 conditions
+    python -m rag_chatbot.collectors.gov_24.gov24 all
+    python -m rag_chatbot.collectors.gov_24.gov24 detail 50
 
 주의: BASE_URL과 파라미터 이름(serviceKey/page/perPage/servId 등)은 공공데이터
 API에서 흔히 쓰이는 패턴을 예시로 적어둔 것이다. data.go.kr 활용가이드 문서를
@@ -36,10 +36,11 @@ import concurrent.futures
 import json
 import os
 import random
+import re
 import sys
 import time
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, quote_plus, unquote
 
 import requests
 from dotenv import load_dotenv
@@ -72,9 +73,38 @@ PROGRESS_EVERY = 20        # 이만큼 처리할 때마다 진행상황 출력
 MAX_RETRIES = 3            # 요청 하나당 최대 시도 횟수(최초 시도 포함)
 BACKOFF_BASE_SEC = 1.0     # 지수 백오프 기준 시간(초)
 
+_SENSITIVE_QUERY_VALUE = re.compile(
+    r"(?i)((?:servicekey|api[_-]?key|token|authorization)\s*(?:=|%3d)\s*)"
+    r"[^&\s,;\]\)>'\"]+"
+)
+
+
+class Gov24RequestError(RuntimeError):
+    """인증정보를 제거한 뒤 외부로 전달하는 API 요청 오류."""
+
 
 def log(msg: str) -> None:
     print(msg, flush=True)  # flush=True로 즉시 화면/로그파일에 반영
+
+
+def _redact_sensitive_text(value: object) -> str:
+    text = str(value)
+    encoded_secrets = {
+        quote(GOV24_SERVICE_KEY, safe=""),
+        quote_plus(GOV24_SERVICE_KEY, safe=""),
+    }
+    secrets = {GOV24_SERVICE_KEY, *encoded_secrets}
+    secrets.update(
+        re.sub(r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).lower(), encoded)
+        for encoded in encoded_secrets
+    )
+    for secret in sorted((secret for secret in secrets if secret), key=len, reverse=True):
+        text = text.replace(secret, "[REDACTED]")
+    return _SENSITIVE_QUERY_VALUE.sub(r"\1[REDACTED]", text)
+
+
+def _safe_request_error(error: BaseException) -> str:
+    return f"{type(error).__name__}: {_redact_sensitive_text(error)}"
 
 
 def _require_key() -> None:
@@ -112,14 +142,15 @@ def fetch_list_page(page: int, per_page: int = 100) -> dict:
             return response.json()
         except requests.exceptions.RequestException as e:
             last_err = e
+            safe_error = _safe_request_error(e)
             log(
                 f"[list] 오류 발생(시도 {attempt}/{MAX_RETRIES}) "
-                f"- 구간: list/{page}페이지, API: {LIST_URL} - {e}"
+                f"- 구간: list/{page}페이지, API: {LIST_URL} - {safe_error}"
             )
             if attempt < MAX_RETRIES:
                 sleep_sec = BACKOFF_BASE_SEC * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
                 time.sleep(sleep_sec)
-    raise last_err
+    raise Gov24RequestError(_safe_request_error(last_err)) from None
 
 
 def fetch_list_all() -> list[dict]:
@@ -166,7 +197,7 @@ def _fetch_one(kind: str, url: str, service_id: str) -> tuple[str, dict | None, 
             response.raise_for_status()
             return service_id, response.json(), None
         except requests.exceptions.RequestException as e:
-            last_err = str(e)
+            last_err = _safe_request_error(e)
             log(
                 f"[{kind}] 오류 발생(시도 {attempt}/{MAX_RETRIES}) "
                 f"- 구간: {kind}(servId={service_id}), API: {url} - {last_err}"
@@ -339,4 +370,7 @@ if __name__ == "__main__":
         run_detail(limit)
         run_conditions(limit)
     else:
-        log("사용법: python -m rag_chatbot.collectors.gov24 [list|detail|conditions|all] [테스트건수]")
+        log(
+            "사용법: python -m rag_chatbot.collectors.gov_24.gov24 "
+            "[list|detail|conditions|all] [테스트건수]"
+        )
