@@ -20,7 +20,11 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from rag_chatbot.collectors.region_utils import extract_region
+
 MERGED_PATH = "data/raw/gov24_merged.json"
+DETAIL_FAILED_PATH = "data/raw/gov24_service_detail_failed_ids.json"
+CONDITIONS_FAILED_PATH = "data/raw/gov24_support_conditions_failed_ids.json"
 OUT_JSONL = "data/processed/subsidy_documents.jsonl"
 OUT_MANIFEST = "data/processed/subsidy_manifest.json"
 SAMPLE_OUT = "data/samples/subsidy_documents_sample.jsonl"
@@ -111,7 +115,20 @@ def _build_sections(item: dict) -> list[dict]:
     return sections
 
 
-def convert_one(item: dict, collected_at: str, warnings_out: list[str]) -> dict | None:
+def _load_failed_ids(path: str) -> set[str]:
+    p = Path(path)
+    if not p.exists():
+        return set()
+    return set(json.loads(p.read_text(encoding="utf-8")))
+
+
+def convert_one(
+    item: dict,
+    collected_at: str,
+    warnings_out: list[str],
+    detail_failed_ids: set[str],
+    conditions_failed_ids: set[str],
+) -> dict | None:
     service_id = item.get("서비스ID")
     if not service_id:
         warnings_out.append("서비스ID 없음, 제외")
@@ -135,6 +152,21 @@ def convert_one(item: dict, collected_at: str, warnings_out: list[str]) -> dict 
     version = source_updated_at or content_hash[:16]
     doc_id = f"subsidy:{service_id}:{version}"
 
+    # 결측이 "원천 결측"인지 "조회 실패로 못 가져온 것"인지 구분해서 문서별로 기록한다.
+    doc_parse_warnings: list[str] = []
+    if service_id in detail_failed_ids:
+        doc_parse_warnings.append(
+            "상세조회(serviceDetail) API 호출 실패 — 지원내용/법령 등 상세 필드가 원천 결측이 "
+            "아니라 조회 실패로 누락됐을 수 있음"
+        )
+    if service_id in conditions_failed_ids:
+        doc_parse_warnings.append(
+            "지원조건조회(supportConditions) API 호출 실패 — JA코드(연령·소득 등 조건)가 원천 "
+            "결측이 아니라 조회 실패로 누락됐을 수 있음"
+        )
+
+    region = extract_region(item.get("소관기관명"))
+
     return {
         "schema_version": "1.0",
         "doc_id": doc_id,
@@ -153,13 +185,15 @@ def convert_one(item: dict, collected_at: str, warnings_out: list[str]) -> dict 
         "content_hash": content_hash,
         "metadata": {
             "organization": item.get("소관기관명") or "",
-            "region_codes": ["ALL"],
+            "region_codes": [region["region_label"]],
+            "region_sido": region["sido"],
+            "region_sigungu": region["sigungu"],
             "service_category": item.get("서비스분야") or "",
             "public_detail_url": source_url,
             "age_start": item.get("JA0110") if isinstance(item.get("JA0110"), int) else None,
             "age_end": item.get("JA0111") if isinstance(item.get("JA0111"), int) else None,
         },
-        "parse_warnings": [],
+        "parse_warnings": doc_parse_warnings,
         "sensitive_data_status": "clear",
     }
 
@@ -169,12 +203,15 @@ def run() -> None:
     items = json.loads(merged_path.read_text(encoding="utf-8"))
     collected_at = datetime.fromtimestamp(merged_path.stat().st_mtime).astimezone().isoformat()
 
+    detail_failed_ids = _load_failed_ids(DETAIL_FAILED_PATH)
+    conditions_failed_ids = _load_failed_ids(CONDITIONS_FAILED_PATH)
+
     documents = []
     all_warnings: list[str] = []
 
     for item in items:
         warnings: list[str] = []
-        doc = convert_one(item, collected_at, warnings)
+        doc = convert_one(item, collected_at, warnings, detail_failed_ids, conditions_failed_ids)
         all_warnings.extend(warnings)
         if doc is not None:
             documents.append(doc)
@@ -208,6 +245,13 @@ def run() -> None:
             "chunking_method": "서비스 섹션(지원대상/선정기준/지원내용/신청방법/신청기한/근거법령) 경계 우선",
             "exclusion_criteria": ["서비스ID 없음", "공식 도메인(gov.kr 등) URL 아님", "본문 없음"],
             "update_policy": "source_updated_at 기준 버전 보존",
+            "region_extraction": "소관기관명 텍스트에서 시도/시군구를 정규식으로 추출(region_utils.py), 매칭 안 되면 '전국'",
+            "missing_vs_failed": (
+                "상세조회/지원조건조회 API 호출이 실패한 서비스ID는 실패 목록"
+                "(gov24_*_failed_ids.json)으로 별도 기록하고, 해당 문서의 parse_warnings에 "
+                "'조회 실패로 누락'임을 명시해 원천 결측과 구분한다"
+            ),
+            "duplicate_policy": "서로 다른 서비스ID의 동일/유사 본문은 삭제하지 않고 그대로 보존한다(중복 제거 미수행)",
             "rights_reviewed": True,
             "sensitive_data_reviewed": True,
         },

@@ -54,3 +54,11 @@ PYTHONPATH=src python -m rag_chatbot.collectors.to_document
 - `BASE_URL`, 파라미터 이름은 공공데이터 API의 흔한 패턴을 예시로 적어둔
   것이며, 실제 활용가이드 문서 기준으로 이미 검증했다(2026-08-26 기준 정상
   동작 확인).
+- 지역코드는 구조화된 필드가 없어 `region_utils.py`가 `소관기관명` 텍스트에서
+  시도/시군구를 정규식으로 추출한다. 매칭되는 시도가 없으면(중앙부처 등)
+  `전국`으로 표시한다.
+- `serviceDetail`/`supportConditions` 호출이 실패한 서비스ID는
+  `data/raw/gov24_*_failed_ids.json`에 별도 저장되고, 해당 문서의
+  `parse_warnings`에 "조회 실패로 누락"이라고 표시해 원천 결측과 구분한다.
+- 서로 다른 서비스ID의 본문이 겹치더라도 중복 제거를 하지 않고 그대로
+  보존한다.
