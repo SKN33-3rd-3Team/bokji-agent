@@ -6,10 +6,17 @@ from dataclasses import dataclass
 from hashlib import sha256
 import re
 
-from .contracts import Chunk, Document, SCHEMA_VERSION, SourceType, compute_content_hash
+from .contracts import (
+    Chunk,
+    Document,
+    SCHEMA_VERSION,
+    SourceType,
+    compute_content_hash,
+    validate_region_metadata,
+)
 
 
-CHUNKING_VERSION = "structure-v1"
+CHUNKING_VERSION = "structure-v2"
 _BOUNDARY_PATTERN = re.compile(r"(?<=\n)\s*\n+|(?<=[.!?。])\s+|(?<=다\.)\s+")
 
 
@@ -93,7 +100,9 @@ def _prefix(document: Document, heading_path: tuple[str, ...]) -> str:
     if document.source_type is SourceType.LAW:
         law_name = str(document.metadata.get("law_name", document.title))
         return f"{law_name}\n{' > '.join(heading_path)}"
-    return f"{document.title}\n{' > '.join(heading_path)}"
+    region_names = document.metadata["region_names"]
+    region_context = ", ".join(region_names) if region_names else "미확정"
+    return f"{document.title}\n지역: {region_context}\n{' > '.join(heading_path)}"
 
 
 def chunk_document(
@@ -107,6 +116,11 @@ def chunk_document(
 
     if not document.sections:
         raise ValueError("structure-first chunking requires at least one section")
+    if document.source_type is SourceType.SUBSIDY:
+        validate_region_metadata(
+            document.metadata.get("region_scope"),
+            document.metadata.get("region_names"),
+        )
 
     chunks: list[Chunk] = []
     seen_ids: set[str] = set()
@@ -140,7 +154,13 @@ def chunk_document(
                 "chunk_part_count": len(body_parts),
                 "chunking_version": config_version,
             }
-            for key in ("organization", "region_codes", "service_category", "lsi_seq"):
+            for key in (
+                "organization",
+                "region_scope",
+                "region_names",
+                "service_category",
+                "lsi_seq",
+            ):
                 if key in document.metadata:
                     metadata[key] = document.metadata[key]
             chunks.append(

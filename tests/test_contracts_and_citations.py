@@ -17,7 +17,9 @@ from rag_design.contracts import (
     Document,
     EvidenceCheckResult,
     EvidenceStatus,
+    RegionScope,
     RetrievedChunk,
+    validate_region_metadata,
 )
 
 
@@ -128,6 +130,45 @@ class ContractAndCitationTests(unittest.TestCase):
     def test_blank_required_string_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "title"):
             replace(self.subsidy, title="  ")
+
+    def test_region_metadata_scope_and_names_are_coupled(self) -> None:
+        valid_cases = (
+            (RegionScope.NATIONAL.value, ["전국"]),
+            (RegionScope.REGIONAL.value, ["서울특별시"]),
+            (
+                RegionScope.REGIONAL.value,
+                ["경기도", "경기도 수원시 장안구"],
+            ),
+            (
+                RegionScope.REGIONAL.value,
+                ["전남광주통합특별시", "전남광주통합특별시 여수시"],
+            ),
+            (RegionScope.UNKNOWN.value, []),
+        )
+        for region_scope, region_names in valid_cases:
+            with self.subTest(region_scope=region_scope, region_names=region_names):
+                validate_region_metadata(region_scope, region_names)
+
+        invalid_cases = (
+            (RegionScope.NATIONAL.value, []),
+            (RegionScope.NATIONAL.value, ["서울특별시"]),
+            (RegionScope.REGIONAL.value, []),
+            (RegionScope.REGIONAL.value, ["전국"]),
+            (RegionScope.REGIONAL.value, ["서울특별시 강남구"]),
+            (RegionScope.REGIONAL.value, ["광주광역시"]),
+            (RegionScope.REGIONAL.value, ["전라남도"]),
+            (
+                RegionScope.REGIONAL.value,
+                ["서울특별시", "서울특별시", "서울특별시 강남구"],
+            ),
+            (RegionScope.UNKNOWN.value, ["전국"]),
+            ("other", []),
+            (RegionScope.UNKNOWN.value, ()),
+        )
+        for region_scope, region_names in invalid_cases:
+            with self.subTest(region_scope=region_scope, region_names=region_names):
+                with self.assertRaises(ValueError):
+                    validate_region_metadata(region_scope, region_names)
 
     def test_effective_interval_must_be_forward(self) -> None:
         with self.assertRaisesRegex(ValueError, "effective_to"):

@@ -318,6 +318,64 @@ class ValidationAndEvaluationTests(unittest.TestCase):
             "invalid_source_metadata", {issue.code for issue in law_report.issues}
         )
 
+    def test_unknown_region_metadata_is_valid_and_chunkable(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        document = replace(
+            self.subsidy,
+            metadata={
+                **self.subsidy.metadata,
+                "region_scope": "unknown",
+                "region_names": [],
+            },
+        )
+        report = validate_collection_handoff(
+            [document], handoff["manifest"], handoff["document_card"]
+        )
+        self.assertTrue(report.accepted, report.issues)
+        chunks = chunk_document(document)
+        self.assertEqual(validate_chunk_batch(chunks, (document,)), ())
+
+    def test_inconsistent_or_ambiguous_region_metadata_is_rejected(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        invalid_cases = (
+            ("national", []),
+            ("regional", ["전국"]),
+            ("regional", ["중구"]),
+            ("regional", ["서울특별시 강남구"]),
+            ("unknown", ["전국"]),
+        )
+        for region_scope, region_names in invalid_cases:
+            with self.subTest(region_scope=region_scope, region_names=region_names):
+                document = replace(
+                    self.subsidy,
+                    metadata={
+                        **self.subsidy.metadata,
+                        "region_scope": region_scope,
+                        "region_names": region_names,
+                    },
+                )
+                report = validate_collection_handoff(
+                    [document], handoff["manifest"], handoff["document_card"]
+                )
+                self.assertIn(
+                    "invalid_region_metadata",
+                    {issue.code for issue in report.issues},
+                )
+
+    def test_missing_region_names_is_rejected(self) -> None:
+        handoff = load_handoff("subsidy_handoff.json")
+        metadata = dict(self.subsidy.metadata)
+        del metadata["region_names"]
+        report = validate_collection_handoff(
+            [replace(self.subsidy, metadata=metadata)],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+        self.assertIn(
+            "missing_source_metadata",
+            {issue.code for issue in report.issues},
+        )
+
     def test_fatal_parse_warning_text_is_not_copied_to_report(self) -> None:
         handoff = load_handoff("subsidy_handoff.json")
         marker = "PRIVATE_MARKER"

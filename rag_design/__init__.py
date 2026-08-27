@@ -3,6 +3,8 @@
 from .chunking import ChunkingConfig, chunk_document
 from .citation import build_citation, citation_url_for_document, sanitize_public_url
 from .contracts import (
+    CANONICAL_SIDO_NAMES,
+    NATIONAL_REGION_NAME,
     SCHEMA_VERSION,
     AbstentionReason,
     AnswerResult,
@@ -13,11 +15,14 @@ from .contracts import (
     EvidenceCheckResult,
     EvidenceStatus,
     RetrievedChunk,
+    RegionScope,
     Section,
     SensitiveDataStatus,
     SourceType,
     compute_content_hash,
     compute_document_id,
+    validate_region_metadata,
+    validate_region_name,
 )
 from .embeddings import (
     EmbeddingProvider,
@@ -47,6 +52,8 @@ from .vector_store import (
 )
 
 __all__ = [
+    "CANONICAL_SIDO_NAMES",
+    "NATIONAL_REGION_NAME",
     "SCHEMA_VERSION",
     "AbstentionDecision",
     "AbstentionReason",
@@ -64,6 +71,7 @@ __all__ = [
     "HandoffReport",
     "HashEmbeddingProvider",
     "RetrievedChunk",
+    "RegionScope",
     "Section",
     "SensitiveDataStatus",
     "SentenceTransformerKoreanProvider",
@@ -89,4 +97,6 @@ __all__ = [
     "validate_collection_handoff",
     "validate_chunk_batch",
     "validate_evidence_check_result",
+    "validate_region_metadata",
+    "validate_region_name",
 ]

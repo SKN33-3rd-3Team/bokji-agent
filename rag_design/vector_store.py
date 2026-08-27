@@ -13,12 +13,20 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .chunking import chunking_config_from_version
 from .citation import sanitize_public_url
-from .contracts import Chunk, RetrievedChunk, SCHEMA_VERSION, SourceType, compute_content_hash
+from .contracts import (
+    Chunk,
+    RetrievedChunk,
+    SCHEMA_VERSION,
+    SourceType,
+    compute_content_hash,
+    validate_region_metadata,
+    validate_region_name,
+)
 from .embeddings import EmbeddingProvider
-from .index_policy import MetadataFilter, chunk_matches_filter
+from .index_policy import MetadataFilter, chunk_matches_filter, subsidy_regions_match
 
 
-VECTOR_STORE_VERSION = "chroma-vector-store-v2"
+VECTOR_STORE_VERSION = "chroma-vector-store-v3"
 _REGISTRY_VERSION = "atomic-active-generation-v1"
 _COLLECTION_PREFIX_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,48}$")
 _SCALAR = (str, int, float, bool)
@@ -78,15 +86,17 @@ class VectorStoreConfig:
 @dataclass(frozen=True, slots=True)
 class VectorSearchFilter:
     as_of: date | None = None
-    region_codes: tuple[str, ...] = ()
+    region_names: tuple[str, ...] = ()
     metadata_equals: Mapping[str, str | int | float | bool] = field(
         default_factory=dict
     )
     snapshot_id: str | None = None
 
     def __post_init__(self) -> None:
-        if any(not isinstance(code, str) or not code.strip() for code in self.region_codes):
-            raise ValueError("region_codes must contain non-empty strings")
+        for name in self.region_names:
+            validate_region_name(name)
+        if len(set(self.region_names)) != len(self.region_names):
+            raise ValueError("region_names must not contain duplicates")
         if self.snapshot_id is not None and not self.snapshot_id.strip():
             raise ValueError("snapshot_id must be non-empty")
         for key, value in self.metadata_equals.items():
@@ -527,18 +537,15 @@ class ChromaVectorStore:
                         raise ValueError(
                             f"{path}.metadata.{key} is required for subsidy chunks"
                         )
-                region_codes = chunk.metadata.get("region_codes")
-                if (
-                    not isinstance(region_codes, (list, tuple))
-                    or not region_codes
-                    or any(
-                        not isinstance(code, str) or not code.strip()
-                        for code in region_codes
+                try:
+                    validate_region_metadata(
+                        chunk.metadata.get("region_scope"),
+                        chunk.metadata.get("region_names"),
                     )
-                ):
+                except ValueError as exc:
                     raise ValueError(
-                        f"{path}.metadata.region_codes is invalid for subsidy chunks"
-                    )
+                        f"{path}.metadata has invalid subsidy region fields"
+                    ) from exc
 
             try:
                 json.dumps(chunk.to_dict(), ensure_ascii=False, sort_keys=True)
@@ -978,18 +985,12 @@ class ChromaVectorStore:
             policy = MetadataFilter(
                 source_type=source_type,
                 as_of=search_filter.as_of,
-                region_codes=(),
+                region_names=(),
             )
             if not chunk_matches_filter(chunk, policy):
                 return False
-        if search_filter.region_codes:
-            chunk_regions = set(chunk.metadata.get("region_codes") or ())
-            if not chunk_regions:
-                return False
-            if "ALL" not in chunk_regions and not chunk_regions.intersection(
-                search_filter.region_codes
-            ):
-                return False
+        if not subsidy_regions_match(chunk.metadata, search_filter.region_names):
+            return False
         for key, expected in search_filter.metadata_equals.items():
             actual = {
                 "doc_id": chunk.doc_id,
@@ -1019,7 +1020,7 @@ class ChromaVectorStore:
         if top_k < 1:
             raise ValueError("top_k must be positive")
         search_filter = search_filter or VectorSearchFilter()
-        if search_filter.region_codes and source_type is not SourceType.SUBSIDY:
+        if search_filter.region_names and source_type is not SourceType.SUBSIDY:
             raise ValueError("region filters apply only to subsidy chunks")
         collection = self._get_collection(source_type)
         _, fingerprint = self._validate_collection(

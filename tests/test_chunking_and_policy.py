@@ -5,7 +5,7 @@ from datetime import date
 import json
 import unittest
 
-from rag_design.chunking import ChunkingConfig, chunk_document
+from rag_design.chunking import CHUNKING_VERSION, ChunkingConfig, chunk_document
 from rag_design.contracts import Section, SourceType, compute_content_hash
 from rag_design.index_policy import (
     MetadataFilter,
@@ -28,12 +28,28 @@ class ChunkingAndPolicyTests(unittest.TestCase):
         chunks = chunk_document(self.subsidy)
         self.assertEqual(len(chunks), 3)
         self.assertEqual([chunk.citation_locator for chunk in chunks], ["지원 대상", "지원 내용", "신청 방법"])
+        self.assertIn("지역: 전국", chunks[0].text)
+        self.assertEqual(chunks[0].metadata["region_scope"], "national")
+        self.assertEqual(chunks[0].metadata["region_names"], ["전국"])
+        self.assertTrue(
+            chunks[0].metadata["chunking_version"].startswith(
+                f"{CHUNKING_VERSION}:"
+            )
+        )
 
     def test_chunk_ids_are_deterministic_and_unique(self) -> None:
         first = chunk_document(self.subsidy)
         second = chunk_document(self.subsidy)
         self.assertEqual([item.chunk_id for item in first], [item.chunk_id for item in second])
         self.assertEqual(len({item.chunk_id for item in first}), len(first))
+        self.assertEqual(
+            first[0].chunk_id,
+            "subsidy:000000465790:2026-01-29:chunk:95647f8d27b2122c9bc0",
+        )
+        self.assertEqual(
+            first[0].metadata["chunking_version"],
+            "structure-v2:max_chars=800:overlap_chars=100",
+        )
 
     def test_duplicate_structure_path_fails_instead_of_reusing_chunk_id(self) -> None:
         duplicate = replace(
@@ -143,7 +159,7 @@ class ChunkingAndPolicyTests(unittest.TestCase):
                 MetadataFilter(
                     SourceType.SUBSIDY,
                     date(2026, 8, 26),
-                    region_codes=("1100000000",),
+                    region_names=("서울특별시",),
                 ),
             )
         )
@@ -153,7 +169,7 @@ class ChunkingAndPolicyTests(unittest.TestCase):
         chunk = replace(
             chunk,
             metadata={
-                key: value for key, value in chunk.metadata.items() if key != "region_codes"
+                key: value for key, value in chunk.metadata.items() if key != "region_names"
             },
         )
         self.assertFalse(
@@ -162,10 +178,104 @@ class ChunkingAndPolicyTests(unittest.TestCase):
                 MetadataFilter(
                     SourceType.SUBSIDY,
                     date(2026, 8, 26),
-                    region_codes=("1100000000",),
+                    region_names=("서울특별시",),
                 ),
             )
         )
+
+    def test_regional_subsidy_uses_exact_hierarchical_name_intersection(self) -> None:
+        regional_document = replace(
+            self.subsidy,
+            metadata={
+                **self.subsidy.metadata,
+                "region_scope": "regional",
+                "region_names": ["서울특별시", "서울특별시 강남구"],
+            },
+        )
+        chunk = chunk_document(regional_document)[0]
+        for region_name in ("서울특별시", "서울특별시 강남구"):
+            with self.subTest(region_name=region_name):
+                self.assertTrue(
+                    chunk_matches_filter(
+                        chunk,
+                        MetadataFilter(
+                            SourceType.SUBSIDY,
+                            date(2026, 8, 26),
+                            region_names=(region_name,),
+                        ),
+                    )
+                )
+        self.assertFalse(
+            chunk_matches_filter(
+                chunk,
+                MetadataFilter(
+                    SourceType.SUBSIDY,
+                    date(2026, 8, 26),
+                    region_names=("부산광역시",),
+                ),
+            )
+        )
+        self.assertIn("지역: 서울특별시, 서울특별시 강남구", chunk.text)
+
+    def test_unknown_region_is_unfiltered_only(self) -> None:
+        unknown_document = replace(
+            self.subsidy,
+            metadata={
+                **self.subsidy.metadata,
+                "region_scope": "unknown",
+                "region_names": [],
+            },
+        )
+        chunk = chunk_document(unknown_document)[0]
+        self.assertTrue(
+            chunk_matches_filter(
+                chunk,
+                MetadataFilter(SourceType.SUBSIDY, date(2026, 8, 26)),
+            )
+        )
+        self.assertFalse(
+            chunk_matches_filter(
+                chunk,
+                MetadataFilter(
+                    SourceType.SUBSIDY,
+                    date(2026, 8, 26),
+                    region_names=("서울특별시",),
+                ),
+            )
+        )
+        self.assertIn("지역: 미확정", chunk.text)
+
+    def test_region_filter_requires_canonical_names_and_subsidy_source(self) -> None:
+        policy = MetadataFilter(
+            SourceType.SUBSIDY,
+            date(2026, 8, 26),
+            region_names=("서울특별시", "서울특별시 강남구"),
+        )
+        self.assertEqual(
+            policy.to_portable_dict()["region_names_any"],
+            ["서울특별시", "서울특별시 강남구"],
+        )
+        for invalid_name in (
+            "ALL",
+            "1100000000",
+            "중구",
+            "강원도",
+            "광주광역시",
+            "전라남도",
+        ):
+            with self.subTest(invalid_name=invalid_name):
+                with self.assertRaisesRegex(ValueError, "region names"):
+                    MetadataFilter(
+                        SourceType.SUBSIDY,
+                        date(2026, 8, 26),
+                        region_names=(invalid_name,),
+                    )
+        with self.assertRaisesRegex(ValueError, "only to subsidy"):
+            MetadataFilter(
+                SourceType.LAW,
+                date(2026, 8, 26),
+                region_names=("서울특별시",),
+            )
 
     def test_cross_index_raw_scores_are_forbidden(self) -> None:
         self.assertEqual(route_indexes(QueryScope.BOTH), ("subsidy", "law"))

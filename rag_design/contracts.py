@@ -23,6 +23,36 @@ class SourceType(str, Enum):
     LAW = "law"
 
 
+class RegionScope(str, Enum):
+    NATIONAL = "national"
+    REGIONAL = "regional"
+    UNKNOWN = "unknown"
+
+
+# Current top-level names after the 2026-07-01 Gwangju/Jeonnam integration.
+CANONICAL_SIDO_NAMES = frozenset(
+    {
+        "서울특별시",
+        "부산광역시",
+        "대구광역시",
+        "인천광역시",
+        "대전광역시",
+        "울산광역시",
+        "세종특별자치시",
+        "경기도",
+        "강원특별자치도",
+        "충청북도",
+        "충청남도",
+        "전북특별자치도",
+        "전남광주통합특별시",
+        "경상북도",
+        "경상남도",
+        "제주특별자치도",
+    }
+)
+NATIONAL_REGION_NAME = "전국"
+
+
 class SensitiveDataStatus(str, Enum):
     CLEAR = "clear"
     REVIEWED = "reviewed"
@@ -69,6 +99,64 @@ def compute_document_id(
         else source_updated_at or effective_from or content_hash[:16]
     )
     return f"{source_value}:{source_id}:{version}"
+
+
+def validate_region_name(value: Any, *, allow_national: bool = True) -> None:
+    """Validate canonical text form and an official 시도 prefix."""
+
+    if not isinstance(value, str) or not value:
+        raise ValueError("region names must be non-empty strings")
+    if unicodedata.normalize("NFC", value) != value or " ".join(value.split()) != value:
+        raise ValueError("region names must use canonical NFC text and spacing")
+    if value == NATIONAL_REGION_NAME:
+        if allow_national:
+            return
+        raise ValueError("'전국' is reserved for national region metadata")
+    sido_name = value.split(" ", 1)[0]
+    if sido_name not in CANONICAL_SIDO_NAMES:
+        raise ValueError(
+            "region names must use an official 시도 name or a fully qualified "
+            "'시도 시군구' name"
+        )
+
+
+def validate_region_metadata(region_scope: Any, region_names: Any) -> None:
+    """Validate the coupled subsidy-region metadata contract."""
+
+    if not isinstance(region_scope, str):
+        raise ValueError("region_scope must be national, regional, or unknown")
+    try:
+        scope = RegionScope(region_scope)
+    except ValueError as exc:
+        raise ValueError(
+            "region_scope must be national, regional, or unknown"
+        ) from exc
+    if not isinstance(region_names, list):
+        raise ValueError("region_names must be a JSON list")
+    for name in region_names:
+        validate_region_name(name)
+    if len(set(region_names)) != len(region_names):
+        raise ValueError("region_names must not contain duplicates")
+
+    if scope is RegionScope.NATIONAL:
+        if region_names != [NATIONAL_REGION_NAME]:
+            raise ValueError("national region_scope requires region_names == ['전국']")
+        return
+    if scope is RegionScope.UNKNOWN:
+        if region_names:
+            raise ValueError("unknown region_scope requires region_names == []")
+        return
+    if not region_names:
+        raise ValueError("regional region_scope requires non-empty region_names")
+
+    for index, name in enumerate(region_names):
+        validate_region_name(name, allow_national=False)
+        if " " in name:
+            sido_name = name.split(" ", 1)[0]
+            if sido_name not in region_names[:index]:
+                raise ValueError(
+                    "fully qualified regional names require their 시도 name first"
+                )
 
 
 def _required(value: str, field_name: str) -> None:
