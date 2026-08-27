@@ -1,0 +1,413 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import date
+import gc
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from rag_design.chunking import chunk_document
+from rag_design.contracts import Document, SourceType
+from rag_design.embeddings import (
+    EmbeddingProviderError,
+    HashEmbeddingProvider,
+    SentenceTransformerKoreanProvider,
+)
+from rag_design.vector_store import (
+    ChromaVectorStore,
+    CollectionFingerprintMismatch,
+    CollectionNotFoundError,
+    VectorSearchFilter,
+    VectorStoreConfig,
+)
+
+
+try:
+    import chromadb as _chromadb  # noqa: F401
+except Exception:
+    CHROMA_AVAILABLE = False
+else:
+    CHROMA_AVAILABLE = True
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_documents() -> tuple[Document, Document]:
+    documents = tuple(
+        Document.from_dict(json.loads(line))
+        for line in (FIXTURES / "documents.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    )
+    if len(documents) != 2:
+        raise AssertionError("vector-store fixture must contain two documents")
+    return documents[0], documents[1]
+
+
+class CountingHashEmbeddingProvider(HashEmbeddingProvider):
+    def __init__(self, dimension: int = 64) -> None:
+        super().__init__(dimension)
+        self.document_calls = 0
+
+    def embed_documents(self, texts):
+        self.document_calls += 1
+        return super().embed_documents(texts)
+
+
+class FailingBatchEmbeddingProvider(CountingHashEmbeddingProvider):
+    def __init__(self, dimension: int = 64) -> None:
+        super().__init__(dimension)
+        self.fail_on_document_call: int | None = None
+
+    def embed_documents(self, texts):
+        self.document_calls += 1
+        if self.document_calls == self.fail_on_document_call:
+            raise EmbeddingProviderError("injected batch failure")
+        return HashEmbeddingProvider.embed_documents(self, texts)
+
+
+class EmbeddingProviderTests(unittest.TestCase):
+    def test_hash_embedding_is_deterministic_and_normalized(self) -> None:
+        first = HashEmbeddingProvider(64)
+        second = HashEmbeddingProvider(64)
+        value = first.embed_query("유아학비 지원")
+        self.assertEqual(value, second.embed_query("유아학비 지원"))
+        self.assertEqual(len(value), 64)
+        self.assertAlmostEqual(sum(item * item for item in value), 1.0)
+
+    def test_korean_provider_reports_missing_optional_dependency(self) -> None:
+        provider = SentenceTransformerKoreanProvider(local_files_only=True)
+        with patch.dict(sys.modules, {"sentence_transformers": None}):
+            with self.assertRaisesRegex(
+                EmbeddingProviderError, "sentence-transformers is required"
+            ):
+                provider.embed_query("복지 서비스")
+
+
+@unittest.skipUnless(CHROMA_AVAILABLE, "chromadb is not installed")
+class ChromaVectorStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=True
+        )
+        self.persist_directory = Path(self.temporary_directory.name) / "index"
+        self.config = VectorStoreConfig(
+            persist_directory=self.persist_directory,
+            collection_prefix="test_rag",
+            batch_size=2,
+        )
+        self.subsidy, self.law = load_documents()
+        self.subsidy_chunks = chunk_document(self.subsidy)
+        self.law_chunks = chunk_document(self.law)
+
+    def tearDown(self) -> None:
+        gc.collect()
+        self.temporary_directory.cleanup()
+
+    def test_persistent_idempotent_sync_and_retrieved_chunk_conversion(self) -> None:
+        provider = CountingHashEmbeddingProvider()
+        store = ChromaVectorStore(provider, self.config)
+        first = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        calls_after_first_sync = provider.document_calls
+        repeated = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        self.assertEqual(first.upserted_count, len(self.subsidy_chunks))
+        self.assertEqual(repeated.upserted_count, 0)
+        self.assertEqual(repeated.deleted_count, 0)
+        self.assertEqual(provider.document_calls, calls_after_first_sync)
+
+        del store
+        gc.collect()
+        reopened = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        results = reopened.search(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[0].text,
+            query_id="q-persistent",
+            top_k=2,
+            expected_collection_fingerprint=first.collection_fingerprint,
+        )
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].chunk.chunk_id, self.subsidy_chunks[0].chunk_id)
+        self.assertEqual([item.rank for item in results], [1, 2])
+        self.assertTrue(all(item.query_id == "q-persistent" for item in results))
+        self.assertTrue(all(item.index_name == "subsidy" for item in results))
+        self.assertTrue(
+            all(item.score_type == "cosine_distance" for item in results)
+        )
+
+    def test_snapshot_replacement_and_delete_by_snapshot_are_idempotent(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        initial = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[:2],
+            snapshot_id="subsidy-001",
+        )
+        replacement = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[:1],
+            snapshot_id="subsidy-002",
+        )
+        self.assertEqual(initial.total_count, 2)
+        self.assertEqual(replacement.upserted_count, 1)
+        self.assertEqual(replacement.deleted_count, 1)
+        self.assertEqual(replacement.total_count, 1)
+
+        deleted = store.delete_snapshot(SourceType.SUBSIDY, "subsidy-002")
+        repeated = store.delete_snapshot(SourceType.SUBSIDY, "subsidy-002")
+        self.assertEqual(deleted.deleted_count, 1)
+        self.assertEqual(repeated.deleted_count, 0)
+
+    def test_source_date_region_and_metadata_filters(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        regional = replace(
+            self.subsidy_chunks[0],
+            metadata={
+                **self.subsidy_chunks[0].metadata,
+                "region_codes": ["1100000000"],
+            },
+        )
+        store.sync_snapshot(
+            SourceType.SUBSIDY, (regional,), snapshot_id="subsidy-regional"
+        )
+        matching = store.search(
+            SourceType.SUBSIDY,
+            regional.text,
+            query_id="q-region-match",
+            search_filter=VectorSearchFilter(
+                region_codes=("1100000000",),
+                metadata_equals={"organization": "교육부"},
+            ),
+        )
+        excluded = store.search(
+            SourceType.SUBSIDY,
+            regional.text,
+            query_id="q-region-miss",
+            search_filter=VectorSearchFilter(region_codes=("2600000000",)),
+        )
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(excluded, ())
+
+        store.sync_snapshot(
+            SourceType.LAW, self.law_chunks, snapshot_id="law-2025-10-01"
+        )
+        before = store.search(
+            SourceType.LAW,
+            self.law_chunks[0].text,
+            query_id="q-law-before",
+            search_filter=VectorSearchFilter(as_of=date(2025, 9, 30)),
+        )
+        effective = store.search(
+            SourceType.LAW,
+            self.law_chunks[0].text,
+            query_id="q-law-effective",
+            search_filter=VectorSearchFilter(as_of=date(2025, 10, 1)),
+        )
+        self.assertEqual(before, ())
+        self.assertEqual(len(effective), 1)
+
+    def test_source_isolation_and_collection_fingerprint_validation(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        with self.assertRaisesRegex(ValueError, "target source_type"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY,
+                (self.subsidy_chunks[0], self.law_chunks[0]),
+                snapshot_id="mixed",
+            )
+
+        synced = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        with self.assertRaises(CollectionFingerprintMismatch):
+            store.search(
+                SourceType.SUBSIDY,
+                "지원",
+                query_id="q-wrong-fingerprint",
+                expected_collection_fingerprint="0" * 64,
+            )
+        self.assertEqual(
+            store.collection_fingerprint(SourceType.SUBSIDY),
+            synced.collection_fingerprint,
+        )
+
+        incompatible = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
+        with self.assertRaises(CollectionFingerprintMismatch):
+            incompatible.collection_fingerprint(SourceType.SUBSIDY)
+
+    def test_chunking_version_mismatch_is_rejected(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        changed = tuple(
+            replace(
+                chunk,
+                metadata={**chunk.metadata, "chunking_version": "structure-v999"},
+            )
+            for chunk in self.subsidy_chunks
+        )
+        with self.assertRaises(CollectionFingerprintMismatch):
+            store.sync_snapshot(
+                SourceType.SUBSIDY, changed, snapshot_id="subsidy-002"
+            )
+
+    def test_invalid_chunk_hash_is_rejected_before_indexing(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        tampered = replace(self.subsidy_chunks[0], content_hash="0" * 64)
+        with self.assertRaisesRegex(ValueError, "content_hash"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY, (tampered,), snapshot_id="tampered"
+            )
+        missing_source_url = replace(
+            self.subsidy_chunks[0],
+            metadata={
+                key: value
+                for key, value in self.subsidy_chunks[0].metadata.items()
+                if key != "source_url"
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "source_url"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY,
+                (missing_source_url,),
+                snapshot_id="missing-metadata",
+            )
+
+    def test_authenticated_source_url_is_never_promoted(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        secret = "known-data-go-secret"
+        authenticated = replace(
+            self.subsidy_chunks[0],
+            metadata={
+                **self.subsidy_chunks[0].metadata,
+                "source_url": (
+                    f"{self.subsidy_chunks[0].metadata['source_url']}"
+                    f"?serviceKey={secret}"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "safe public URL"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY,
+                (authenticated,),
+                snapshot_id="authenticated-url",
+                secret_values=(secret,),
+            )
+        with self.assertRaises(CollectionNotFoundError):
+            store.collection_fingerprint(SourceType.SUBSIDY)
+
+    def test_law_source_url_must_match_id_and_effective_date(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        invalid_urls = (
+            "https://www.law.go.kr/lsInfoP.do?lsiSeq=999&efYd=20251001",
+            "https://www.law.go.kr/lsInfoP.do?lsiSeq=276653&efYd=19000101",
+        )
+        for source_url in invalid_urls:
+            with self.subTest(source_url=source_url):
+                mismatched = replace(
+                    self.law_chunks[0],
+                    metadata={**self.law_chunks[0].metadata, "source_url": source_url},
+                )
+                with self.assertRaisesRegex(ValueError, "law ID"):
+                    store.sync_snapshot(
+                        SourceType.LAW,
+                        (mismatched,),
+                        snapshot_id="mismatched-law-url",
+                    )
+        with self.assertRaises(CollectionNotFoundError):
+            store.collection_fingerprint(SourceType.LAW)
+
+    def test_failed_staging_batch_never_replaces_the_active_snapshot(self) -> None:
+        atomic_config = VectorStoreConfig(
+            persist_directory=self.persist_directory,
+            collection_prefix="atomic_rag",
+            batch_size=1,
+        )
+        provider = FailingBatchEmbeddingProvider()
+        store = ChromaVectorStore(provider, atomic_config)
+        first = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        provider.fail_on_document_call = provider.document_calls + 2
+        with self.assertRaisesRegex(EmbeddingProviderError, "injected batch failure"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY,
+                self.subsidy_chunks,
+                snapshot_id="subsidy-002",
+            )
+
+        still_active = store.search(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[0].text,
+            query_id="q-after-failure",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(snapshot_id="subsidy-001"),
+        )
+        incomplete = store.search(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[0].text,
+            query_id="q-incomplete",
+            search_filter=VectorSearchFilter(snapshot_id="subsidy-002"),
+        )
+        self.assertEqual(len(still_active), len(self.subsidy_chunks))
+        self.assertEqual(incomplete, ())
+        self.assertEqual(
+            store.collection_fingerprint(SourceType.SUBSIDY),
+            first.collection_fingerprint,
+        )
+
+        del store
+        gc.collect()
+        reopened = ChromaVectorStore(HashEmbeddingProvider(64), atomic_config)
+        after_reopen = reopened.search(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[0].text,
+            query_id="q-reopened",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(snapshot_id="subsidy-001"),
+        )
+        repeated = reopened.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        self.assertEqual(len(after_reopen), len(self.subsidy_chunks))
+        self.assertEqual(repeated.upserted_count, 0)
+        self.assertEqual(repeated.deleted_count, 0)
+
+        promoted = reopened.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-002",
+        )
+        visible_new = reopened.search(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks[0].text,
+            query_id="q-promoted",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(snapshot_id="subsidy-002"),
+        )
+        self.assertEqual(promoted.total_count, len(self.subsidy_chunks))
+        self.assertEqual(len(visible_new), len(self.subsidy_chunks))
+
+
+if __name__ == "__main__":
+    unittest.main()

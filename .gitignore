@@ -32,3 +32,7 @@ Desktop.ini
 .env.*
 !.env.example
 .streamlit/secrets.toml
+
+# Persistent vector indexes
+.runtime/vector_db/
+.runtime/vector_db-smoke/

@@ -1,0 +1,26 @@
+{
+  "manifest": {
+    "schema_version": "1.0",
+    "source_type": "law",
+    "document_count": 1,
+    "collected_at": "2026-08-26T17:00:00+09:00",
+    "source_dataset_url": "https://open.law.go.kr/LSO/main.do",
+    "license": "국가법령정보센터 공개 법령",
+    "excluded_count": 0,
+    "parse_error_count": 0
+  },
+  "document_card": {
+    "source_type": "law",
+    "source_name": "국가법령정보센터",
+    "source_dataset_url": "https://open.law.go.kr/LSO/main.do",
+    "license": "국가법령정보센터 공개 법령",
+    "document_count": 1,
+    "collection_scope": "현행 법령 대표 조문 샘플",
+    "cleaning_method": "조문 구조와 번호 보존",
+    "chunking_method": "조·항·호·목 경계 우선",
+    "exclusion_criteria": ["시행일 없음", "조문 위치 없음"],
+    "update_policy": "시행일별 버전 보존",
+    "rights_reviewed": true,
+    "sensitive_data_reviewed": true
+  }
+}
