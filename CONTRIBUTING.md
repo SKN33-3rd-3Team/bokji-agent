@@ -37,8 +37,7 @@ LangGraph 기반 답변 파이프라인은 노드 단위로 나누어 병렬 작
   다른 사람이 이미 쓰고 있는 필드를 임의로 바꾸거나 지우지 않는다.
 - 새 노드를 추가하면 `nodes/__init__.py`에 함수를 re-export하고, PR 설명에 어떤 state
   필드를 읽고/쓰는지 명시한다.
-- 구현 전 시그니처와 docstring만 있는 stub 상태(`NotImplementedError`)로 먼저 병합할 수
-  있다. 이 경우 PR 설명에 stub임을 표시한다.
+nodes/ 디렉터리와 __init__.py만 생성하며, 각 노드 파일은 후속 PR에서 추가한다.
 
 ```
 src/rag_chatbot/graph/
