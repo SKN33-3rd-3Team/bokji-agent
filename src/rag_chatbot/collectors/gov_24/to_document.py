@@ -15,7 +15,7 @@ dict가 아니라 Document 인스턴스를 요구한다)은 두 브랜치가 합
     data/samples/subsidy_documents_sample.jsonl    샘플 5건 (git 포함, 형식 확인용)
 
 사용법:
-    python -m rag_chatbot.collectors.to_document
+    python -m rag_chatbot.collectors.gov_24.to_document
 """
 
 import hashlib
@@ -26,11 +26,11 @@ from collections import defaultdict
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+from rag_design.citation import sanitize_public_url
 
-from region_utils import extract_region, load_sigungu_code_table
+from .region_utils import extract_region, load_sigungu_code_table
 
 load_dotenv()
 
@@ -51,12 +51,10 @@ SAMPLE_SIZE = 5
 # 코드까지 채워지고, 없으면 시도 코드까지만 채워진다(부정확한 코드를
 # 하드코딩하지 않기 위한 설계 — region_utils.py 참고).
 SIGUNGU_CODE_CSV = os.getenv("SIGUNGU_CODE_CSV")
+GOV24_SERVICE_KEY = os.getenv("GOV24_SERVICE_KEY", "")
 
 SOURCE_DATASET_URL = "https://www.data.go.kr/data/15113968/openapi.do"
 LICENSE = "공공데이터포털 이용조건 확인"
-
-# rag_design.contracts.url_safety.OFFICIAL_DOMAINS 와 동일해야 한다.
-OFFICIAL_DOMAINS = ("data.go.kr", "gov.kr", "law.go.kr")
 
 # (JSON 필드명, 섹션 제목, section_type 태그) — 전부 serviceDetail 응답 소속.
 SECTION_FIELDS = [
@@ -87,12 +85,14 @@ class FieldStatus(str, Enum):
     FETCH_FAILED = "fetch_failed"
 
 
-def _is_official_url(url: str) -> bool:
+def _canonical_public_source_url(url: object) -> str | None:
+    """공통 URL 정책을 통과한 공개 canonical URL만 반환한다."""
+    if not isinstance(url, str):
+        return None
     try:
-        host = (urlsplit(url).hostname or "").lower().rstrip(".")
-    except ValueError:
-        return False
-    return any(host == domain or host.endswith(f".{domain}") for domain in OFFICIAL_DOMAINS)
+        return sanitize_public_url(url, secret_values=(GOV24_SERVICE_KEY,))
+    except (TypeError, ValueError):
+        return None
 
 
 def _compute_content_hash(content: str) -> str:
@@ -210,10 +210,15 @@ def convert_one(
         warnings_out.append("서비스ID 없음, 제외")
         return None
 
-    source_url = item.get("상세조회URL") or ""
-    if not source_url or not _is_official_url(source_url):
-        warnings_out.append(f"{service_id}: 공식 도메인 URL 아님({source_url!r}), 제외")
+    raw_source_url = item.get("상세조회URL")
+    source_url = _canonical_public_source_url(raw_source_url)
+    if source_url is None:
+        warnings_out.append(f"{service_id}: 공개 가능한 공식 상세 URL이 없어 제외")
         return None
+    if source_url != raw_source_url.strip():
+        warnings_out.append(
+            f"{service_id}: 상세 URL을 공개 가능한 canonical HTTPS URL로 정규화"
+        )
 
     sections = _build_sections(item)
     if not sections:
@@ -244,6 +249,10 @@ def convert_one(
         )
 
     region = extract_region(item.get("소관기관명"), sigungu_code_table)
+    if region["region_scope"] == "unknown":
+        doc_parse_warnings.append(
+            "소관기관명에서 지역 범위를 확정하지 못해 region_scope=unknown으로 보존"
+        )
 
     return {
         "schema_version": "1.0",
@@ -271,7 +280,8 @@ def convert_one(
             "organization": item.get("소관기관명") or "",
             # serviceDetail API의 "신청기한" 원문 값을 가공 없이 그대로 저장.
             "application_deadline_raw": item.get("신청기한") or None,
-            "region_codes": [region["region_label"]],
+            "region_scope": region["region_scope"],
+            "region_names": region["region_names"],
             "region_sido": region["sido"],
             "region_sigungu": region["sigungu"],
             "region_sido_code": region["sido_code"],
@@ -372,8 +382,8 @@ def run() -> None:
             "update_policy": "source_updated_at 기준 버전 보존",
             "region_extraction": (
                 "소관기관명 텍스트에서 시도/시군구를 정규식으로 추출(region_utils.py). "
-                "시도 코드는 고정 매핑, 시군구 코드는 SIGUNGU_CODE_CSV 환경변수로 지정한 "
-                "공식 법정동코드 CSV가 있을 때만 채운다. 매칭 안 되면 '전국'"
+                "명시적으로 확인한 중앙기관은 national/['전국'], 시도/시군구는 "
+                "regional과 계층형 region_names로 기록한다. 확정할 수 없으면 unknown/[]"
             ),
             "missing_vs_failed": (
                 "상세조회/지원조건조회 API 호출이 실패한 서비스ID는 실패 목록"

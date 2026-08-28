@@ -14,22 +14,15 @@
 표시된다.
 
 사용법:
-    python main_gov24.py                 # 전체 실행
-    python main_gov24.py --limit 50      # 앞 50건만 테스트로 전체 파이프라인 실행
-    python main_gov24.py -n 50           # --limit과 동일(짧은 옵션)
+    python -m rag_chatbot.collectors.gov_24             # 전체 실행
+    python -m rag_chatbot.collectors.gov_24 --limit 50  # 앞 50건 테스트
+    python -m rag_chatbot.collectors.gov_24 -n 50       # --limit과 동일
 """
 
 import argparse
-import sys
 import time
-from pathlib import Path
 
-# 어디서 실행하든 src/를 항상 import 경로에 넣는다(PYTHONPATH 설정 없이도 동작).
-SRC_DIR = Path(__file__).resolve().parent / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-import gov24, merge_gov24, to_document  # noqa: E402
+from . import gov24, merge_gov24, to_document
 
 
 def _step(title: str, func, *args, **kwargs):
