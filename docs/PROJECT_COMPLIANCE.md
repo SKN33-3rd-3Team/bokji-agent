@@ -44,9 +44,12 @@ LF로 연결한 `render_legal_metadata_summary(metadata)` 결과와 정확히 �
 유일한 `기본정보/basic_info` 섹션도 이 content와 같아야 한다. 임의의 본문이나
 조문을 이 형식 또는 `basic_info`로 감싸 메타데이터 문서처럼 인수하지 않는다.
 공식 원문·상세 URL은 임베딩 대상인 `Document.content`에서 의도적으로 제외한다.
-URL은 `Document.source_url`에 별도 저장하고 `Chunk.metadata.source_url`로
-전파해 `Citation.source_url`로 반환한다. 이 URL은 공식 원문 확인 경로일 뿐,
-해당 조문 본문이 수집·임베딩·색인됐다는 뜻은 아니다.
+`Document.source_url`은 별도로 보존하며 검색 결과의 출처 추적을 위해
+`Chunk.metadata.source_url`에도 복사한다. `Citation.source_url`은 이 chunk
+필드에서 읽지 않고 `Document.metadata.law_type`,
+`Document.metadata.source_sequence`, `Document.effective_from`에서 독립적으로
+재구성·검증하며 정규 공식 상세 URL과 정확히 일치해야 한다. 이 URL은 공식 원문
+확인 경로일 뿐, 해당 조문 본문이 수집·임베딩·색인됐다는 뜻은 아니다.
 
 계약의 `issued_date`, `effective_date`, `effective_from`은 `YYYY-MM-DD`이고,
 법령 직접 URL의 `efYd`만 검증된 시행일에서 하이픈을 제거한 `YYYYMMDD`다.
