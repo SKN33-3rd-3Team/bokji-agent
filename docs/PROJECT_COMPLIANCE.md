@@ -51,16 +51,30 @@ LF로 연결한 `render_legal_metadata_summary(metadata)` 결과와 정확히 �
 재구성·검증하며 정규 공식 상세 URL과 정확히 일치해야 한다. 이 URL은 공식 원문
 확인 경로일 뿐, 해당 조문 본문이 수집·임베딩·색인됐다는 뜻은 아니다.
 
-계약의 `issued_date`, `effective_date`, `effective_from`은 `YYYY-MM-DD`이고,
-법령 직접 URL의 `efYd`만 검증된 시행일에서 하이픈을 제거한 `YYYYMMDD`다.
+법령 `effective_from`은 필수이며 같은 `YYYY-MM-DD` 형식의
+`metadata.effective_date`와 정확히 같아야 한다. `issued_date`도
+`YYYY-MM-DD`이고, 선택적인 `source_updated_at`과 `effective_to`는 값이 있을
+때만 `YYYY-MM-DD`로 기록한다. `effective_to`가 있으면 `effective_from`보다
+뒤여야 한다. PR #8 하위 PR의 `filtered_to_document.py` 변환 계층은 법령·
+자치법규의 `공포일자`와 행정규칙의 `발령일자`를 `issued_date`로, 공통
+`시행일자`를 `effective_date`와 `effective_from`으로 정규화해야 한다. 법령
+직접 URL의 `efYd`만 검증된 시행일에서 하이픈을 제거한 `YYYYMMDD`다.
 `source_id`는 안정적인 숫자 entity ID이며, 숫자 문자열 `source_sequence`는
 공식 원천의 개정·버전 일련번호로 문서 ID와 직접 URL을 함께 재현한다. 두 값을
 서로 대신 사용하지 않는다.
 
+법령의 중복 원천 identity는 `source_type=law` 문맥에서
+`(law_type, source_id)`로 판정한다. 같은 숫자 `source_id`라도 `law`, `admrul`,
+`ordin`이 다르면 다른 원천이며, subtype을 가로질러 content가 같으면 같은 원천
+중복으로 차단하지 않고 `duplicate_content_candidate` warning으로 인수한다.
+
 실행 가능한 근거 경계에서 `supported_legal_evidence_aspects(chunks)`는 검증된
 metadata-only 법령 chunk에 대해 `legal_metadata`만 지원한다.
 `legal_article_body` 또는 `legal_interpretation`이 필요한 주장은 이 근거로
-충족할 수 없으며, `decide_abstention`은 `NO_EVIDENCE`로 반드시 보류한다.
+충족할 수 없다. `decide_abstention`은 보류 여부, `NO_EVIDENCE` reason과 누락
+aspect를 반환하며 안내 문구나 UI를 만들지 않는다. 호출자·생성·UI 계층이 이
+결정을 적용해 답변 생성을 막고 공식 원문 확인 안내를 표시한다. 이 계약 PR과
+PR #8 수집기 범위에는 생성 UI가 포함되지 않는다.
 
 본문 미포함은 합의된 정책이므로 `parse_warnings`에 오류처럼 기록하지 않는다.
 
@@ -133,7 +147,7 @@ metadata-only 법령 chunk에 대해 `legal_metadata`만 지원한다.
 - `main`은 실행 가능한 상태를 유지한다.
 - 변경은 기능 단위 브랜치와 작은 커밋으로 제출한다.
 - PR에는 변경 이유와 실제 검증 결과를 남긴다.
-- Issue #12의 법령 메타데이터 전용 계약 PR을 먼저 `main`에 병합하고 사용자 확인을 받은 뒤에만 PR #8 대상 후속 작업을 시작한다.
+- PR #13 팀 리뷰·승인 → `main` 병합 → 사용자 반영 확인 → PR #8 브랜치 동기화 → PR #8 대상 하위 PR 팀 리뷰·병합 → 갱신된 PR #8 전체 검증 → PR #8의 `main` 병합 순서를 지킨다.
 - 상세 절차는 `CONTRIBUTING.md`를 따른다.
 
 ## 필수 제출물

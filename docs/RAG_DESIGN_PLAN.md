@@ -27,7 +27,7 @@
 
 > 복지 정보가 필요한 사용자가 보조금24 공개 문서와 법령정보센터 목록 메타데이터를 바탕으로 지원 제도, 대상 조건, 신청 방법과 관련 법령 후보를 질문하면, 시스템은 검색된 근거로 확인되는 내용만 출처와 함께 답하고 근거가 부족하면 답변을 보류한다.
 
-대상 사용자와 수집 대상 서비스의 정확한 명칭·URL은 **미결정 사항이며 Gate 0에서 팀 합의가 필요하다.** 법령 본문 제외와 목록 메타데이터 전용 질문 범위는 위 결정으로 확정됐다.
+대상 사용자와 보조금 수집 대상 서비스의 정확한 명칭·URL은 **미결정 사항이며 Gate 0에서 팀 합의가 필요하다.** 법령 본문 제외, 목록 메타데이터 전용 질문 범위와 유형별 국가법령정보센터 직접 URL은 이 계약으로 확정됐다.
 
 1차의 구체적 목표는 다음과 같다.
 
@@ -84,7 +84,13 @@ A/B/C는 원천 API 호출 성공만으로 인계를 완료하지 않는다. 출
 
 ## 공통 데이터 계약
 
-계약의 최종 직렬화 형식과 schema version 규칙은 **미결정 사항**이다. 참조 구현은 JSON 호환 dataclass와 JSONL fixture, 구현 버전 `1.0`을 사용하지만 팀이 승인한 최종 계약을 뜻하지 않는다. 아래 필드 표도 승인 전 계약 초안이며, `필수` 표시는 초안에서 요구하는 수준을 뜻한다. 모든 시각은 timezone을 포함한 ISO 8601 형식을 사용하고, 날짜는 ISO 8601 날짜 형식을 사용한다. ID는 같은 원문과 버전에서 재현 가능해야 한다.
+공통 schema version `1.0`과 아래 법령 metadata 필드·문서 ID·직접 URL,
+`legal-metadata-v1` 호환성 경계는 PR #8 통합에 사용할 동결 계약이다. PR #13의
+팀 리뷰·승인과 병합 절차는 필요하지만 이 값들을 runtime 실험 후보로 취급하지
+않는다. JSONL 파일 또는 API 같은 전달 경로와 모델·embedding·검색 파라미터·
+UI 표현은 별도 runtime 선택이다. 모든 시각은 timezone을 포함한 ISO 8601
+형식을 사용하고, 날짜는 아래 출처별 필수·선택 규칙에 따라 canonical
+`YYYY-MM-DD`를 사용한다. ID는 같은 원천과 버전에서 재현 가능해야 한다.
 
 ### Document
 
@@ -102,8 +108,8 @@ A/B/C는 원천 API 호출 성공만으로 인계를 완료하지 않는다. 출
 | `content` | 예 | 정규화한 검색 텍스트. 법령은 목록 메타데이터 요약이며 조문 본문이 아님 |
 | `sections` | 조건부 | 제목 경로와 검색 텍스트를 가진 구조 목록. 법령은 `기본정보` 단일 섹션 |
 | `collected_at` | 예 | 수집 시각 |
-| `source_updated_at` | 조건부 | 출처가 제공하는 최종 갱신 시각 |
-| `effective_from`, `effective_to` | 조건부 | 시행·적용 기간이 있을 때 기록 |
+| `source_updated_at` | 조건부 | 출처가 제공하는 최종 갱신 시각. 법령은 값이 있으면 `YYYY-MM-DD` |
+| `effective_from`, `effective_to` | 조건부 | 법령은 `effective_from` 필수, `effective_to` 선택. 둘 다 `YYYY-MM-DD` |
 | `license` | 예 | 이용 조건 또는 확인 상태 |
 | `content_hash` | 예 | 정규화한 `content`의 중복·변경 판별값 |
 | `metadata` | 예 | 출처별 구조화 메타데이터 |
@@ -169,10 +175,16 @@ ID이고, `source_sequence`는 공식 원천의 개정·버전을 식별하며 �
 - `admrul`: `https://www.law.go.kr/LSW/admRulInfoP.do?admRulSeq=<source_sequence>`
 - `ordin`: `https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=<source_sequence>`
 
-계약의 `issued_date`, `effective_date`와 `effective_from`은 모두
-`YYYY-MM-DD`다. `law` URL의 `efYd`만 ISO 날짜 검증 뒤 시행일의 하이픈을
-제거한 `YYYYMMDD`로 만들며, `admrul`과 `ordin` 직접 URL에는 날짜 query를
-추가하지 않는다.
+법령의 `effective_from`은 필수이며 `metadata.effective_date`와 정확히 같아야
+한다. `issued_date`, `effective_date`, `effective_from`은 `YYYY-MM-DD`이고,
+선택적인 `source_updated_at`과 `effective_to`도 값이 있으면 같은 형식이어야
+한다. `effective_to`가 있으면 `effective_from`보다 뒤여야 한다. PR #8 하위
+PR의 `src/rag_chatbot/collectors/law/filtered_to_document.py` 변환 계층은 법령·
+자치법규의 `공포일자`와 행정규칙의 `발령일자`를 `issued_date`로, 공통
+`시행일자`를 `effective_date`와 `effective_from`으로 정규화한다. 원천에 없는
+선택 날짜는 임의로 추정하지 않고 `null`로 둔다. `law` URL의 `efYd`만 검증된
+시행일의 하이픈을 제거한 `YYYYMMDD`로 만들며, `admrul`과 `ordin` 직접 URL에는
+날짜 query를 추가하지 않는다.
 
 이 URL은 목록 문서의 출처와 원문 확인 경로를 제공하지만, 현재 chunk가 조문
 본문을 근거로 포함한다는 뜻은 아니다.
@@ -216,13 +228,15 @@ Retriever가 생성 파이프라인에 넘기는 검색 결과다.
 
 역할표의 C 담당 법령 후보 연계·근거 점검 노드가 D/E 통합 파이프라인에 넘길 **2차 인터페이스 후보**다. 점검할 주장 단위와 직렬화 형식은 미결정이며, 다음 필드는 최소 초안이다. 법령 목록 chunk는 명칭·유형·기관·날짜 같은 목록 주장만 점검할 수 있고 조문 또는 법률 해석 주장을 `supported`로 판정할 수 없다.
 
-참조 구현의 실행 가능한 법령 근거 capability는 `legal_metadata`,
+동결된 실행 가능 법령 근거 capability는 `legal_metadata`,
 `legal_article_body`, `legal_interpretation`으로 구분한다.
 `supported_legal_evidence_aspects(chunks)`는 검증된 `metadata_only` 법령
 chunk에서 오직 `legal_metadata`만 도출한다. 요구 capability에
 `legal_article_body` 또는 `legal_interpretation`이 하나라도 포함되면 목록
-chunk로 충족할 수 없으며, `EvidenceState`와 `decide_abstention`은 이를
-`NO_EVIDENCE`로 판정해 반드시 보류한다.
+chunk로 충족할 수 없다. 호출자는 이 지원 집합으로 `EvidenceState`를 구성하고,
+`decide_abstention`은 `abstain=true`, `reason=NO_EVIDENCE`와 누락 aspect를 담은
+결정만 반환한다. 안내 문구·링크·UI 렌더링은 이 결정을 소비하는 생성/UI 계층
+책임이다.
 
 | 필드 | 필수 | 설명 |
 | --- | --- | --- |
@@ -260,9 +274,10 @@ chunk로 충족할 수 없으며, `EvidenceState`와 `decide_abstention`은 이�
 1. 계약과 필수 필드를 검증한다.
 2. 메뉴·푸터·반복 안내 등 검색을 방해하는 boilerplate를 제거한다.
 3. 공백과 문자 표현을 정규화하되 원천 식별자, 날짜, 금액과 자격 조건을 보존한다.
-4. `source_id`와 `content_hash`로 완전·근접 중복 후보를 식별한다. 서로 다른 `source_id`의 동일 content는 지역·기관별 별도 서비스일 수 있으므로 자동 제외하지 않고 warning으로 기록한다.
-5. 권리 불명확, 민감정보 검토 미완료와 치명적 파싱 오류 문서를 격리하고 검토 결과를 기록한다. `metadata_only` 법령의 본문·조문 미포함은 격리 또는 warning 사유가 아니다.
-6. 구조 기반 청킹 후 `Chunk` 계약과 인용 위치를 검증한다.
+4. `source_id`와 `content_hash`로 완전·근접 중복 후보를 식별한다. 서로 다른 원천 identity의 동일 content는 자동 제외하지 않고 warning으로 기록한다.
+5. 법령 원천 identity는 `source_type=law` 문맥의 `(law_type, source_id)`다. 같은 숫자 `source_id`라도 subtype이 다르면 다른 원천이므로, subtype 간 동일 content는 `duplicate_content_candidate` warning으로 인수하고 같은 원천 중복으로 거부하지 않는다.
+6. 권리 불명확, 민감정보 검토 미완료와 치명적 파싱 오류 문서를 격리하고 검토 결과를 기록한다. `metadata_only` 법령의 본문·조문 미포함은 격리 또는 warning 사유가 아니다.
+7. 구조 기반 청킹 후 `Chunk` 계약과 인용 위치를 검증한다.
 
 인수 보고서의 `issues`는 전체 인수를 거부하는 blocking 오류이고, `warnings`는 중복 후보나 권장 섹션 누락을 관측하되 인수를 막지 않는 non-blocking 진단이다.
 
@@ -275,9 +290,13 @@ chunk로 충족할 수 없으며, `EvidenceState`와 `decide_abstention`은 이�
 - 하나의 구조 단위가 모델 입력 한도를 넘을 때만 재귀 분할을 적용한다. 짧은 인접 단위 병합과 overlap은 출처별 규칙으로 관리한다.
 - `800자`, `overlap 100자`와 LangChain 재귀 분할기는 **Baseline 후보일 뿐 확정값이 아니다.** 샘플 길이 분포와 Dev 검색 결과로 결정한다.
 
-### 논리 인덱스 분리 제안
+### 논리 인덱스 분리와 runtime 선택
 
-보조금과 법령은 문서 구조, 최신성, 인용 위치와 질문 의도가 다르므로 `subsidy`와 `law` 논리 인덱스를 분리하는 안을 제안한다. 단일 인덱스와의 장단점을 확인해 Gate 2 구현 전에 팀이 승인할 항목이며, 승인 전에는 공통 계약의 확정 조건으로 취급하지 않는다. 분리안을 선택해도 물리적으로 같은 Vector DB의 collection·namespace 또는 이에 준하는 경계를 사용할 수 있다.
+참조 구현은 문서 구조, 최신성, 인용 위치와 질문 의도가 다른 `subsidy`와
+`law`를 별도 논리 collection으로 저장한다. 이 저장 경계와 법령
+`legal-metadata-v1` fingerprint는 동결돼 있다. 어떤 embedding provider와
+물리 Vector DB를 운영에 쓸지, 양쪽 검색을 언제 라우팅하고 순위를 어떻게
+합칠지는 Dev set으로 결정할 runtime 선택이다.
 
 - 인덱스 버전은 데이터, schema, 청킹과 임베딩 설정 식별자를 포함한다.
 - 설정이 바뀌면 기존 Baseline을 덮어쓰지 않고 새 버전으로 재색인한다.
@@ -315,31 +334,40 @@ LangChain으로 Retriever와 LLM을 연결한다. 생성 프롬프트는 다음 
 - 관련 근거가 검색되지 않거나 질문의 핵심 조건을 근거가 다루지 않는다.
 - `legal_article_body` 또는 `legal_interpretation`이 필요한데
   `legal_metadata`만 지원하는 법령 목록 chunk가 검색됐다. 이 경우
-  `decide_abstention`의 `NO_EVIDENCE` 보류를 우회하지 않는다.
+  `decide_abstention`이 반환한 `NO_EVIDENCE` 결정과 누락 aspect를 호출자가
+  적용해 답변 생성을 막는다.
 - 출처 간 충돌을 해소할 최신성 정보가 없다.
 - 문서가 만료·폐지됐을 가능성이 있으나 확인할 날짜가 없다.
 - 개인정보, 비밀정보 요청이나 프롬프트 인젝션으로 안전한 답변을 만들 수 없다.
 
-기본 보류 문구 후보는 “제공된 자료에서 확인할 수 없습니다.”이며, 가능한 경우 부족한 정보와 확인할 공식 출처를 함께 안내한다. 법령 본문이 필요한 경우에는 목록 metadata만 보유한다는 한계와 국가법령정보센터 공식 상세 페이지를 안내한다. score 하나만으로 보류하지 않고 근거 존재, 질문 충족도, 충돌과 최신성을 함께 평가한다.
+`decide_abstention`은 결정·reason·누락 aspect만 반환하고 사용자 문구나 링크를
+생성하지 않는다. 호출자·생성·UI 계층은 `NO_EVIDENCE` 결정을 소비해
+`AnswerResult.abstained=true`를 설정하고, 법령 본문이 필요한 경우 목록
+metadata만 보유한다는 한계와 국가법령정보센터 공식 상세 페이지를 렌더링한다.
+기본 문구와 UI 표현은 runtime 선택이며, PR #8의 수집기·변환 계층이나
+`policy.py`가 제공하는 기능이 아니다. score 하나만으로 보류하지 않고 근거
+존재, 질문 충족도, 충돌과 최신성을 함께 평가한다.
 
 파이프라인 오류는 근거를 정상적으로 평가한 보류와 구분한다. 오류 시 공개 가능한 오류 안내와 `error_code`를 반환하고, 보류 지표가 아니라 오류율에 집계한다.
 
-## Baseline 후보와 미결정 사항
+## 동결 계약과 runtime 미결정 사항
 
-다음 표의 후보는 구현 착수점을 비교하기 위한 것이며 팀 승인 전 확정 설정으로 취급하지 않는다.
+법령 metadata 필드·ID·날짜·직접 URL·`legal-metadata-v1`은 이 표의 실험 대상이
+아니다. 다음 표는 그 계약을 소비하는 전달·모델·검색·생성·UI runtime 선택만
+구분한다.
 
-| 항목 | Baseline 후보 | 미결정·확인 사항 |
+| 항목 | 동결 경계 또는 참조값 | runtime 미결정·확인 사항 |
 | --- | --- | --- |
-| 교환 형식 | JSONL + JSON Schema | 파일·API 전달 방식, schema version 정책 |
+| 교환 계약 | JSON 호환 schema `1.0` | JSONL 파일·API 등 전달 방식 |
 | Loader | 출처별 정규화 결과를 LangChain Document로 변환 | 실제 수집 결과 형태와 오류 처리 |
-| Splitter | 구조 우선, 재귀 분할 fallback | 길이 단위, 병합, `800자/100자 overlap` 후보 검증 |
+| Splitter | 법령 `기본정보`와 `structure-v2` 고정 | 초과 길이 분할값·병합·overlap 실험 |
 | Embedding | 한국어 복지 문서와 법령 목록정보를 지원하는 단일 모델 | 모델명, 차원, 비용, 로컬·API 환경 |
-| Vector DB | Chroma | 운영 환경, metadata filter, 영속성, FAISS 등 대안 |
-| 인덱스 구성 | 출처별 2개 논리 인덱스 | 단일·분리 구성, 버전 경계와 결과 병합 방식 |
+| Vector DB | Chroma 참조 구현 | 운영 환경과 저장소 선택 |
+| 인덱스 구성 | `subsidy`·`law` 논리 collection 분리 | 질의 라우팅과 결과 병합 방식 |
 | 검색 | dense similarity | 거리 함수, `top-k=5` 후보, threshold, 양쪽 인덱스 병합 |
 | 생성 | 근거 제한 프롬프트를 사용하는 단일 LLM | 모델명, 비용, 지연 시간, 구조화 출력 지원 |
-| 인용 | 문서명 + 섹션 + 공식 상세 URL | 화면 표현, 유형별 직접 링크와 목록근거 한계 표시 방식 |
-| 보류 | 근거 부족·충돌·최신성·안전 사유 분류 | 판단 규칙과 임계값 |
+| 인용 | 유형별 canonical 공식 상세 URL 고정 | 링크·목록근거 한계의 UI 표현 |
+| 보류 | decision reason·누락 aspect 계약 고정 | 안내 문구와 UI 표현 |
 
 모델과 저장소 선택 시 한국어 검색 품질, 메타데이터 필터, 재현성, 비용, 응답 시간과 새 환경에서의 실행 가능성을 함께 비교한다. 외부 API 후보는 사용자 입력·검색 문서의 보존, 학습 사용 여부와 전송 조건도 확인한다.
 
@@ -403,7 +431,7 @@ LangChain으로 Retriever와 LLM을 연결한다. 생성 프롬프트는 다음 
 
 ### 최신성
 
-- `collected_at`, `source_updated_at`, `effective_from`, `effective_to`를 가능한 범위에서 보존한다.
+- `collected_at`은 모든 문서에 보존한다. 법령은 `effective_from`을 반드시 보존하고, `source_updated_at`과 `effective_to`는 원천에 있을 때 canonical 날짜로 보존한다. 보조금의 선택 날짜는 원천 제공 범위에서 보존한다.
 - 법령 개정판과 보조금 서비스 변경판을 같은 문서로 덮어쓰지 않고 버전 관계를 유지한다.
 - 만료·폐지 문서는 검색 제외 또는 명시적 경고 중 하나를 정책으로 정한다.
 - 동일 제도·법령의 충돌 결과가 검색되면 최신 버전을 판단할 충분한 메타데이터가 있는지 먼저 확인한다.
@@ -432,7 +460,10 @@ D/E가 담당한 1차 RAG 설계 산출물은 이 계획서와 `docs/RAG_DESIGN_
 - 평가·실험·보안·최신성 규칙
 - 2차 통합 착수 조건과 완료 조건
 
-참조 구현의 계약 버전과 기본값은 팀 승인 전 후보로 유지한다. 운영 전체 수집 데이터, Dev/Holdout 평가 데이터와 운영 모델·Vector DB 설정은 팀 합의와 후속 통합 범위가 정해진 뒤 결정한다.
+schema `1.0`, 법령 metadata 필드·ID·날짜·직접 URL과
+`legal-metadata-v1`은 PR #13의 동결 계약이다. 운영 전체 수집 데이터,
+Dev/Holdout 평가 데이터, 모델·embedding·검색 파라미터·UI와 운영 Vector DB는
+팀 합의와 후속 통합 범위가 정해진 뒤 결정한다.
 
 ## 의존성과 리스크
 
@@ -453,21 +484,24 @@ D/E가 담당한 1차 RAG 설계 산출물은 이 계획서와 `docs/RAG_DESIGN_
 ## 2차 통합 인계 조건
 
 - 목표 사용자, 질문과 문서 범위가 한 문장으로 승인돼 있다.
-- A/B의 보조금 수집 분할과 A/B/C의 공통 `Document` 계약이 합의돼 있다.
+- schema `1.0`과 PR #13의 법령 `Document` 계약은 동결돼 있고, A/B의 보조금 수집 분할·mapping이 같은 공통 계약에 맞는지 검토했다.
 - 각 출처의 공개 가능한 대표 샘플과 Document Card 초안으로 필수 필드, 규모, 권리, 구조와 최신성 정보를 검토했다.
-- 구조 기반 청킹과 단일·분리 중 선택한 인덱스 구성 원칙이 승인돼 있다.
-- `Chunk`, `RetrievedChunk`, `EvidenceCheckResult`, `AnswerResult` 계약이 승인돼 있다.
+- 법령 `기본정보/structure-v2` 청킹, 출처별 논리 collection 분리와 `legal-metadata-v1` 경계는 동결돼 있다.
+- 동결된 법령 `Chunk`·인용·보류 경계를 유지한 `RetrievedChunk`, `EvidenceCheckResult`, `AnswerResult` runtime 연결을 검토했다.
 - Baseline 후보 중 구현 전에 결정해야 할 항목마다 담당자와 결정 시점이 있다.
 - Dev/Holdout 동결 방식, 지표, 초기 수용 기준과 실험 규칙이 승인돼 있다.
 - 비밀정보·개인정보·원문·Vector DB의 저장·로그 금지 범위가 합의돼 있다.
 - 구현에서 사용할 런타임 DB·수집 원본·로그 경로와 Git 제외 방법이 정해져 있다.
 
-## PR #8 선행 순서
+## PR #13 및 PR #8 통합 순서
 
-1. Issue #12의 법령 메타데이터 전용 계약 PR을 먼저 `main`에 병합한다.
-2. 병합 후 작업을 멈추고 사용자가 `main` 반영 완료를 확인할 때까지 PR #8 관련 변경을 시작하지 않는다.
-3. 사용자 확인 뒤 PR #8의 `feat/6-law-collection`을 새 `main`과 동기화한다.
-4. PR #8 파생 브랜치에서 수집기·샘플·manifest를 이 계약에 맞추고, base가 `feat/6-law-collection`인 하위 PR로 검토받는다.
+1. 팀이 PR #13의 계약·문서·검증 결과를 리뷰하고 승인한다.
+2. 승인된 PR #13을 `main`에 병합한다.
+3. 작업을 멈추고 사용자가 `main` 반영 완료를 확인할 때까지 PR #8 관련 변경을 시작하지 않는다.
+4. 사용자 확인 뒤 PR #8의 `feat/6-law-collection`을 새 `main`과 동기화한다.
+5. PR #8 파생 브랜치에서 수집기·변환 mapping·샘플·manifest를 이 계약에 맞추고, base가 `feat/6-law-collection`인 하위 PR을 팀 리뷰 후 병합한다.
+6. 갱신된 PR #8 head에서 전체 테스트, 인수·청킹·인용·Vector Store 검증과 추적 데이터 정책을 확인한다.
+7. 전체 검증과 팀 리뷰가 끝난 PR #8을 `main`에 병합한다.
 
 ## 1차 완료 조건
 

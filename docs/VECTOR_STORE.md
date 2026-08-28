@@ -39,8 +39,10 @@ The executable evidence capabilities are `legal_metadata`,
 `legal_article_body`, and `legal_interpretation`.
 `supported_legal_evidence_aspects(chunks)` exposes only `legal_metadata` for
 validated metadata-only legal chunks. Requiring either other capability must
-produce a `NO_EVIDENCE` abstention through `EvidenceState` and
-`decide_abstention`.
+produce an `AbstentionDecision` with `reason=NO_EVIDENCE` and the missing
+aspects through `decide_abstention`. The caller enforces that decision; a later
+generation/UI layer renders official-source guidance. The vector store and
+policy helper do not produce user-facing text or UI.
 
 ## Install
 
@@ -82,6 +84,10 @@ local model files, load failures, and dimension mismatches raise an explicit
   `source_sequence` identifies the official source revision/version and is part
   of both the legal document ID and direct URL; neither value substitutes for
   the other.
+- Upstream legal handoff duplicate identity is scoped as
+  `(source_type=law, law_type, source_id)`. Equal content across different
+  subtypes is a non-blocking `duplicate_content_candidate`, not a same-source
+  duplicate rejection.
 - Collection metadata binds the contract schema, storage layout, distance type,
   embedding provider and dimension, and chunking version into fingerprints. A
   reopen with incompatible settings or an unexpected fingerprint is rejected.
@@ -117,10 +123,15 @@ Legal public citations are direct, credential-free official detail URLs:
 - `admrul`: `https://www.law.go.kr/LSW/admRulInfoP.do?admRulSeq=<source_sequence>`
 - `ordin`: `https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=<source_sequence>`
 
-Contract values `issued_date`, `effective_date`, and `effective_from` use
-canonical `YYYY-MM-DD`. Only the statute URL query `efYd` uses `YYYYMMDD`,
-derived by removing hyphens after validating the ISO date. Administrative-rule
-and ordinance direct URLs do not add a date query.
+Legal `effective_from` is required and must equal `metadata.effective_date`.
+`issued_date`, `effective_date`, and `effective_from` use canonical
+`YYYY-MM-DD`; optional `source_updated_at` and `effective_to` must use the same
+form when present, and `effective_to` must be later than `effective_from`. The
+PR #8 child-PR mapping layer must normalize source dates before constructing
+documents or syncing chunks; the vector store does not repair malformed dates.
+Only the statute URL query `efYd` uses `YYYYMMDD`, derived by removing hyphens
+after validating the ISO date. Administrative-rule and ordinance direct URLs do
+not add a date query.
 
 These links identify the list record and provide a route to official full text;
 they do not make the indexed metadata an article citation. Full generated JSONL,
