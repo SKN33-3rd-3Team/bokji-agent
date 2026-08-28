@@ -7,7 +7,13 @@ from datetime import date
 from enum import Enum
 from typing import Any, Mapping
 
-from .contracts import Chunk, SourceType
+from .contracts import (
+    Chunk,
+    RegionScope,
+    SourceType,
+    validate_region_metadata,
+    validate_region_name,
+)
 
 
 class QueryScope(str, Enum):
@@ -48,11 +54,15 @@ class MetadataFilter:
 
     source_type: SourceType
     as_of: date
-    region_codes: tuple[str, ...] = ()
+    region_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if any(not value.strip() for value in self.region_codes):
-            raise ValueError("region_codes must contain non-empty strings")
+        if self.region_names and self.source_type is not SourceType.SUBSIDY:
+            raise ValueError("region filters apply only to subsidy chunks")
+        for value in self.region_names:
+            validate_region_name(value)
+        if len(set(self.region_names)) != len(self.region_names):
+            raise ValueError("region_names must not contain duplicates")
 
     def to_portable_dict(self) -> dict[str, Any]:
         """Describe semantics without tying Gate 1 design to a Vector DB dialect."""
@@ -64,9 +74,31 @@ class MetadataFilter:
                 "bounds": "[from,to)",
             },
         }
-        if self.region_codes and self.source_type is SourceType.SUBSIDY:
-            result["region_codes_any"] = list(self.region_codes)
+        if self.region_names and self.source_type is SourceType.SUBSIDY:
+            result["region_names_any"] = list(self.region_names)
         return result
+
+
+def subsidy_regions_match(
+    metadata: Mapping[str, Any], requested_region_names: tuple[str, ...]
+) -> bool:
+    """Apply exact-name matching with national wildcard and unknown fail-closed."""
+
+    if not requested_region_names:
+        return True
+    try:
+        validate_region_metadata(
+            metadata.get("region_scope"),
+            metadata.get("region_names"),
+        )
+    except ValueError:
+        return False
+    scope = RegionScope(metadata["region_scope"])
+    if scope is RegionScope.NATIONAL:
+        return True
+    if scope is RegionScope.UNKNOWN:
+        return False
+    return bool(set(metadata["region_names"]).intersection(requested_region_names))
 
 
 def chunk_matches_filter(chunk: Chunk, policy: MetadataFilter) -> bool:
@@ -88,12 +120,8 @@ def chunk_matches_filter(chunk: Chunk, policy: MetadataFilter) -> bool:
     except ValueError:
         return False
 
-    if policy.source_type is SourceType.SUBSIDY and policy.region_codes:
-        chunk_regions = set(chunk.metadata.get("region_codes") or ())
-        if not chunk_regions:
-            return False
-        if "ALL" not in chunk_regions and not chunk_regions.intersection(
-            policy.region_codes
-        ):
-            return False
+    if policy.source_type is SourceType.SUBSIDY and not subsidy_regions_match(
+        chunk.metadata, policy.region_names
+    ):
+        return False
     return True

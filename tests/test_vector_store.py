@@ -17,6 +17,7 @@ from rag_design.embeddings import (
     HashEmbeddingProvider,
     SentenceTransformerKoreanProvider,
 )
+from rag_design.vector_cli import build_parser
 from rag_design.vector_store import (
     ChromaVectorStore,
     CollectionFingerprintMismatch,
@@ -88,6 +89,28 @@ class EmbeddingProviderTests(unittest.TestCase):
                 EmbeddingProviderError, "sentence-transformers is required"
             ):
                 provider.embed_query("복지 서비스")
+
+    def test_vector_region_filter_requires_canonical_names(self) -> None:
+        with self.assertRaisesRegex(ValueError, "region names"):
+            VectorSearchFilter(region_names=("1100000000",))
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            VectorSearchFilter(region_names=("서울특별시", "서울특별시"))
+
+    def test_vector_cli_accepts_canonical_region_names(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "search",
+                "--source",
+                "subsidy",
+                "--query-id",
+                "q-region",
+                "--query",
+                "지원",
+                "--region-name",
+                "서울특별시 강남구",
+            ]
+        )
+        self.assertEqual(args.region_name, ["서울특별시 강남구"])
 
 
 @unittest.skipUnless(CHROMA_AVAILABLE, "chromadb is not installed")
@@ -176,7 +199,8 @@ class ChromaVectorStoreTests(unittest.TestCase):
             self.subsidy_chunks[0],
             metadata={
                 **self.subsidy_chunks[0].metadata,
-                "region_codes": ["1100000000"],
+                "region_scope": "regional",
+                "region_names": ["서울특별시", "서울특별시 강남구"],
             },
         )
         store.sync_snapshot(
@@ -187,7 +211,7 @@ class ChromaVectorStoreTests(unittest.TestCase):
             regional.text,
             query_id="q-region-match",
             search_filter=VectorSearchFilter(
-                region_codes=("1100000000",),
+                region_names=("서울특별시 강남구",),
                 metadata_equals={"organization": "교육부"},
             ),
         )
@@ -195,7 +219,7 @@ class ChromaVectorStoreTests(unittest.TestCase):
             SourceType.SUBSIDY,
             regional.text,
             query_id="q-region-miss",
-            search_filter=VectorSearchFilter(region_codes=("2600000000",)),
+            search_filter=VectorSearchFilter(region_names=("부산광역시",)),
         )
         self.assertEqual(len(matching), 1)
         self.assertEqual(excluded, ())
@@ -266,6 +290,23 @@ class ChromaVectorStoreTests(unittest.TestCase):
             store.sync_snapshot(
                 SourceType.SUBSIDY, changed, snapshot_id="subsidy-002"
             )
+
+    def test_legacy_vector_store_version_is_rejected(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-001",
+        )
+        registry = store._get_registry(SourceType.SUBSIDY)
+        registry.modify(
+            metadata={
+                **registry.metadata,
+                "rag_storage_version": "chroma-vector-store-v2",
+            }
+        )
+        with self.assertRaises(CollectionFingerprintMismatch):
+            store.collection_fingerprint(SourceType.SUBSIDY)
 
     def test_invalid_chunk_hash_is_rejected_before_indexing(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)

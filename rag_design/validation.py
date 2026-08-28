@@ -20,6 +20,7 @@ from .contracts import (
     SourceType,
     compute_content_hash,
     compute_document_id,
+    validate_region_metadata,
 )
 from .url_safety import contains_secret_value, sanitize_official_url
 
@@ -52,7 +53,7 @@ _CARD_FIELDS = frozenset(
         "sensitive_data_reviewed",
     }
 )
-_SUBSIDY_METADATA = frozenset({"organization", "region_codes", "service_category"})
+_SUBSIDY_METADATA = frozenset({"organization", "region_scope", "service_category"})
 _LAW_METADATA = frozenset(
     {"law_name", "lsi_seq", "promulgation_date", "effective_date", "revision_status"}
 )
@@ -313,16 +314,26 @@ def _validate_document(
                     f"{path}.metadata.{key}",
                     "subsidy metadata value must be a non-empty string",
                 )
-        region_codes = document.metadata.get("region_codes", ())
-        if not isinstance(region_codes, (list, tuple)) or any(
-            not isinstance(code, str) or not code.strip() for code in region_codes
-        ):
+        if "region_names" not in document.metadata:
             _issue(
                 issues,
-                "invalid_region_codes",
-                f"{path}.metadata.region_codes",
-                "region_codes must contain non-empty strings",
+                "missing_source_metadata",
+                f"{path}.metadata.region_names",
+                "required source-specific metadata is missing",
             )
+        if "region_scope" in document.metadata and "region_names" in document.metadata:
+            try:
+                validate_region_metadata(
+                    document.metadata["region_scope"],
+                    document.metadata["region_names"],
+                )
+            except ValueError as exc:
+                _issue(
+                    issues,
+                    "invalid_region_metadata",
+                    f"{path}.metadata",
+                    str(exc),
+                )
         public_detail_url = document.metadata.get("public_detail_url")
         if public_detail_url:
             _validate_official_url(
@@ -735,13 +746,34 @@ def validate_chunk_batch(
                     "law chunks require lsi_seq",
                 )
         else:
-            for key in ("organization", "region_codes", "service_category"):
+            for key in ("organization", "service_category"):
                 if key not in chunk.metadata or not chunk.metadata[key]:
                     _issue(
                         issues,
                         "missing_chunk_metadata",
                         f"{path}.metadata.{key}",
                         "subsidy chunk metadata is missing",
+                    )
+            for key in ("region_scope", "region_names"):
+                if key not in chunk.metadata:
+                    _issue(
+                        issues,
+                        "missing_chunk_metadata",
+                        f"{path}.metadata.{key}",
+                        "subsidy chunk metadata is missing",
+                    )
+            if "region_scope" in chunk.metadata and "region_names" in chunk.metadata:
+                try:
+                    validate_region_metadata(
+                        chunk.metadata["region_scope"],
+                        chunk.metadata["region_names"],
+                    )
+                except ValueError as exc:
+                    _issue(
+                        issues,
+                        "invalid_region_metadata",
+                        f"{path}.metadata",
+                        str(exc),
                     )
 
         parent = parents.get(chunk.doc_id)
@@ -768,7 +800,13 @@ def validate_chunk_batch(
             "effective_from": parent.effective_from,
             "effective_to": parent.effective_to,
         }
-        for key in ("organization", "region_codes", "service_category", "lsi_seq"):
+        for key in (
+            "organization",
+            "region_scope",
+            "region_names",
+            "service_category",
+            "lsi_seq",
+        ):
             if key in parent.metadata:
                 parent_metadata[key] = parent.metadata[key]
         for key, expected in parent_metadata.items():

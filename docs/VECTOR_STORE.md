@@ -43,9 +43,19 @@ local model files, load failures, and dimension mismatches raise an explicit
   another executable index serialization.
 
 Search supports source isolation, snapshot and scalar metadata equality, a
-half-open effective-date filter, subsidy region matching (including `ALL`), and
-top-k conversion to ranked `RetrievedChunk` values. Date and region checks are
-reapplied to decoded chunks so missing or malformed law dates fail closed.
+half-open effective-date filter, exact subsidy `region_names` intersection, and
+top-k conversion to ranked `RetrievedChunk` values. A national
+`region_scope` with `["전국"]` is a wildcard. An unknown scope with `[]`
+fails closed only when a region filter is present. Date and region checks are
+reapplied to decoded chunks so missing or malformed metadata fails closed.
+
+The name-based region contract and subsidy region text prefix require
+`structure-v2` chunks and `chroma-vector-store-v3`. Existing code-based or
+v1 indexes must be rebuilt; schema version remains `1.0` because this is a
+pre-freeze correction made before a shared index was established. Callers must
+pass canonical names. Alias normalization and ambiguous bare names such as
+`중구` are deliberately left to an upstream resolver with an authoritative
+registry.
 
 ## CLI
 
@@ -57,7 +67,7 @@ python -m rag_design.vector_cli --embedding hash index `
 
 python -m rag_design.vector_cli --embedding hash search `
   --source subsidy --query-id q-001 --query "유아학비 지원" --top-k 5 `
-  --region 1100000000 --metadata organization='"교육부"'
+  --region-name "서울특별시" --metadata organization='"교육부"'
 ```
 
 Use `--embedding korean --model-name intfloat/multilingual-e5-base` for the real

@@ -101,7 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--query", required=True)
     search.add_argument("--top-k", type=int, default=5)
     search.add_argument("--as-of", type=date.fromisoformat)
-    search.add_argument("--region", action="append", default=[])
+    search.add_argument(
+        "--region-name",
+        action="append",
+        default=[],
+        help="canonical region name; repeat for exact-name OR matching",
+    )
     search.add_argument("--metadata", action="append", default=[])
     search.add_argument("--snapshot-id")
     search.add_argument("--expected-fingerprint")
@@ -141,7 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "search":
             search_filter = VectorSearchFilter(
                 as_of=args.as_of,
-                region_codes=tuple(args.region),
+                region_names=tuple(args.region_name),
                 metadata_equals=_metadata_filters(args.metadata),
                 snapshot_id=args.snapshot_id,
             )
