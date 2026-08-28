@@ -43,6 +43,11 @@ LF로 연결한 `render_legal_metadata_summary(metadata)` 결과와 정확히 �
 
 유일한 `기본정보/basic_info` 섹션도 이 content와 같아야 한다. 임의의 본문이나
 조문을 이 형식 또는 `basic_info`로 감싸 메타데이터 문서처럼 인수하지 않는다.
+공식 원문·상세 URL은 임베딩 대상인 `Document.content`에서 의도적으로 제외한다.
+URL은 `Document.source_url`에 별도 저장하고 `Chunk.metadata.source_url`로
+전파해 `Citation.source_url`로 반환한다. 이 URL은 공식 원문 확인 경로일 뿐,
+해당 조문 본문이 수집·임베딩·색인됐다는 뜻은 아니다.
+
 계약의 `issued_date`, `effective_date`, `effective_from`은 `YYYY-MM-DD`이고,
 법령 직접 URL의 `efYd`만 검증된 시행일에서 하이픈을 제거한 `YYYYMMDD`다.
 `source_id`는 안정적인 숫자 entity ID이며, 숫자 문자열 `source_sequence`는
@@ -54,9 +59,7 @@ metadata-only 법령 chunk에 대해 `legal_metadata`만 지원한다.
 `legal_article_body` 또는 `legal_interpretation`이 필요한 주장은 이 근거로
 충족할 수 없으며, `decide_abstention`은 `NO_EVIDENCE`로 반드시 보류한다.
 
-법령 인용은 인증정보가 없는 유형별 공식 상세 URL을 사용하되, 해당 인용이
-목록 메타데이터만 뒷받침한다는 한계를 유지한다. 본문 미포함은 합의된
-정책이므로 `parse_warnings`에 오류처럼 기록하지 않는다.
+본문 미포함은 합의된 정책이므로 `parse_warnings`에 오류처럼 기록하지 않는다.
 
 ## 기준 흐름
 
