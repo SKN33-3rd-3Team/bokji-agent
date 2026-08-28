@@ -1,0 +1,2 @@
+-r requirements-vector.txt
+sentence-transformers>=3,<6

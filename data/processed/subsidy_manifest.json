@@ -1,0 +1,34 @@
+{
+  "manifest": {
+    "schema_version": "1.0",
+    "source_type": "subsidy",
+    "document_count": 10958,
+    "collected_at": "2026-08-27T18:30:53.774689+09:00",
+    "source_dataset_url": "https://www.data.go.kr/data/15113968/openapi.do",
+    "license": "공공데이터포털 이용조건 확인",
+    "excluded_count": 0,
+    "parse_error_count": 0
+  },
+  "document_card": {
+    "source_type": "subsidy",
+    "source_name": "대한민국 공공서비스(혜택) 정보",
+    "source_dataset_url": "https://www.data.go.kr/data/15113968/openapi.do",
+    "license": "공공데이터포털 이용조건 확인",
+    "document_count": 10958,
+    "collection_scope": "보조금24 공개 서비스 전체 목록(serviceList/serviceDetail/supportConditions 병합)",
+    "cleaning_method": "공백/개행 정규화, 빈 섹션 제거",
+    "chunking_method": "서비스 섹션(지원대상/선정기준/지원내용/신청방법/신청기한/근거법령) 경계 우선",
+    "exclusion_criteria": [
+      "서비스ID 없음",
+      "공식 도메인(gov.kr 등) URL 아님",
+      "본문 없음"
+    ],
+    "update_policy": "source_updated_at 기준 버전 보존",
+    "region_extraction": "소관기관명 텍스트에서 시도/시군구를 정규식으로 추출(region_utils.py). 시도 코드는 고정 매핑, 시군구 코드는 SIGUNGU_CODE_CSV 환경변수로 지정한 공식 법정동코드 CSV가 있을 때만 채운다. 매칭 안 되면 '전국'",
+    "missing_vs_failed": "상세조회/지원조건조회 API 호출이 실패한 서비스ID는 실패 목록(gov24_*_failed_ids.json)으로 별도 기록하고, 해당 문서의 metadata.field_status와 parse_warnings에 '조회 실패로 누락'임을 명시해 원천 결측(missing_source)과 구분한다",
+    "duplicate_policy": "서로 다른 서비스ID의 동일 본문 95건을 metadata.duplicate_content_of_source_ids로 표시했고, 삭제하지 않고 그대로 보존한다",
+    "parse_warnings_log": "C:\\SKN_AI\\bokji-agent\\data\\processed\\subsidy_parse_warnings.json",
+    "rights_reviewed": true,
+    "sensitive_data_reviewed": true
+  }
+}

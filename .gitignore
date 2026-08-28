@@ -32,3 +32,16 @@ Desktop.ini
 .env.*
 !.env.example
 .streamlit/secrets.toml
+
+
+# 수집 원본/런타임 산출물 (재생성 가능 — 매니페스트/샘플만 추적)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/subsidy_manifest.json
+*_log.txt
+
+# Persistent vector indexes
+.runtime/vector_db/
+.runtime/vector_db-smoke/
+

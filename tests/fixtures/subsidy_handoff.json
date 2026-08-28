@@ -1,0 +1,26 @@
+{
+  "manifest": {
+    "schema_version": "1.0",
+    "source_type": "subsidy",
+    "document_count": 1,
+    "collected_at": "2026-08-26T17:00:00+09:00",
+    "source_dataset_url": "https://www.data.go.kr/data/15113968/openapi.do",
+    "license": "공공데이터포털 이용조건 확인",
+    "excluded_count": 0,
+    "parse_error_count": 0
+  },
+  "document_card": {
+    "source_type": "subsidy",
+    "source_name": "대한민국 공공서비스(혜택) 정보",
+    "source_dataset_url": "https://www.data.go.kr/data/15113968/openapi.do",
+    "license": "공공데이터포털 이용조건 확인",
+    "document_count": 1,
+    "collection_scope": "공개 서비스 대표 샘플",
+    "cleaning_method": "공백 정규화와 반복 안내 제거",
+    "chunking_method": "서비스 섹션 경계 우선",
+    "exclusion_criteria": ["본문 없음", "민감정보 미검토"],
+    "update_policy": "source_updated_at 기준 버전 보존",
+    "rights_reviewed": true,
+    "sensitive_data_reviewed": true
+  }
+}
