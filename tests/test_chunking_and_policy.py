@@ -14,7 +14,14 @@ from rag_design.index_policy import (
     route_indexes,
     validate_cross_index_merge,
 )
-from rag_design.policy import EvidenceState, decide_abstention
+from rag_design.policy import (
+    LEGAL_ARTICLE_BODY_ASPECT,
+    LEGAL_INTERPRETATION_ASPECT,
+    LEGAL_METADATA_ASPECT,
+    EvidenceState,
+    decide_abstention,
+    supported_legal_evidence_aspects,
+)
 from rag_design.validation import validate_chunk_batch
 
 from tests.test_contracts_and_citations import load_documents
@@ -22,7 +29,10 @@ from tests.test_contracts_and_citations import load_documents
 
 class ChunkingAndPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.subsidy, self.law = load_documents()
+        documents = load_documents()
+        self.subsidy = documents[0]
+        self.law, self.admrul, self.ordin = documents[1:]
+        self.legal_documents = (self.law, self.admrul, self.ordin)
 
     def test_subsidy_sections_remain_separate(self) -> None:
         chunks = chunk_document(self.subsidy)
@@ -85,7 +95,7 @@ class ChunkingAndPolicyTests(unittest.TestCase):
             "missing_chunk_metadata", {issue.code for issue in missing_issues}
         )
 
-        changed_text = "부모 법령 조문과 무관한 색인 본문입니다."
+        changed_text = "부모 법령 기본정보와 무관한 색인 내용입니다."
         manipulated = replace(
             chunk,
             text=changed_text,
@@ -97,19 +107,32 @@ class ChunkingAndPolicyTests(unittest.TestCase):
             {issue.code for issue in manipulated_issues},
         )
 
-    def test_law_locator_retains_branch_article_paragraph_item_and_subitem(self) -> None:
-        section = Section(
-            heading_path=("제10조의2(가지번호)", "제2항", "제3호", "나목"),
-            content="구조 보존 검사용 공개 테스트 문장입니다.",
-            metadata={"section_type": "subitem"},
+    def test_legal_metadata_chunk_propagates_contract_fields(self) -> None:
+        required_fields = (
+            "content_level",
+            "law_type",
+            "law_name",
+            "source_sequence",
+            "organization",
+            "document_kind",
+            "issued_date",
+            "effective_date",
+            "revision_type",
         )
-        document = replace(self.law, sections=(section,))
-        chunk = chunk_document(document)[0]
-        self.assertEqual(
-            chunk.citation_locator,
-            "제10조의2(가지번호) > 제2항 > 제3호 > 나목",
-        )
-        self.assertIn(chunk.citation_locator, chunk.text)
+        for document in self.legal_documents:
+            with self.subTest(law_type=document.metadata["law_type"]):
+                chunks = chunk_document(document)
+                self.assertEqual(len(chunks), 1)
+                chunk = chunks[0]
+                self.assertEqual(chunk.heading_path, ("기본정보",))
+                self.assertEqual(chunk.citation_locator, "기본정보")
+                self.assertEqual(chunk.metadata["section_type"], "basic_info")
+                for field_name in required_fields:
+                    self.assertEqual(
+                        chunk.metadata[field_name], document.metadata[field_name]
+                    )
+                self.assertIn(document.title, chunk.text)
+                self.assertEqual(validate_chunk_batch(chunks, (document,)), ())
 
     def test_long_section_splits_with_maximum_length(self) -> None:
         section = Section(
@@ -312,6 +335,57 @@ class ChunkingAndPolicyTests(unittest.TestCase):
         )
         self.assertEqual(decision.reason.value, "no_evidence")
         self.assertEqual(decision.missing_aspects, ("신청",))
+
+    def test_metadata_only_legal_evidence_forces_unsupported_scope_abstention(
+        self,
+    ) -> None:
+        chunks = chunk_document(self.law)
+        evidence_ids = tuple(chunk.chunk_id for chunk in chunks)
+        supported = supported_legal_evidence_aspects(chunks)
+
+        self.assertEqual(supported, frozenset({LEGAL_METADATA_ASPECT}))
+        metadata_decision = decide_abstention(
+            EvidenceState(
+                evidence_ids,
+                required_aspects=frozenset({LEGAL_METADATA_ASPECT}),
+                supported_aspects=supported,
+            )
+        )
+        self.assertFalse(metadata_decision.abstain)
+
+        for required in (
+            LEGAL_ARTICLE_BODY_ASPECT,
+            LEGAL_INTERPRETATION_ASPECT,
+        ):
+            with self.subTest(required=required):
+                decision = decide_abstention(
+                    EvidenceState(
+                        evidence_ids,
+                        required_aspects=frozenset({required}),
+                        supported_aspects=supported,
+                    )
+                )
+                self.assertTrue(decision.abstain)
+                self.assertEqual(decision.reason.value, "no_evidence")
+                self.assertEqual(decision.missing_aspects, (required,))
+
+        self.assertEqual(
+            supported_legal_evidence_aspects(chunk_document(self.subsidy)),
+            frozenset(),
+        )
+        disguised_text = (
+            f"{self.law.title}\n기본정보\n"
+            "제1조(목적) 이 조문 본문은 지원 가능한 근거가 아니다."
+        )
+        disguised = replace(
+            chunks[0],
+            text=disguised_text,
+            content_hash=compute_content_hash(disguised_text),
+        )
+        self.assertEqual(
+            supported_legal_evidence_aspects((disguised,)),
+            frozenset(),
+        )
 
 
 if __name__ == "__main__":

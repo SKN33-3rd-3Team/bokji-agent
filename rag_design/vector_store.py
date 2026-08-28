@@ -11,19 +11,30 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-from .chunking import chunking_config_from_version
-from .citation import sanitize_public_url
+from .chunking import (
+    chunking_config_from_version,
+    render_legal_metadata_chunk_texts,
+)
+from .citation import legal_citation_url, sanitize_public_url
 from .contracts import (
+    LEGAL_CONTENT_LEVEL,
+    LEGAL_METADATA_CONTRACT_VERSION,
+    LEGAL_METADATA_FIELDS,
+    LEGAL_SECTION_HEADING,
+    LEGAL_SECTION_TYPE,
     Chunk,
+    LegalDocumentType,
     RetrievedChunk,
     SCHEMA_VERSION,
     SourceType,
     compute_content_hash,
+    is_canonical_date,
     validate_region_metadata,
     validate_region_name,
 )
 from .embeddings import EmbeddingProvider
 from .index_policy import MetadataFilter, chunk_matches_filter, subsidy_regions_match
+from .url_safety import contains_credential_material
 
 
 VECTOR_STORE_VERSION = "chroma-vector-store-v3"
@@ -193,7 +204,7 @@ class ChromaVectorStore:
         )
 
     def _base_payload(self, source_type: SourceType) -> dict[str, Any]:
-        return {
+        payload = {
             "storage_version": VECTOR_STORE_VERSION,
             "contract_schema_version": SCHEMA_VERSION,
             "layout": "source-separated-atomic-generations-v1",
@@ -202,6 +213,9 @@ class ChromaVectorStore:
             "embedding_provider": self.embedding_provider.provider_id,
             "embedding_dimension": self.embedding_provider.dimension,
         }
+        if source_type is SourceType.LAW:
+            payload["legal_contract_version"] = LEGAL_METADATA_CONTRACT_VERSION
+        return payload
 
     def _base_fingerprint(self, source_type: SourceType) -> str:
         return _canonical_fingerprint(self._base_payload(source_type))
@@ -216,7 +230,7 @@ class ChromaVectorStore:
     def _collection_metadata(
         self, source_type: SourceType, chunking_version: str
     ) -> dict[str, str | int]:
-        return {
+        metadata: dict[str, str | int] = {
             "hnsw:space": self.config.distance_space,
             "rag_storage_version": VECTOR_STORE_VERSION,
             "rag_schema_version": SCHEMA_VERSION,
@@ -229,9 +243,14 @@ class ChromaVectorStore:
                 source_type, chunking_version
             ),
         }
+        if source_type is SourceType.LAW:
+            metadata["rag_legal_contract_version"] = (
+                LEGAL_METADATA_CONTRACT_VERSION
+            )
+        return metadata
 
     def _registry_metadata(self, source_type: SourceType) -> dict[str, str | int]:
-        return {
+        metadata: dict[str, str | int] = {
             "rag_registry_version": _REGISTRY_VERSION,
             "rag_storage_version": VECTOR_STORE_VERSION,
             "rag_schema_version": SCHEMA_VERSION,
@@ -240,6 +259,11 @@ class ChromaVectorStore:
             "rag_embedding_dimension": self.embedding_provider.dimension,
             "rag_config_fingerprint": self._base_fingerprint(source_type),
         }
+        if source_type is SourceType.LAW:
+            metadata["rag_legal_contract_version"] = (
+                LEGAL_METADATA_CONTRACT_VERSION
+            )
+        return metadata
 
     def _validate_registry(self, registry: Any, source_type: SourceType) -> None:
         metadata = registry.metadata or {}
@@ -419,6 +443,10 @@ class ChromaVectorStore:
         parts: dict[tuple[str, tuple[str, ...]], list[tuple[int, int]]] = {}
         for index, chunk in enumerate(chunks):
             path = f"chunks[{index}]"
+            if contains_credential_material(chunk.to_dict(), secrets):
+                raise ValueError(
+                    f"{path} contains a configured secret or authentication query name"
+                )
             if chunk.content_hash != compute_content_hash(chunk.text):
                 raise ValueError(f"{path}.content_hash does not match chunk text")
             missing = sorted(_REQUIRED_CHUNK_METADATA - chunk.metadata.keys())
@@ -500,35 +528,125 @@ class ChromaVectorStore:
                     )
 
             if chunk.source_type is SourceType.LAW:
+                for key in LEGAL_METADATA_FIELDS:
+                    if key not in chunk.metadata:
+                        raise ValueError(
+                            f"{path}.metadata.{key} is required for legal chunks"
+                        )
                 effective_from = chunk.metadata.get("effective_from")
-                lsi_seq = chunk.metadata.get("lsi_seq")
-                if not isinstance(effective_from, str) or not effective_from.strip():
+                if not is_canonical_date(effective_from):
                     raise ValueError(
-                        f"{path}.metadata.effective_from is required for law chunks"
+                        f"{path}.metadata.effective_from must use canonical YYYY-MM-DD form"
+                    )
+                source_updated_at = chunk.metadata.get("source_updated_at")
+                if source_updated_at is not None and not is_canonical_date(
+                    source_updated_at
+                ):
+                    raise ValueError(
+                        f"{path}.metadata.source_updated_at must use canonical YYYY-MM-DD form"
+                    )
+                effective_to = chunk.metadata.get("effective_to")
+                if effective_to is not None:
+                    if not is_canonical_date(effective_to):
+                        raise ValueError(
+                            f"{path}.metadata.effective_to must use canonical YYYY-MM-DD form"
+                        )
+                    if date.fromisoformat(effective_to) <= date.fromisoformat(
+                        effective_from
+                    ):
+                        raise ValueError(
+                            f"{path}.metadata.effective_to must be later than effective_from"
+                        )
+                if chunk.metadata.get("content_level") != LEGAL_CONTENT_LEVEL:
+                    raise ValueError(
+                        f"{path}.metadata.content_level must be metadata_only"
                     )
                 try:
-                    parsed_effective_from = date.fromisoformat(effective_from[:10])
-                except ValueError as exc:
+                    legal_type = LegalDocumentType(chunk.metadata.get("law_type"))
+                except (TypeError, ValueError) as exc:
                     raise ValueError(
-                        f"{path}.metadata.effective_from is not an ISO date"
+                        f"{path}.metadata.law_type is unsupported"
                     ) from exc
-                if not isinstance(lsi_seq, str) or not lsi_seq.strip():
+                for key in (
+                    "document_kind",
+                    "law_name",
+                    "organization",
+                    "revision_type",
+                    "source_sequence",
+                ):
+                    value = chunk.metadata.get(key)
+                    if not isinstance(value, str) or not value.strip():
+                        raise ValueError(
+                            f"{path}.metadata.{key} must be a non-empty string"
+                        )
+                source_id = chunk.metadata.get("source_id")
+                source_sequence = chunk.metadata.get("source_sequence")
+                if (
+                    not isinstance(source_id, str)
+                    or not source_id.isascii()
+                    or not source_id.isdigit()
+                ):
                     raise ValueError(
-                        f"{path}.metadata.lsi_seq is required for law chunks"
+                        f"{path}.metadata.source_id must contain decimal digits"
                     )
-                if lsi_seq != chunk.metadata.get("source_id"):
+                if (
+                    not isinstance(source_sequence, str)
+                    or not source_sequence.isascii()
+                    or not source_sequence.isdigit()
+                ):
                     raise ValueError(
-                        f"{path}.metadata.lsi_seq differs from source_id"
+                        f"{path}.metadata.source_sequence must contain decimal digits"
                     )
-                expected_source_url = (
-                    "https://www.law.go.kr/lsInfoP.do?"
-                    f"lsiSeq={lsi_seq}&"
-                    f"efYd={parsed_effective_from.strftime('%Y%m%d')}"
+                for key in ("issued_date", "effective_date"):
+                    value = chunk.metadata.get(key)
+                    if not is_canonical_date(value):
+                        raise ValueError(
+                            f"{path}.metadata.{key} must use canonical YYYY-MM-DD form"
+                        )
+                if chunk.metadata.get("effective_date") != effective_from:
+                    raise ValueError(
+                        f"{path}.metadata.effective_date differs from effective_from"
+                    )
+                if (
+                    chunk.heading_path != LEGAL_SECTION_HEADING
+                    or chunk.metadata.get("section_type") != LEGAL_SECTION_TYPE
+                    or chunk.citation_locator != LEGAL_SECTION_HEADING[0]
+                ):
+                    raise ValueError(
+                        f"{path} is not a metadata-only basic-info legal chunk"
+                    )
+                expected_doc_id = (
+                    f"law:{legal_type.value}:{source_id}:{source_sequence}:"
+                    f"{effective_from}"
+                )
+                if chunk.doc_id != expected_doc_id:
+                    raise ValueError(
+                        f"{path}.doc_id is not a deterministic legal revision ID"
+                    )
+                expected_source_url = legal_citation_url(
+                    law_type=legal_type,
+                    source_sequence=source_sequence,
+                    effective_from=effective_from,
+                    secret_values=secrets,
                 )
                 if source_url != expected_source_url:
                     raise ValueError(
-                        f"{path}.metadata.source_url differs from its law ID "
-                        "and effective date"
+                        f"{path}.metadata.source_url differs from its legal subtype "
+                        "and source sequence"
+                    )
+                config = chunking_config_from_version(
+                    str(chunk.metadata["chunking_version"])
+                )
+                expected_texts = render_legal_metadata_chunk_texts(
+                    chunk.metadata, config
+                )
+                if (
+                    part >= len(expected_texts)
+                    or part_count != len(expected_texts)
+                    or chunk.text != expected_texts[part]
+                ):
+                    raise ValueError(
+                        f"{path}.text is not the canonical legal metadata summary"
                     )
             else:
                 for key in ("organization", "service_category"):

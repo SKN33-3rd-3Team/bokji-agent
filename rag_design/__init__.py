@@ -1,9 +1,16 @@
 """Model-independent contracts and policies for the first RAG design phase."""
 
-from .chunking import ChunkingConfig, chunk_document
+from .chunking import (
+    ChunkingConfig,
+    chunk_document,
+    render_legal_metadata_chunk_texts,
+)
 from .citation import build_citation, citation_url_for_document, sanitize_public_url
 from .contracts import (
     CANONICAL_SIDO_NAMES,
+    LEGAL_CONTENT_LEVEL,
+    LEGAL_METADATA_CONTRACT_VERSION,
+    LEGAL_METADATA_FIELDS,
     NATIONAL_REGION_NAME,
     SCHEMA_VERSION,
     AbstentionReason,
@@ -14,6 +21,7 @@ from .contracts import (
     Document,
     EvidenceCheckResult,
     EvidenceStatus,
+    LegalDocumentType,
     RetrievedChunk,
     RegionScope,
     Section,
@@ -21,6 +29,7 @@ from .contracts import (
     SourceType,
     compute_content_hash,
     compute_document_id,
+    render_legal_metadata_summary,
     validate_region_metadata,
     validate_region_name,
 )
@@ -30,7 +39,15 @@ from .embeddings import (
     HashEmbeddingProvider,
     SentenceTransformerKoreanProvider,
 )
-from .policy import AbstentionDecision, EvidenceState, decide_abstention
+from .policy import (
+    LEGAL_ARTICLE_BODY_ASPECT,
+    LEGAL_INTERPRETATION_ASPECT,
+    LEGAL_METADATA_ASPECT,
+    AbstentionDecision,
+    EvidenceState,
+    decide_abstention,
+    supported_legal_evidence_aspects,
+)
 from .validation import (
     HandoffReport,
     validate_answer_evidence,
@@ -53,6 +70,12 @@ from .vector_store import (
 
 __all__ = [
     "CANONICAL_SIDO_NAMES",
+    "LEGAL_ARTICLE_BODY_ASPECT",
+    "LEGAL_CONTENT_LEVEL",
+    "LEGAL_INTERPRETATION_ASPECT",
+    "LEGAL_METADATA_ASPECT",
+    "LEGAL_METADATA_CONTRACT_VERSION",
+    "LEGAL_METADATA_FIELDS",
     "NATIONAL_REGION_NAME",
     "SCHEMA_VERSION",
     "AbstentionDecision",
@@ -70,6 +93,7 @@ __all__ = [
     "EvidenceStatus",
     "HandoffReport",
     "HashEmbeddingProvider",
+    "LegalDocumentType",
     "RetrievedChunk",
     "RegionScope",
     "Section",
@@ -92,7 +116,10 @@ __all__ = [
     "compute_content_hash",
     "compute_document_id",
     "decide_abstention",
+    "render_legal_metadata_chunk_texts",
+    "render_legal_metadata_summary",
     "sanitize_public_url",
+    "supported_legal_evidence_aspects",
     "validate_answer_evidence",
     "validate_collection_handoff",
     "validate_chunk_batch",

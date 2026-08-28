@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from rag_design.chunking import chunk_document
-from rag_design.contracts import Document, SourceType
+from rag_design.contracts import Document, SourceType, compute_content_hash
 from rag_design.embeddings import (
     EmbeddingProviderError,
     HashEmbeddingProvider,
@@ -38,7 +38,7 @@ else:
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def load_documents() -> tuple[Document, Document]:
+def load_documents() -> tuple[Document, ...]:
     documents = tuple(
         Document.from_dict(json.loads(line))
         for line in (FIXTURES / "documents.jsonl")
@@ -46,9 +46,11 @@ def load_documents() -> tuple[Document, Document]:
         .splitlines()
         if line.strip()
     )
-    if len(documents) != 2:
-        raise AssertionError("vector-store fixture must contain two documents")
-    return documents[0], documents[1]
+    if len(documents) != 4:
+        raise AssertionError(
+            "vector-store fixture must contain one subsidy and three legal documents"
+        )
+    return documents
 
 
 class CountingHashEmbeddingProvider(HashEmbeddingProvider):
@@ -125,9 +127,16 @@ class ChromaVectorStoreTests(unittest.TestCase):
             collection_prefix="test_rag",
             batch_size=2,
         )
-        self.subsidy, self.law = load_documents()
+        documents = load_documents()
+        self.subsidy = documents[0]
+        self.law, self.admrul, self.ordin = documents[1:]
+        self.legal_documents = (self.law, self.admrul, self.ordin)
         self.subsidy_chunks = chunk_document(self.subsidy)
-        self.law_chunks = chunk_document(self.law)
+        self.law_chunks = tuple(
+            chunk
+            for document in self.legal_documents
+            for chunk in chunk_document(document)
+        )
 
     def tearDown(self) -> None:
         gc.collect()
@@ -242,6 +251,134 @@ class ChromaVectorStoreTests(unittest.TestCase):
         self.assertEqual(before, ())
         self.assertEqual(len(effective), 1)
 
+    def test_legal_subtypes_keep_metadata_only_index_contract(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        synced = store.sync_snapshot(
+            SourceType.LAW,
+            self.law_chunks,
+            snapshot_id="legal-metadata-001",
+        )
+        self.assertEqual(synced.total_count, 3)
+        registry = store._get_registry(SourceType.LAW)
+        self.assertEqual(
+            registry.metadata["rag_legal_contract_version"], "legal-metadata-v1"
+        )
+
+        for document in self.legal_documents:
+            law_type = document.metadata["law_type"]
+            with self.subTest(law_type=law_type):
+                results = store.search(
+                    SourceType.LAW,
+                    document.content,
+                    query_id=f"q-{law_type}",
+                    top_k=3,
+                    search_filter=VectorSearchFilter(
+                        metadata_equals={"law_type": law_type}
+                    ),
+                )
+                self.assertEqual(len(results), 1)
+                chunk = results[0].chunk
+                self.assertEqual(chunk.metadata["content_level"], "metadata_only")
+                self.assertEqual(
+                    chunk.metadata["source_sequence"],
+                    document.metadata["source_sequence"],
+                )
+                self.assertEqual(chunk.citation_locator, "기본정보")
+
+    def test_vector_rejects_noncanonical_legal_metadata_content(self) -> None:
+        provider = CountingHashEmbeddingProvider()
+        store = ChromaVectorStore(provider, self.config)
+        chunk = self.law_chunks[0]
+        disguised_body = (
+            f"{self.law.title}\n기본정보\n"
+            "제1조(목적) 이 법은 국민의 최저생활을 보장한다."
+        )
+        cases = (
+            replace(
+                chunk,
+                text=disguised_body,
+                content_hash=compute_content_hash(disguised_body),
+            ),
+            replace(
+                chunk,
+                metadata={**chunk.metadata, "law_name": "전혀 다른 법령명"},
+            ),
+        )
+
+        for index, invalid_chunk in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    store.sync_snapshot(
+                        SourceType.LAW,
+                        (invalid_chunk,),
+                        snapshot_id=f"invalid-legal-content-{index}",
+                    )
+        self.assertEqual(provider.document_calls, 0)
+
+    def test_vector_rejects_recursive_secret_and_auth_query_material(self) -> None:
+        provider = CountingHashEmbeddingProvider()
+        store = ChromaVectorStore(provider, self.config)
+        secret = "KNOWN_VECTOR_SECRET"
+        cases = (
+            (
+                replace(
+                    self.law_chunks[0],
+                    metadata={
+                        **self.law_chunks[0].metadata,
+                        "collector_context": {
+                            "request_urls": [
+                                "https://open.law.go.kr/DRF/lawService.do?"
+                                "OC=UNSUPPLIED_CREDENTIAL&target=law"
+                            ]
+                        },
+                    },
+                ),
+                (),
+            ),
+            (
+                replace(
+                    self.law_chunks[0],
+                    metadata={
+                        **self.law_chunks[0].metadata,
+                        "collector_context": {"debug_token": [secret]},
+                    },
+                ),
+                (secret,),
+            ),
+        )
+
+        for index, (invalid_chunk, secrets) in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    store.sync_snapshot(
+                        SourceType.LAW,
+                        (invalid_chunk,),
+                        snapshot_id=f"credential-material-{index}",
+                        secret_values=secrets,
+                    )
+        self.assertEqual(provider.document_calls, 0)
+
+    def test_vector_rejects_noncanonical_or_invalid_legal_dates(self) -> None:
+        provider = CountingHashEmbeddingProvider()
+        store = ChromaVectorStore(provider, self.config)
+        chunk = self.law_chunks[0]
+        cases = (
+            {**chunk.metadata, "issued_date": "20250318"},
+            {**chunk.metadata, "effective_to": "not-a-date"},
+            {**chunk.metadata, "effective_to": "2025-09-30"},
+            {**chunk.metadata, "effective_to": chunk.metadata["effective_from"]},
+        )
+
+        for index, metadata in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    store.sync_snapshot(
+                        SourceType.LAW,
+                        (replace(chunk, metadata=metadata),),
+                        snapshot_id=f"invalid-legal-date-{index}",
+                    )
+        self.assertEqual(provider.document_calls, 0)
+
     def test_source_isolation_and_collection_fingerprint_validation(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
         with self.assertRaisesRegex(ValueError, "target source_type"):
@@ -308,6 +445,23 @@ class ChromaVectorStoreTests(unittest.TestCase):
         with self.assertRaises(CollectionFingerprintMismatch):
             store.collection_fingerprint(SourceType.SUBSIDY)
 
+    def test_legacy_law_contract_profile_is_rejected(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        store.sync_snapshot(
+            SourceType.LAW,
+            self.law_chunks,
+            snapshot_id="legal-metadata-001",
+        )
+        registry = store._get_registry(SourceType.LAW)
+        registry.modify(
+            metadata={
+                **registry.metadata,
+                "rag_legal_contract_version": "full-text-v0",
+            }
+        )
+        with self.assertRaises(CollectionFingerprintMismatch):
+            store.collection_fingerprint(SourceType.LAW)
+
     def test_invalid_chunk_hash_is_rejected_before_indexing(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
         tampered = replace(self.subsidy_chunks[0], content_hash="0" * 64)
@@ -343,7 +497,7 @@ class ChromaVectorStoreTests(unittest.TestCase):
                 ),
             },
         )
-        with self.assertRaisesRegex(ValueError, "safe public URL"):
+        with self.assertRaisesRegex(ValueError, "secret|authentication"):
             store.sync_snapshot(
                 SourceType.SUBSIDY,
                 (authenticated,),
@@ -353,19 +507,30 @@ class ChromaVectorStoreTests(unittest.TestCase):
         with self.assertRaises(CollectionNotFoundError):
             store.collection_fingerprint(SourceType.SUBSIDY)
 
-    def test_law_source_url_must_match_id_and_effective_date(self) -> None:
+    def test_legal_source_url_must_match_subtype_sequence_and_date(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
-        invalid_urls = (
-            "https://www.law.go.kr/lsInfoP.do?lsiSeq=999&efYd=20251001",
-            "https://www.law.go.kr/lsInfoP.do?lsiSeq=276653&efYd=19000101",
+        cases = (
+            (
+                self.law_chunks[0],
+                "https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=999&efYd=20251001",
+            ),
+            (
+                self.law_chunks[0],
+                "https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=276653&efYd=19000101",
+            ),
+            (self.law_chunks[1], "https://www.law.go.kr/"),
+            (
+                self.law_chunks[2],
+                "https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=999",
+            ),
         )
-        for source_url in invalid_urls:
+        for chunk, source_url in cases:
             with self.subTest(source_url=source_url):
                 mismatched = replace(
-                    self.law_chunks[0],
-                    metadata={**self.law_chunks[0].metadata, "source_url": source_url},
+                    chunk,
+                    metadata={**chunk.metadata, "source_url": source_url},
                 )
-                with self.assertRaisesRegex(ValueError, "law ID"):
+                with self.assertRaisesRegex(ValueError, "legal subtype"):
                     store.sync_snapshot(
                         SourceType.LAW,
                         (mismatched,),

@@ -1,17 +1,22 @@
-"""Deterministic, structure-first chunking for welfare services and statutes."""
+"""Deterministic, structure-first chunking for welfare and legal metadata."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
 import re
+from typing import Mapping
 
 from .contracts import (
+    LEGAL_METADATA_FIELDS,
+    LEGAL_SECTION_HEADING,
+    LEGAL_SECTION_TYPE,
     Chunk,
     Document,
     SCHEMA_VERSION,
     SourceType,
     compute_content_hash,
+    render_legal_metadata_summary,
     validate_region_metadata,
 )
 
@@ -80,6 +85,24 @@ def chunking_config_from_version(value: str) -> ChunkingConfig:
         raise ValueError("invalid chunking_version parameters") from exc
 
 
+def render_legal_metadata_chunk_texts(
+    metadata: Mapping[str, object], config: ChunkingConfig = ChunkingConfig()
+) -> tuple[str, ...]:
+    """Render every deterministic chunk text for one canonical legal summary."""
+
+    summary = render_legal_metadata_summary(metadata)
+    prefix = f"{metadata['law_name']}\n{LEGAL_SECTION_HEADING[0]}"
+    body_limit = config.max_chars - len(prefix) - 2
+    if body_limit < 50:
+        raise ValueError("max_chars is too small for the legal metadata context prefix")
+    parts = _split_with_overlap(
+        summary,
+        body_limit,
+        min(config.overlap_chars, body_limit - 1),
+    )
+    return tuple(f"{prefix}\n\n{part}" for part in parts)
+
+
 def compute_chunk_id(
     document: Document,
     heading_path: tuple[str, ...],
@@ -96,10 +119,9 @@ def compute_chunk_id(
 
 
 def _prefix(document: Document, heading_path: tuple[str, ...]) -> str:
-    # A law chunk must remain meaningful when retrieved without its parent document.
+    # A legal-metadata chunk must remain meaningful without its parent document.
     if document.source_type is SourceType.LAW:
-        law_name = str(document.metadata.get("law_name", document.title))
-        return f"{law_name}\n{' > '.join(heading_path)}"
+        return f"{document.title}\n{' > '.join(heading_path)}"
     region_names = document.metadata["region_names"]
     region_context = ", ".join(region_names) if region_names else "미확정"
     return f"{document.title}\n지역: {region_context}\n{' > '.join(heading_path)}"
@@ -110,8 +132,9 @@ def chunk_document(
 ) -> tuple[Chunk, ...]:
     """Split only inside a section unless that section exceeds ``max_chars``.
 
-    Law heading paths are copied verbatim, including 가지번호 and 조/항/호/목.
-    Python's randomized ``hash()`` is intentionally not used for stable IDs.
+    Legal sources contain one normalized basic-information section; subsidy
+    section boundaries remain unchanged. Python's randomized ``hash()`` is
+    intentionally not used for stable IDs.
     """
 
     if not document.sections:
@@ -121,6 +144,20 @@ def chunk_document(
             document.metadata.get("region_scope"),
             document.metadata.get("region_names"),
         )
+    else:
+        expected_summary = render_legal_metadata_summary(document.metadata)
+        if document.title != document.metadata.get("law_name"):
+            raise ValueError("legal document title must match law_name")
+        if document.content != expected_summary:
+            raise ValueError("legal document content must be the canonical metadata summary")
+        if (
+            len(document.sections) != 1
+            or document.sections[0].heading_path != LEGAL_SECTION_HEADING
+            or document.sections[0].metadata.get("section_type")
+            != LEGAL_SECTION_TYPE
+            or document.sections[0].content != expected_summary
+        ):
+            raise ValueError("legal documents require one canonical 기본정보 section")
 
     chunks: list[Chunk] = []
     seen_ids: set[str] = set()
@@ -154,13 +191,17 @@ def chunk_document(
                 "chunk_part_count": len(body_parts),
                 "chunking_version": config_version,
             }
-            for key in (
-                "organization",
-                "region_scope",
-                "region_names",
-                "service_category",
-                "lsi_seq",
-            ):
+            source_metadata_fields = (
+                LEGAL_METADATA_FIELDS
+                if document.source_type is SourceType.LAW
+                else (
+                    "organization",
+                    "region_scope",
+                    "region_names",
+                    "service_category",
+                )
+            )
+            for key in source_metadata_fields:
                 if key in document.metadata:
                     metadata[key] = document.metadata[key]
             chunks.append(

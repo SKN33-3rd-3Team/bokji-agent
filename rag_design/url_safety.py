@@ -6,7 +6,7 @@ before a URL can cross the RAG/UI contract boundary.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 
@@ -24,7 +24,14 @@ SECRET_QUERY_NAMES = frozenset(
         "token",
     }
 )
-SAFE_PUBLIC_QUERY_NAMES = frozenset({"efyd", "lsiseq"})
+SAFE_PUBLIC_QUERY_NAMES = frozenset(
+    {
+        "admrulseq",
+        "efyd",
+        "lsiseq",
+        "ordinseq",
+    }
+)
 
 
 def _decode_repeated(value: str) -> str:
@@ -70,8 +77,9 @@ def sanitize_official_url(url: str) -> str:
         normalized_name = _normalized_query_name(name)
         if normalized_name in SECRET_QUERY_NAMES:
             continue
-        # A public citation needs only stable law lookup identifiers. Dropping all
-        # other query fields prevents a secret hidden behind an unexpected name.
+        # A public citation needs only stable legal-information lookup identifiers.
+        # Dropping all other query fields prevents a secret hidden behind an
+        # unexpected name.
         if normalized_name in SAFE_PUBLIC_QUERY_NAMES:
             safe_query.append((name, value))
     try:
@@ -92,7 +100,10 @@ def contains_secret_query_name(url: str) -> bool:
     """Fail closed for malformed URLs or secret-like query parameter names."""
 
     try:
-        pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True)
+        query = urlsplit(url).query
+        if not query and "=" in url and "?" not in url:
+            query = url
+        pairs = parse_qsl(query, keep_blank_values=True)
     except (TypeError, ValueError):
         return True
     return any(_normalized_query_name(name) in SECRET_QUERY_NAMES for name, _ in pairs)
@@ -108,4 +119,27 @@ def contains_secret_value(url: str, secret_values: Iterable[str]) -> bool:
         decoded_secret = _decode_repeated(str(value))
         if value in url or decoded_secret in decoded_url:
             return True
+    return False
+
+
+def contains_credential_material(
+    value: Any, secret_values: Iterable[str] = ()
+) -> bool:
+    """Recursively detect known secrets and authentication query names."""
+
+    secrets = tuple(str(item) for item in secret_values if item)
+    if isinstance(value, str):
+        return contains_secret_value(value, secrets) or contains_secret_query_name(value)
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            if (
+                _normalized_query_name(key_text) in SECRET_QUERY_NAMES
+                or contains_credential_material(key_text, secrets)
+                or contains_credential_material(item, secrets)
+            ):
+                return True
+        return False
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(contains_credential_material(item, secrets) for item in value)
     return False

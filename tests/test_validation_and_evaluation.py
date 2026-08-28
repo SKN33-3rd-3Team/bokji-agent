@@ -43,7 +43,18 @@ def load_handoff(name: str) -> dict:
 
 class ValidationAndEvaluationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.subsidy, self.law = load_documents()
+        documents = load_documents()
+        self.subsidy = documents[0]
+        self.law, self.admrul, self.ordin = documents[1:]
+        self.legal_documents = (self.law, self.admrul, self.ordin)
+
+    def _validate_single_legal(self, document):
+        handoff = load_handoff("law_handoff.json")
+        handoff["manifest"]["document_count"] = 1
+        handoff["document_card"]["document_count"] = 1
+        return validate_collection_handoff(
+            [document], handoff["manifest"], handoff["document_card"]
+        )
 
     def test_handoff_report_two_argument_construction_defaults_warnings(self) -> None:
         report = HandoffReport((), (self.subsidy.doc_id,))
@@ -58,16 +69,29 @@ class ValidationAndEvaluationTests(unittest.TestCase):
         report.require_accepted()
 
     def test_public_fixtures_pass_handoff_validation(self) -> None:
-        for document, filename in (
-            (self.subsidy, "subsidy_handoff.json"),
-            (self.law, "law_handoff.json"),
+        for documents, filename in (
+            ((self.subsidy,), "subsidy_handoff.json"),
+            (self.legal_documents, "law_handoff.json"),
         ):
             with self.subTest(filename=filename):
                 handoff = load_handoff(filename)
                 report = validate_collection_handoff(
-                    [document], handoff["manifest"], handoff["document_card"]
+                    documents, handoff["manifest"], handoff["document_card"]
                 )
                 self.assertTrue(report.accepted, report.issues)
+
+    def test_legal_document_card_declares_metadata_only_support_boundary(self) -> None:
+        card = load_handoff("law_handoff.json")["document_card"]
+
+        unsupported = " ".join(card["unsupported_scope"])
+        self.assertIn("조문 본문 검색·인용", unsupported)
+        self.assertIn("법률 해석", unsupported)
+        self.assertIn("국가법령정보센터 공식 상세 페이지", card["official_source_guidance"])
+        self.assertEqual(
+            card["version_identity"],
+            "law_type + source_id + source_sequence + effective_from",
+        )
+        self.assertIn("source_sequence", card["update_policy"])
 
     def test_hash_mismatch_is_rejected(self) -> None:
         handoff = load_handoff("subsidy_handoff.json")
@@ -153,6 +177,46 @@ class ValidationAndEvaluationTests(unittest.TestCase):
             {"duplicate_content_candidate"},
         )
         self.assertEqual(len(report.accepted_document_ids), 2)
+
+    def test_legal_duplicate_identity_is_scoped_by_subtype(self) -> None:
+        handoff = load_handoff("law_handoff.json")
+        handoff["manifest"]["document_count"] = 2
+        handoff["document_card"]["document_count"] = 2
+        source_sequence = "2100000999999"
+        metadata = {
+            **self.law.metadata,
+            "law_type": "admrul",
+            "source_sequence": source_sequence,
+        }
+        same_numeric_id_in_another_subtype = replace(
+            self.law,
+            doc_id=compute_document_id(
+                source_type=self.law.source_type,
+                source_id=self.law.source_id,
+                source_updated_at=self.law.source_updated_at,
+                effective_from=self.law.effective_from,
+                content_hash=self.law.content_hash,
+                law_type=metadata["law_type"],
+                source_sequence=source_sequence,
+            ),
+            source_url=(
+                "https://www.law.go.kr/LSW/admRulInfoP.do?"
+                f"admRulSeq={source_sequence}"
+            ),
+            metadata=metadata,
+        )
+
+        report = validate_collection_handoff(
+            [self.law, same_numeric_id_in_another_subtype],
+            handoff["manifest"],
+            handoff["document_card"],
+        )
+
+        self.assertTrue(report.accepted, report.issues)
+        self.assertEqual(
+            {warning.code for warning in report.warnings},
+            {"duplicate_content_candidate"},
+        )
 
     def test_duplicate_content_within_source_is_rejected(self) -> None:
         handoff = load_handoff("subsidy_handoff.json")
@@ -261,7 +325,7 @@ class ValidationAndEvaluationTests(unittest.TestCase):
         handoff = load_handoff("law_handoff.json")
         handoff["document_card"]["update_policy"] = " "
         report = validate_collection_handoff(
-            [self.law], handoff["manifest"], handoff["document_card"]
+            self.legal_documents, handoff["manifest"], handoff["document_card"]
         )
         self.assertIn("missing_card_field", {issue.code for issue in report.issues})
 
@@ -309,8 +373,10 @@ class ValidationAndEvaluationTests(unittest.TestCase):
         law_handoff = load_handoff("law_handoff.json")
         invalid_law = replace(
             self.law,
-            metadata={**self.law.metadata, "promulgation_date": 20250318},
+            metadata={**self.law.metadata, "issued_date": 20250318},
         )
+        law_handoff["manifest"]["document_count"] = 1
+        law_handoff["document_card"]["document_count"] = 1
         law_report = validate_collection_handoff(
             [invalid_law], law_handoff["manifest"], law_handoff["document_card"]
         )
@@ -396,7 +462,7 @@ class ValidationAndEvaluationTests(unittest.TestCase):
             "https://open.law.go.kr/LSO/main.do?lsiSeq=REAL_OPENLAW_SECRET"
         )
         report = validate_collection_handoff(
-            [self.law],
+            self.legal_documents,
             handoff["manifest"],
             handoff["document_card"],
             secret_values=(secret,),
@@ -464,115 +530,295 @@ class ValidationAndEvaluationTests(unittest.TestCase):
                 secret, " ".join(issue.message for issue in report.issues)
             )
 
-    def test_law_heading_path_must_be_ordered_and_well_formed(self) -> None:
-        handoff = load_handoff("law_handoff.json")
-        malformed_section = replace(
-            self.law.sections[0], heading_path=("제1항", "제1조(목적)")
+    def test_handoff_rejects_nested_auth_query_without_known_secret_value(self) -> None:
+        request_url = (
+            "https://open.law.go.kr/DRF/lawService.do?"
+            "OC=UNSUPPLIED_CREDENTIAL&target=law"
         )
-        document = replace(self.law, sections=(malformed_section,))
-        report = validate_collection_handoff(
-            [document], handoff["manifest"], handoff["document_card"]
-        )
-        self.assertIn("missing_article_locator", {issue.code for issue in report.issues})
-
-    def test_law_article_locator_must_exist_before_section_body(self) -> None:
-        handoff = load_handoff("law_handoff.json")
-        false_locator = replace(
-            self.law.sections[0], heading_path=("제999조(허위 위치)",)
-        )
-        document = replace(self.law, sections=(false_locator,))
-        report = validate_collection_handoff(
-            [document], handoff["manifest"], handoff["document_card"]
-        )
-        self.assertIn(
-            "law_locator_content_mismatch", {issue.code for issue in report.issues}
-        )
-
-    def test_law_public_url_id_and_effective_date_must_agree(self) -> None:
-        handoff = load_handoff("law_handoff.json")
         document = replace(
             self.law,
-            source_url="https://www.law.go.kr/lsInfoP.do?lsiSeq=999&efYd=19000101",
+            metadata={
+                **self.law.metadata,
+                "collector_context": {"request_urls": [request_url]},
+            },
         )
-        report = validate_collection_handoff(
-            [document], handoff["manifest"], handoff["document_card"]
+        report = self._validate_single_legal(document)
+
+        self.assertIn("secret_exposure", {issue.code for issue in report.issues})
+
+    def test_legal_handoff_requires_metadata_only_content_level(self) -> None:
+        for record_name in ("manifest", "document_card"):
+            for invalid_value in (None, "full_text"):
+                with self.subTest(record=record_name, value=invalid_value):
+                    handoff = load_handoff("law_handoff.json")
+                    if invalid_value is None:
+                        del handoff[record_name]["content_level"]
+                    else:
+                        handoff[record_name]["content_level"] = invalid_value
+                    report = validate_collection_handoff(
+                        self.legal_documents,
+                        handoff["manifest"],
+                        handoff["document_card"],
+                    )
+                    self.assertIn(
+                        "invalid_legal_content_level",
+                        {issue.code for issue in report.issues},
+                    )
+
+    def test_legal_documents_require_metadata_only_content_level(self) -> None:
+        for invalid_value in (None, "full_text"):
+            with self.subTest(value=invalid_value):
+                metadata = dict(self.law.metadata)
+                if invalid_value is None:
+                    del metadata["content_level"]
+                else:
+                    metadata["content_level"] = invalid_value
+                report = self._validate_single_legal(
+                    replace(self.law, metadata=metadata)
+                )
+                self.assertIn(
+                    "invalid_legal_content_level",
+                    {issue.code for issue in report.issues},
+                )
+
+    def test_legal_documents_require_normalized_metadata_fields(self) -> None:
+        required_fields = (
+            "content_level",
+            "law_type",
+            "law_name",
+            "source_sequence",
+            "organization",
+            "document_kind",
+            "issued_date",
+            "effective_date",
+            "revision_type",
+        )
+        for field_name in required_fields:
+            with self.subTest(field_name=field_name):
+                metadata = dict(self.law.metadata)
+                del metadata[field_name]
+                report = self._validate_single_legal(
+                    replace(self.law, metadata=metadata)
+                )
+                self.assertIn(
+                    "missing_source_metadata",
+                    {issue.code for issue in report.issues},
+                )
+
+    def test_legal_metadata_dates_require_canonical_yyyy_mm_dd(self) -> None:
+        for field_name, invalid_value in (
+            ("issued_date", "20250318"),
+            ("effective_date", "20251001"),
+        ):
+            with self.subTest(field_name=field_name):
+                report = self._validate_single_legal(
+                    replace(
+                        self.law,
+                        metadata={
+                            **self.law.metadata,
+                            field_name: invalid_value,
+                        },
+                    )
+                )
+                self.assertIn(
+                    "invalid_source_metadata",
+                    {issue.code for issue in report.issues},
+                )
+
+    def test_full_text_article_structure_is_rejected(self) -> None:
+        content = "제1조(목적)\n이 조문 본문은 정책상 색인 대상이 아닙니다."
+        article_section = replace(
+            self.law.sections[0],
+            heading_path=("제1조(목적)",),
+            content=content,
+            metadata={"section_type": "article"},
+        )
+        document = replace(
+            self.law,
+            content=content,
+            sections=(article_section,),
+            content_hash=compute_content_hash(content),
+        )
+        report = self._validate_single_legal(document)
+        self.assertIn(
+            "invalid_legal_structure", {issue.code for issue in report.issues}
+        )
+
+    def test_full_text_disguised_as_basic_info_is_rejected(self) -> None:
+        content = (
+            "제1조(목적) 이 법은 국민의 최저생활을 보장한다.\n"
+            "제2조(정의) 이 법에서 사용하는 용어의 뜻은 다음과 같다."
+        )
+        document = replace(
+            self.law,
+            content=content,
+            sections=(replace(self.law.sections[0], content=content),),
+            content_hash=compute_content_hash(content),
+        )
+
+        report = self._validate_single_legal(document)
+
+        self.assertIn("invalid_legal_content", {issue.code for issue in report.issues})
+
+    def test_legal_structure_requires_one_exact_basic_info_section(self) -> None:
+        cases = (
+            replace(
+                self.law,
+                sections=(
+                    replace(self.law.sections[0], heading_path=("상세정보",)),
+                ),
+            ),
+            replace(
+                self.law,
+                sections=(
+                    replace(
+                        self.law.sections[0],
+                        metadata={"section_type": "article"},
+                    ),
+                ),
+            ),
+            replace(
+                self.law,
+                sections=(self.law.sections[0], self.law.sections[0]),
+            ),
+            replace(
+                self.law,
+                sections=(
+                    replace(self.law.sections[0], content="다른 기본정보"),
+                ),
+            ),
+        )
+        for document in cases:
+            with self.subTest(sections=document.sections):
+                report = self._validate_single_legal(document)
+                self.assertIn(
+                    "invalid_legal_structure",
+                    {issue.code for issue in report.issues},
+                )
+
+    def test_legal_root_url_is_not_a_citation(self) -> None:
+        report = self._validate_single_legal(
+            replace(self.admrul, source_url="https://www.law.go.kr/")
         )
         self.assertIn(
-            "law_source_reference_mismatch",
+            "legal_source_reference_mismatch",
             {issue.code for issue in report.issues},
         )
 
-    def test_nested_law_locators_must_exist_in_source_order(self) -> None:
-        handoff = load_handoff("law_handoff.json")
-        body = "구조 검증 본문입니다."
-        content = f"제1조(목적)\n제1항\n제1호\n가목\n{body}"
-        bad_section = replace(
-            self.law.sections[0],
-            heading_path=("제1조(목적)", "제999항", "제999호", "하목"),
-            content=body,
+    def test_legal_identity_and_sequence_must_match_contract(self) -> None:
+        sequence_metadata = {
+            **self.law.metadata,
+            "source_sequence": "999999",
+        }
+        cases = (
+            replace(self.law, source_id="999999"),
+            replace(self.law, metadata=sequence_metadata),
+            replace(
+                self.law,
+                source_url=(
+                    "https://www.law.go.kr/LSW/lsInfoP.do?"
+                    "lsiSeq=999999&efYd=20251001"
+                ),
+            ),
         )
+        expected_codes = (
+            "non_deterministic_doc_id",
+            "non_deterministic_doc_id",
+            "legal_source_reference_mismatch",
+        )
+        for document, expected_code in zip(cases, expected_codes):
+            with self.subTest(doc_id=document.doc_id, expected=expected_code):
+                report = self._validate_single_legal(document)
+                self.assertIn(
+                    expected_code, {issue.code for issue in report.issues}
+                )
+
+    def test_legal_source_sequence_must_be_numeric(self) -> None:
+        report = self._validate_single_legal(
+            replace(
+                self.law,
+                metadata={**self.law.metadata, "source_sequence": "not-numeric"},
+            )
+        )
+        self.assertIn(
+            "invalid_source_metadata", {issue.code for issue in report.issues}
+        )
+
+    def test_legal_name_and_effective_date_match_parent_fields(self) -> None:
+        cases = (
+            (
+                replace(
+                    self.law,
+                    metadata={**self.law.metadata, "law_name": "다른 법령명"},
+                ),
+                "legal_title_mismatch",
+            ),
+            (
+                replace(
+                    self.law,
+                    metadata={
+                        **self.law.metadata,
+                        "effective_date": "2025-10-02",
+                    },
+                ),
+                "legal_effective_date_mismatch",
+            ),
+        )
+        for document, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                report = self._validate_single_legal(document)
+                self.assertIn(
+                    expected_code, {issue.code for issue in report.issues}
+                )
+
+    def test_legal_nested_api_url_cannot_expose_a_secret(self) -> None:
+        secret = "KNOWN_LEGAL_SECRET"
         document = replace(
             self.law,
-            content=content,
-            content_hash=compute_content_hash(content),
-            sections=(bad_section,),
+            metadata={
+                **self.law.metadata,
+                "raw_detail_url": (
+                    "https://open.law.go.kr/DRF/lawService.do?"
+                    f"OC={secret}&target=law"
+                ),
+            },
         )
+        handoff = load_handoff("law_handoff.json")
+        handoff["manifest"]["document_count"] = 1
+        handoff["document_card"]["document_count"] = 1
         report = validate_collection_handoff(
-            [document], handoff["manifest"], handoff["document_card"]
-        )
-        self.assertIn(
-            "law_locator_content_mismatch", {issue.code for issue in report.issues}
-        )
-
-        malformed_section = replace(
-            bad_section,
-            heading_path=("제1조(목적)", "제1항", "제1호", "힣목"),
-        )
-        malformed = replace(document, sections=(malformed_section,))
-        malformed_report = validate_collection_handoff(
-            [malformed], handoff["manifest"], handoff["document_card"]
-        )
-        self.assertIn(
-            "missing_article_locator",
-            {issue.code for issue in malformed_report.issues},
-        )
-
-    def test_law_subitem_requires_item_parent_and_terminal_section_type(self) -> None:
-        handoff = load_handoff("law_handoff.json")
-        body = "계층 계약 검증 본문입니다."
-        content = f"제1조(목적)\n가목\n{body}"
-        skipped_item = replace(
-            self.law.sections[0],
-            heading_path=("제1조(목적)", "가목"),
-            content=body,
-            metadata={"section_type": "subitem"},
-        )
-        document = replace(
-            self.law,
-            content=content,
-            content_hash=compute_content_hash(content),
-            sections=(skipped_item,),
-        )
-        hierarchy_report = validate_collection_handoff(
-            [document], handoff["manifest"], handoff["document_card"]
-        )
-        self.assertIn(
-            "missing_article_locator",
-            {issue.code for issue in hierarchy_report.issues},
-        )
-
-        wrong_terminal_type = replace(
-            self.law.sections[0], metadata={"section_type": "subitem"}
-        )
-        terminal_report = validate_collection_handoff(
-            [replace(self.law, sections=(wrong_terminal_type,))],
+            [document],
             handoff["manifest"],
             handoff["document_card"],
+            secret_values=(secret,),
+        )
+        self.assertIn("secret_exposure", {issue.code for issue in report.issues})
+
+    def test_intentional_body_omission_is_not_a_parse_warning(self) -> None:
+        for document in self.legal_documents:
+            with self.subTest(law_type=document.metadata["law_type"]):
+                self.assertEqual(document.parse_warnings, ())
+                self.assertEqual(document.metadata["content_level"], "metadata_only")
+
+        policy_warning = (
+            "본문(조문) 미포함 - 목록조회 API 정보만으로 구성됨 "
+            "(본문 API 미사용 정책)"
+        )
+        report = self._validate_single_legal(
+            replace(self.law, parse_warnings=(policy_warning,))
         )
         self.assertIn(
-            "law_section_type_mismatch",
-            {issue.code for issue in terminal_report.issues},
+            "invalid_legal_parse_warning",
+            {issue.code for issue in report.issues},
         )
+
+        unrelated_warning = self._validate_single_legal(
+            replace(
+                self.law,
+                parse_warnings=("기관명 공백 표기를 정규화함",),
+            )
+        )
+        self.assertTrue(unrelated_warning.accepted, unrelated_warning.issues)
 
     def test_answer_and_evidence_check_must_use_actual_retrieved_chunks(self) -> None:
         chunk = chunk_document(self.subsidy)[0]

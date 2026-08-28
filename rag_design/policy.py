@@ -3,8 +3,61 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 
-from .contracts import AbstentionReason
+from .chunking import (
+    chunking_config_from_version,
+    render_legal_metadata_chunk_texts,
+)
+from .contracts import (
+    LEGAL_CONTENT_LEVEL,
+    LEGAL_SECTION_HEADING,
+    LEGAL_SECTION_TYPE,
+    AbstentionReason,
+    Chunk,
+    SourceType,
+)
+
+
+LEGAL_METADATA_ASPECT = "legal_metadata"
+LEGAL_ARTICLE_BODY_ASPECT = "legal_article_body"
+LEGAL_INTERPRETATION_ASPECT = "legal_interpretation"
+
+
+def supported_legal_evidence_aspects(chunks: Iterable[Chunk]) -> frozenset[str]:
+    """Expose only catalog metadata from validated metadata-only legal chunks."""
+
+    legal_chunks = tuple(chunks)
+    if not legal_chunks:
+        return frozenset()
+    for chunk in legal_chunks:
+        if (
+            chunk.source_type is not SourceType.LAW
+            or chunk.metadata.get("content_level") != LEGAL_CONTENT_LEVEL
+            or chunk.heading_path != LEGAL_SECTION_HEADING
+            or chunk.metadata.get("section_type") != LEGAL_SECTION_TYPE
+            or chunk.citation_locator != LEGAL_SECTION_HEADING[0]
+        ):
+            return frozenset()
+        try:
+            config = chunking_config_from_version(
+                str(chunk.metadata.get("chunking_version", ""))
+            )
+            expected_texts = render_legal_metadata_chunk_texts(chunk.metadata, config)
+        except (TypeError, ValueError):
+            return frozenset()
+        part = chunk.metadata.get("chunk_part")
+        part_count = chunk.metadata.get("chunk_part_count")
+        if (
+            not isinstance(part, int)
+            or isinstance(part, bool)
+            or part < 0
+            or part >= len(expected_texts)
+            or part_count != len(expected_texts)
+            or chunk.text != expected_texts[part]
+        ):
+            return frozenset()
+    return frozenset({LEGAL_METADATA_ASPECT})
 
 
 @dataclass(frozen=True, slots=True)
