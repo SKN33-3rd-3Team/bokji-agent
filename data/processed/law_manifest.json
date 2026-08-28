@@ -2,6 +2,7 @@
   "manifest": {
     "schema_version": "1.0",
     "source_type": "law",
+    "content_level": "metadata_only",
     "document_count": 1466,
     "collected_at": "2026-08-27T18:23:47.300979+09:00",
     "source_dataset_url": "https://open.law.go.kr/LSO/main.do",
@@ -11,17 +12,25 @@
   },
   "document_card": {
     "source_type": "law",
+    "content_level": "metadata_only",
     "source_name": "국가법령정보센터",
     "source_dataset_url": "https://open.law.go.kr/LSO/main.do",
     "license": "국가법령정보센터 공개 법령",
     "document_count": 1466,
-    "collection_scope": "복지 도메인 키워드로 로컬 필터링한 법령·행정규칙·자치법규 목록조회(lawSearch.do) 정보 - 본문(lawService.do) API는 사용하지 않음",
-    "cleaning_method": "목록 API 원본 필드 보존, metadata에 전부 포함",
-    "chunking_method": "본문 없음 - 문서당 단일 섹션(기본정보)",
-    "exclusion_criteria": [
-      "법령명 또는 ID 누락"
+    "collection_scope": "복지 도메인 키워드로 로컬 필터링한 법령·행정규칙·자치법규 목록조회 메타데이터 - 본문은 수집·색인하지 않음",
+    "unsupported_scope": [
+      "법령·행정규칙·자치법규 조문 본문 검색·인용",
+      "법적 정의·자격·배제·금지 판단 및 법률 해석"
     ],
-    "update_policy": "시행일별 버전 보존",
+    "official_source_guidance": "조문 본문이나 법률 해석이 필요하면 각 문서 source_url의 국가법령정보센터 공식 상세 페이지에서 확인",
+    "version_identity": "law_type + source_id + source_sequence + effective_from",
+    "cleaning_method": "목록조회 필드를 공통 법령 메타데이터 계약으로 정규화",
+    "chunking_method": "문서당 기본정보 섹션 1개, content_level=metadata_only",
+    "exclusion_criteria": [
+      "필수 기본정보 누락",
+      "직접 공개 상세 URL 없음"
+    ],
+    "update_policy": "law_type·source_id·source_sequence·effective_from 조합으로 동일 시행일 개정을 구분해 버전 보존",
     "rights_reviewed": true,
     "sensitive_data_reviewed": true
   }
