@@ -4,25 +4,40 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-import re
 from typing import Any, Iterable, Mapping, Sequence
 
-from .chunking import chunk_document, chunking_config_from_version, compute_chunk_id
-from .citation import citation_url_for_document
+from .chunking import (
+    chunk_document,
+    chunking_config_from_version,
+    compute_chunk_id,
+    render_legal_metadata_chunk_texts,
+)
+from .citation import citation_url_for_document, legal_citation_url
 from .contracts import (
+    LEGAL_CONTENT_LEVEL,
+    LEGAL_METADATA_FIELDS,
+    LEGAL_SECTION_HEADING,
+    LEGAL_SECTION_TYPE,
     SCHEMA_VERSION,
     AnswerResult,
     Chunk,
     Document,
     EvidenceCheckResult,
+    LegalDocumentType,
     RetrievedChunk,
     SensitiveDataStatus,
     SourceType,
     compute_content_hash,
     compute_document_id,
+    is_canonical_date,
+    render_legal_metadata_summary,
     validate_region_metadata,
 )
-from .url_safety import contains_secret_value, sanitize_official_url
+from .url_safety import (
+    contains_credential_material,
+    contains_secret_value,
+    sanitize_official_url,
+)
 
 
 _MANIFEST_FIELDS = frozenset(
@@ -54,10 +69,24 @@ _CARD_FIELDS = frozenset(
     }
 )
 _SUBSIDY_METADATA = frozenset({"organization", "region_scope", "service_category"})
-_LAW_METADATA = frozenset(
-    {"law_name", "lsi_seq", "promulgation_date", "effective_date", "revision_status"}
-)
+_LEGAL_METADATA = frozenset(LEGAL_METADATA_FIELDS)
 _FATAL_WARNING_PREFIXES = ("fatal:", "missing_content", "secret_detected")
+_LEGAL_BODY_WARNING_SUBJECTS = ("본문", "조문", "body", "article", "full text", "full_text")
+_LEGAL_BODY_WARNING_OMISSIONS = (
+    "미포함",
+    "미사용",
+    "미수집",
+    "제외",
+    "누락",
+    "사용하지",
+    "omitted",
+    "excluded",
+    "missing",
+    "not collected",
+    "not included",
+    "not used",
+    "absent",
+)
 _CHUNK_METADATA_FIELDS = frozenset(
     {
         "source_name",
@@ -72,23 +101,6 @@ _CHUNK_METADATA_FIELDS = frozenset(
         "chunking_version",
     }
 )
-_ARTICLE_PATTERN = re.compile(r"^제\d+조(?:의\d+)?(?:\([^\r\n]+\))?$")
-_PARAGRAPH_PATTERN = re.compile(r"^제\d+항$")
-_ITEM_PATTERN = re.compile(r"^제\d+호$")
-_SUBITEM_LABELS = frozenset(
-    "가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허"
-    "고노도로모보소오조초코토포호구누두루무부수우주추쿠투푸후"
-    "그느드르므브스으즈츠크트프트흐기니디리미비시이지치키티피히"
-)
-_LAW_HIERARCHY_TRANSITIONS = frozenset({(0, 1), (0, 2), (1, 2), (2, 3)})
-_LAW_SECTION_TYPE_RANK = {
-    "article": 0,
-    "paragraph": 1,
-    "item": 2,
-    "subitem": 3,
-}
-
-
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:
     """A machine-readable validation diagnostic tied to a contract path."""
@@ -158,50 +170,18 @@ def _is_timezone_datetime(value: Any) -> bool:
 
 
 def _is_iso_date(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        date.fromisoformat(value)
-    except ValueError:
-        return False
-    return True
+    return is_canonical_date(value)
 
 
 def _contains_known_secret(value: Any, secret_values: Sequence[str]) -> bool:
-    if isinstance(value, str):
-        return contains_secret_value(value, secret_values)
-    if isinstance(value, Mapping):
-        return any(
-            _contains_known_secret(key, secret_values)
-            or _contains_known_secret(item, secret_values)
-            for key, item in value.items()
-        )
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_contains_known_secret(item, secret_values) for item in value)
-    return False
+    return contains_credential_material(value, secret_values)
 
 
-def _law_heading_ranks(heading_path: tuple[str, ...]) -> tuple[int, ...] | None:
-    """Map a valid 조·항·호·목 heading path to hierarchy ranks."""
-
-    if not heading_path or not _ARTICLE_PATTERN.fullmatch(heading_path[0]):
-        return None
-    ranks: list[int] = [0]
-    for heading in heading_path[1:]:
-        if _PARAGRAPH_PATTERN.fullmatch(heading):
-            ranks.append(1)
-        elif _ITEM_PATTERN.fullmatch(heading):
-            ranks.append(2)
-        elif heading.endswith("목") and heading[:-1] in _SUBITEM_LABELS:
-            ranks.append(3)
-        else:
-            return None
-    if any(
-        (left, right) not in _LAW_HIERARCHY_TRANSITIONS
-        for left, right in zip(ranks, ranks[1:])
-    ):
-        return None
-    return tuple(ranks)
+def _is_legal_body_omission_warning(value: str) -> bool:
+    normalized = value.casefold()
+    return any(term in normalized for term in _LEGAL_BODY_WARNING_SUBJECTS) and any(
+        term in normalized for term in _LEGAL_BODY_WARNING_OMISSIONS
+    )
 
 
 def _validate_official_url(
@@ -249,14 +229,27 @@ def _validate_document(
         )
     if document.content_hash != compute_content_hash(document.content):
         _issue(issues, "hash_mismatch", f"{path}.content_hash", "content hash differs")
-    expected_doc_id = compute_document_id(
-        source_type=document.source_type,
-        source_id=document.source_id,
-        source_updated_at=document.source_updated_at,
-        effective_from=document.effective_from,
-        content_hash=document.content_hash,
-    )
-    if document.doc_id != expected_doc_id:
+    try:
+        expected_doc_id = compute_document_id(
+            source_type=document.source_type,
+            source_id=document.source_id,
+            source_updated_at=document.source_updated_at,
+            effective_from=document.effective_from,
+            content_hash=document.content_hash,
+            law_type=(
+                document.metadata.get("law_type")
+                if document.source_type is SourceType.LAW
+                else None
+            ),
+            source_sequence=(
+                document.metadata.get("source_sequence")
+                if document.source_type is SourceType.LAW
+                else None
+            ),
+        )
+    except (TypeError, ValueError):
+        expected_doc_id = None
+    if expected_doc_id is None or document.doc_id != expected_doc_id:
         _issue(
             issues,
             "non_deterministic_doc_id",
@@ -282,6 +275,16 @@ def _validate_document(
                 f"{path}.parse_warnings",
                 "document contains a fatal parse warning",
             )
+    if document.source_type is SourceType.LAW and any(
+        _is_legal_body_omission_warning(warning)
+        for warning in document.parse_warnings
+    ):
+        _issue(
+            issues,
+            "invalid_legal_parse_warning",
+            f"{path}.parse_warnings",
+            "metadata-only legal documents must not report deliberate body omission as a parse warning",
+        )
     if not document.sections:
         _issue(issues, "missing_structure", f"{path}.sections", "no sections provided")
     comparable_content = " ".join(document.content.split())
@@ -295,7 +298,9 @@ def _validate_document(
             )
 
     required_metadata = (
-        _SUBSIDY_METADATA if document.source_type is SourceType.SUBSIDY else _LAW_METADATA
+        _SUBSIDY_METADATA
+        if document.source_type is SourceType.SUBSIDY
+        else _LEGAL_METADATA
     )
     for key in _missing_or_blank(document.metadata, required_metadata):
         _issue(
@@ -361,44 +366,129 @@ def _validate_document(
                 "recommended section_type 'application_method' is missing",
             )
     else:
-        for key in ("law_name", "lsi_seq", "revision_status"):
+        for key in (
+            "document_kind",
+            "law_name",
+            "organization",
+            "revision_type",
+            "source_sequence",
+        ):
             if not _is_non_empty_string(document.metadata.get(key)):
                 _issue(
                     issues,
                     "invalid_source_metadata",
                     f"{path}.metadata.{key}",
-                    "law metadata value must be a non-empty string",
+                    "legal metadata value must be a non-empty string",
                 )
-        for key in ("promulgation_date", "effective_date"):
+        if document.metadata.get("content_level") != LEGAL_CONTENT_LEVEL:
+            _issue(
+                issues,
+                "invalid_legal_content_level",
+                f"{path}.metadata.content_level",
+                "legal documents must contain metadata_only content",
+            )
+        try:
+            LegalDocumentType(document.metadata.get("law_type"))
+        except (TypeError, ValueError):
+            _issue(
+                issues,
+                "invalid_legal_document_type",
+                f"{path}.metadata.law_type",
+                "law_type must be law, admrul, or ordin",
+            )
+        if document.metadata.get("law_name") != document.title:
+            _issue(
+                issues,
+                "legal_title_mismatch",
+                f"{path}.metadata.law_name",
+                "law_name must match the document title",
+            )
+        for key in ("issued_date", "effective_date"):
             if not _is_iso_date(document.metadata.get(key)):
                 _issue(
                     issues,
                     "invalid_source_metadata",
                     f"{path}.metadata.{key}",
-                    "law metadata date must be an ISO 8601 date string",
+                    "legal metadata date must use canonical YYYY-MM-DD form",
                 )
-        if not str(document.metadata.get("lsi_seq", "")).isdigit():
+        if not document.source_id.isascii() or not document.source_id.isdigit():
             _issue(
                 issues,
                 "invalid_source_metadata",
-                f"{path}.metadata.lsi_seq",
-                "lsi_seq must contain decimal digits",
+                f"{path}.source_id",
+                "legal source_id must contain decimal digits",
+            )
+        source_sequence = document.metadata.get("source_sequence")
+        if (
+            not isinstance(source_sequence, str)
+            or not source_sequence.isascii()
+            or not source_sequence.isdigit()
+        ):
+            _issue(
+                issues,
+                "invalid_source_metadata",
+                f"{path}.metadata.source_sequence",
+                "source_sequence must contain decimal digits",
             )
         if not document.effective_from:
             _issue(
                 issues,
                 "missing_effective_date",
                 f"{path}.effective_from",
-                "law documents require an effective date",
+                "legal documents require an effective date",
             )
-        lsi_seq = str(document.metadata.get("lsi_seq", ""))
-        metadata_effective_date = str(document.metadata.get("effective_date", ""))
-        if lsi_seq != document.source_id or metadata_effective_date != document.effective_from:
+        elif not is_canonical_date(document.effective_from):
             _issue(
                 issues,
-                "law_source_reference_mismatch",
-                f"{path}.metadata",
-                "law ID and effective date must agree across source fields",
+                "invalid_source_metadata",
+                f"{path}.effective_from",
+                "legal effective_from must use canonical YYYY-MM-DD form",
+            )
+        if document.source_updated_at is not None and not is_canonical_date(
+            document.source_updated_at
+        ):
+            _issue(
+                issues,
+                "invalid_source_metadata",
+                f"{path}.source_updated_at",
+                "legal source_updated_at must use canonical YYYY-MM-DD form",
+            )
+        if document.effective_to is not None:
+            if not is_canonical_date(document.effective_to):
+                _issue(
+                    issues,
+                    "invalid_source_metadata",
+                    f"{path}.effective_to",
+                    "legal effective_to must use canonical YYYY-MM-DD form",
+                )
+            elif is_canonical_date(document.effective_from) and (
+                date.fromisoformat(document.effective_to)
+                <= date.fromisoformat(document.effective_from)
+            ):
+                _issue(
+                    issues,
+                    "invalid_effective_interval",
+                    f"{path}.effective_to",
+                    "legal effective_to must be later than effective_from",
+                )
+        metadata_effective_date = str(document.metadata.get("effective_date", ""))
+        if metadata_effective_date != document.effective_from:
+            _issue(
+                issues,
+                "legal_effective_date_mismatch",
+                f"{path}.metadata.effective_date",
+                "effective_date must match the document effective_from date",
+            )
+        try:
+            expected_summary = render_legal_metadata_summary(document.metadata)
+        except (TypeError, ValueError):
+            expected_summary = None
+        if expected_summary is None or document.content != expected_summary:
+            _issue(
+                issues,
+                "invalid_legal_content",
+                f"{path}.content",
+                "legal content must exactly equal the canonical metadata summary",
             )
         try:
             expected_source_url = citation_url_for_document(document)
@@ -407,48 +497,39 @@ def _validate_document(
         if expected_source_url is None or document.source_url != expected_source_url:
             _issue(
                 issues,
-                "law_source_reference_mismatch",
+                "legal_source_reference_mismatch",
                 f"{path}.source_url",
-                "law source URL must match its public law ID and effective date",
+                "source URL must match the legal subtype, sequence, and effective date",
             )
-        for section_index, section in enumerate(document.sections):
-            heading_ranks = _law_heading_ranks(section.heading_path)
-            if heading_ranks is None:
+        if len(document.sections) != 1:
+            _issue(
+                issues,
+                "invalid_legal_structure",
+                f"{path}.sections",
+                "metadata-only legal documents require exactly one basic-info section",
+            )
+        else:
+            section = document.sections[0]
+            if section.heading_path != LEGAL_SECTION_HEADING:
                 _issue(
                     issues,
-                    "missing_article_locator",
-                    f"{path}.sections[{section_index}].heading_path",
-                    "law section must retain an ordered 조·항·호·목 locator",
+                    "invalid_legal_structure",
+                    f"{path}.sections[0].heading_path",
+                    "metadata-only legal sections must use the 기본정보 heading",
                 )
-                continue
-            section_type = section.metadata.get("section_type")
-            if _LAW_SECTION_TYPE_RANK.get(section_type) != heading_ranks[-1]:
+            if section.metadata.get("section_type") != LEGAL_SECTION_TYPE:
                 _issue(
                     issues,
-                    "law_section_type_mismatch",
-                    f"{path}.sections[{section_index}].metadata.section_type",
-                    "law section_type must match the terminal locator level",
+                    "invalid_legal_structure",
+                    f"{path}.sections[0].metadata.section_type",
+                    "metadata-only legal sections require section_type basic_info",
                 )
-            # Locators and body must follow source order, not merely exist somewhere.
-            section_body = " ".join(section.content.split())
-            search_from = 0
-            locator_matches = True
-            for locator in section.heading_path:
-                normalized_locator = " ".join(locator.split())
-                locator_position = comparable_content.find(
-                    normalized_locator, search_from
-                )
-                if locator_position < 0:
-                    locator_matches = False
-                    break
-                search_from = locator_position + len(normalized_locator)
-            body_position = comparable_content.find(section_body, search_from)
-            if not locator_matches or body_position < 0:
+            if section.content != document.content:
                 _issue(
                     issues,
-                    "law_locator_content_mismatch",
-                    f"{path}.sections[{section_index}].heading_path",
-                    "law article locator and section body are not ordered in the source body",
+                    "invalid_legal_structure",
+                    f"{path}.sections[0].content",
+                    "the basic-info section must equal the normalized metadata content",
                 )
 
 
@@ -546,6 +627,18 @@ def validate_collection_handoff(
         _issue(issues, "source_type_mismatch", "document_card.source_type", "sources differ")
     if manifest_source not in {item.value for item in SourceType}:
         _issue(issues, "invalid_source_type", "manifest.source_type", "unsupported source")
+    if manifest_source == SourceType.LAW.value:
+        for prefix, record in (
+            ("manifest", manifest),
+            ("document_card", document_card),
+        ):
+            if record.get("content_level") != LEGAL_CONTENT_LEVEL:
+                _issue(
+                    issues,
+                    "invalid_legal_content_level",
+                    f"{prefix}.content_level",
+                    "legal handoffs must declare content_level metadata_only",
+                )
     if manifest.get("source_dataset_url") != document_card.get("source_dataset_url"):
         _issue(
             issues,
@@ -571,8 +664,10 @@ def validate_collection_handoff(
             )
 
     seen_doc_ids: set[str] = set()
-    seen_source_versions: set[tuple[str, str | None, str | None]] = set()
-    source_ids_by_hash: dict[str, set[str]] = {}
+    seen_source_versions: set[tuple[Any, ...]] = set()
+    source_identities_by_hash: dict[
+        str, set[tuple[str, str | None, str]]
+    ] = {}
     accepted_ids: list[str] = []
     for index, document in enumerate(documents):
         _validate_document(document, index, issues, warnings, secrets)
@@ -600,22 +695,44 @@ def validate_collection_handoff(
         if document.doc_id in seen_doc_ids:
             _issue(issues, "duplicate_doc_id", f"documents[{index}].doc_id", "duplicate")
         seen_doc_ids.add(document.doc_id)
-        source_version = (
-            document.source_id,
-            document.source_updated_at,
-            document.effective_from,
-        )
+        if document.source_type is SourceType.LAW:
+            source_version = (
+                document.source_type.value,
+                document.metadata.get("law_type"),
+                document.source_id,
+                document.metadata.get("source_sequence"),
+                document.source_updated_at,
+                document.effective_from,
+            )
+        else:
+            source_version = (
+                document.source_type.value,
+                document.source_id,
+                document.source_updated_at,
+                document.effective_from,
+            )
         if source_version in seen_source_versions:
             _issue(
                 issues,
                 "duplicate_source_version",
                 f"documents[{index}].source_id",
-                "source ID and version dates duplicate another document",
+                "source identity and revision duplicate another document",
             )
         seen_source_versions.add(source_version)
-        source_ids = source_ids_by_hash.setdefault(document.content_hash, set())
-        if source_ids:
-            if document.source_id in source_ids:
+        source_identity = (
+            document.source_type.value,
+            (
+                str(document.metadata.get("law_type"))
+                if document.source_type is SourceType.LAW
+                else None
+            ),
+            document.source_id,
+        )
+        source_identities = source_identities_by_hash.setdefault(
+            document.content_hash, set()
+        )
+        if source_identities:
+            if source_identity in source_identities:
                 _issue(
                     issues,
                     "duplicate_content",
@@ -629,7 +746,7 @@ def validate_collection_handoff(
                     f"documents[{index}].content_hash",
                     "content matches a document from a different source_id",
                 )
-        source_ids.add(document.source_id)
+        source_identities.add(source_identity)
         accepted_ids.append(document.doc_id)
 
     return HandoffReport(
@@ -731,19 +848,176 @@ def validate_chunk_batch(
             )
 
         if chunk.source_type is SourceType.LAW:
-            if not chunk.metadata.get("effective_from"):
+            for key in sorted(_LEGAL_METADATA - chunk.metadata.keys()):
+                _issue(
+                    issues,
+                    "missing_chunk_metadata",
+                    f"{path}.metadata.{key}",
+                    "required normalized legal metadata is missing",
+                )
+            effective_from = chunk.metadata.get("effective_from")
+            if not effective_from:
                 _issue(
                     issues,
                     "missing_effective_date",
                     f"{path}.metadata.effective_from",
-                    "law chunks require an effective date",
+                    "legal chunks require an effective date",
                 )
-            if not chunk.metadata.get("lsi_seq"):
+            elif not is_canonical_date(effective_from):
                 _issue(
                     issues,
-                    "missing_chunk_metadata",
-                    f"{path}.metadata.lsi_seq",
-                    "law chunks require lsi_seq",
+                    "invalid_chunk_metadata",
+                    f"{path}.metadata.effective_from",
+                    "legal effective_from must use canonical YYYY-MM-DD form",
+                )
+            source_updated_at = chunk.metadata.get("source_updated_at")
+            if source_updated_at is not None and not is_canonical_date(
+                source_updated_at
+            ):
+                _issue(
+                    issues,
+                    "invalid_chunk_metadata",
+                    f"{path}.metadata.source_updated_at",
+                    "legal source_updated_at must use canonical YYYY-MM-DD form",
+                )
+            effective_to = chunk.metadata.get("effective_to")
+            if effective_to is not None:
+                if not is_canonical_date(effective_to):
+                    _issue(
+                        issues,
+                        "invalid_chunk_metadata",
+                        f"{path}.metadata.effective_to",
+                        "legal effective_to must use canonical YYYY-MM-DD form",
+                    )
+                elif is_canonical_date(effective_from) and (
+                    date.fromisoformat(effective_to)
+                    <= date.fromisoformat(effective_from)
+                ):
+                    _issue(
+                        issues,
+                        "invalid_effective_interval",
+                        f"{path}.metadata.effective_to",
+                        "legal effective_to must be later than effective_from",
+                    )
+            for key in (
+                "document_kind",
+                "law_name",
+                "organization",
+                "revision_type",
+                "source_sequence",
+            ):
+                if not _is_non_empty_string(chunk.metadata.get(key)):
+                    _issue(
+                        issues,
+                        "invalid_chunk_metadata",
+                        f"{path}.metadata.{key}",
+                        "legal chunk metadata must be a non-empty string",
+                    )
+            if chunk.metadata.get("content_level") != LEGAL_CONTENT_LEVEL:
+                _issue(
+                    issues,
+                    "invalid_legal_content_level",
+                    f"{path}.metadata.content_level",
+                    "legal chunks must contain metadata_only content",
+                )
+            try:
+                LegalDocumentType(chunk.metadata.get("law_type"))
+            except (TypeError, ValueError):
+                _issue(
+                    issues,
+                    "invalid_legal_document_type",
+                    f"{path}.metadata.law_type",
+                    "law_type must be law, admrul, or ordin",
+                )
+            for key in ("issued_date", "effective_date"):
+                if not _is_iso_date(chunk.metadata.get(key)):
+                    _issue(
+                        issues,
+                        "invalid_chunk_metadata",
+                        f"{path}.metadata.{key}",
+                        "legal chunk dates must use canonical YYYY-MM-DD form",
+                    )
+            source_sequence = chunk.metadata.get("source_sequence")
+            source_id = chunk.metadata.get("source_id")
+            if (
+                not isinstance(source_id, str)
+                or not source_id.isascii()
+                or not source_id.isdigit()
+            ):
+                _issue(
+                    issues,
+                    "invalid_chunk_metadata",
+                    f"{path}.metadata.source_id",
+                    "legal source_id must contain decimal digits",
+                )
+            if (
+                not isinstance(source_sequence, str)
+                or not source_sequence.isascii()
+                or not source_sequence.isdigit()
+            ):
+                _issue(
+                    issues,
+                    "invalid_chunk_metadata",
+                    f"{path}.metadata.source_sequence",
+                    "source_sequence must contain decimal digits",
+                )
+            if (
+                chunk.heading_path != LEGAL_SECTION_HEADING
+                or chunk.metadata.get("section_type") != LEGAL_SECTION_TYPE
+                or chunk.citation_locator != LEGAL_SECTION_HEADING[0]
+            ):
+                _issue(
+                    issues,
+                    "invalid_legal_structure",
+                    f"{path}.heading_path",
+                    "legal chunks must represent only the 기본정보 section",
+                )
+            if chunk.metadata.get("effective_date") != chunk.metadata.get(
+                "effective_from"
+            ):
+                _issue(
+                    issues,
+                    "legal_effective_date_mismatch",
+                    f"{path}.metadata.effective_date",
+                    "effective_date must match effective_from",
+                )
+            try:
+                expected_source_url = legal_citation_url(
+                    law_type=chunk.metadata.get("law_type", ""),
+                    source_sequence=chunk.metadata.get("source_sequence", ""),
+                    effective_from=chunk.metadata.get("effective_from"),
+                )
+            except (TypeError, ValueError):
+                expected_source_url = None
+            if chunk.metadata.get("source_url") != expected_source_url:
+                _issue(
+                    issues,
+                    "legal_source_reference_mismatch",
+                    f"{path}.metadata.source_url",
+                    "source URL must match the legal subtype and source sequence",
+                )
+            try:
+                legal_config = chunking_config_from_version(
+                    str(chunk.metadata.get("chunking_version", ""))
+                )
+                expected_texts = render_legal_metadata_chunk_texts(
+                    chunk.metadata, legal_config
+                )
+            except (TypeError, ValueError):
+                expected_texts = ()
+            if (
+                not isinstance(part, int)
+                or isinstance(part, bool)
+                or part < 0
+                or part >= len(expected_texts)
+                or chunk.metadata.get("chunk_part_count") != len(expected_texts)
+                or chunk.text != expected_texts[part]
+            ):
+                _issue(
+                    issues,
+                    "invalid_legal_content",
+                    f"{path}.text",
+                    "legal chunk text must match the canonical metadata summary",
                 )
         else:
             for key in ("organization", "service_category"):
@@ -800,13 +1074,19 @@ def validate_chunk_batch(
             "effective_from": parent.effective_from,
             "effective_to": parent.effective_to,
         }
-        for key in (
-            "organization",
-            "region_scope",
-            "region_names",
-            "service_category",
-            "lsi_seq",
-        ):
+        source_metadata_fields = (
+            _LEGAL_METADATA
+            if parent.source_type is SourceType.LAW
+            else frozenset(
+                {
+                    "organization",
+                    "region_scope",
+                    "region_names",
+                    "service_category",
+                }
+            )
+        )
+        for key in source_metadata_fields:
             if key in parent.metadata:
                 parent_metadata[key] = parent.metadata[key]
         for key, expected in parent_metadata.items():

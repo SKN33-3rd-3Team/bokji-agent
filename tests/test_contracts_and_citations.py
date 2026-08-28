@@ -19,6 +19,8 @@ from rag_design.contracts import (
     EvidenceStatus,
     RegionScope,
     RetrievedChunk,
+    compute_document_id,
+    render_legal_metadata_summary,
     validate_region_metadata,
 )
 
@@ -36,10 +38,59 @@ def load_documents() -> list[Document]:
 
 class ContractAndCitationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.subsidy, self.law = load_documents()
+        documents = load_documents()
+        self.subsidy = documents[0]
+        self.law, self.admrul, self.ordin = documents[1:]
+        self.legal_documents = (self.law, self.admrul, self.ordin)
 
     def test_document_round_trip(self) -> None:
-        self.assertEqual(Document.from_dict(self.subsidy.to_dict()), self.subsidy)
+        for document in (self.subsidy, *self.legal_documents):
+            with self.subTest(doc_id=document.doc_id):
+                self.assertEqual(Document.from_dict(document.to_dict()), document)
+
+    def test_legal_document_ids_include_subtype_and_source_sequence(self) -> None:
+        for document in self.legal_documents:
+            with self.subTest(law_type=document.metadata["law_type"]):
+                self.assertNotEqual(
+                    document.source_id, document.metadata["source_sequence"]
+                )
+                self.assertEqual(
+                    compute_document_id(
+                        source_type=document.source_type,
+                        source_id=document.source_id,
+                        source_updated_at=document.source_updated_at,
+                        effective_from=document.effective_from,
+                        content_hash=document.content_hash,
+                        law_type=document.metadata["law_type"],
+                        source_sequence=document.metadata["source_sequence"],
+                    ),
+                    document.doc_id,
+                )
+
+    def test_legal_document_ids_require_canonical_effective_date(self) -> None:
+        arguments = {
+            "source_type": self.law.source_type,
+            "source_id": self.law.source_id,
+            "source_updated_at": self.law.source_updated_at,
+            "content_hash": self.law.content_hash,
+            "law_type": self.law.metadata["law_type"],
+            "source_sequence": self.law.metadata["source_sequence"],
+        }
+        for effective_from in (None, "20251001", "2025-W40-3"):
+            with self.subTest(effective_from=effective_from):
+                with self.assertRaises(ValueError):
+                    compute_document_id(
+                        **arguments,
+                        effective_from=effective_from,
+                    )
+
+    def test_legal_metadata_summary_is_an_exact_canonical_projection(self) -> None:
+        for document in self.legal_documents:
+            with self.subTest(law_type=document.metadata["law_type"]):
+                self.assertEqual(
+                    render_legal_metadata_summary(document.metadata),
+                    document.content,
+                )
 
     def test_chunk_and_retrieved_chunk_round_trip(self) -> None:
         chunk = chunk_document(self.subsidy)[0]
@@ -64,7 +115,7 @@ class ContractAndCitationTests(unittest.TestCase):
                     claim_id="claim-1",
                     status=EvidenceStatus.SUPPORTED,
                     evidence_chunk_ids=("law-chunk-1",),
-                    reasons=("공개 법령 조문에서 확인됨",),
+                    reasons=("공개 법령 목록 메타데이터에서 법령명을 확인함",),
                 ),
             ),
             evidence_chunk_ids=("law-chunk-1",),
@@ -102,7 +153,7 @@ class ContractAndCitationTests(unittest.TestCase):
             claim_id="claim-2",
             status=EvidenceStatus.SUPPORTED,
             evidence_chunk_ids=("law-chunk-2",),
-            reasons=("법령 조문에서 확인됨",),
+            reasons=("법령 목록 메타데이터에서 공포일을 확인함",),
         )
         with self.assertRaisesRegex(ValueError, "overall conflict"):
             EvidenceCheckResult(
@@ -178,15 +229,41 @@ class ContractAndCitationTests(unittest.TestCase):
                 effective_to="2026-01-01",
             )
 
-    def test_citation_uses_public_law_url_and_full_locator(self) -> None:
+    def test_legal_citations_use_direct_public_subtype_urls(self) -> None:
+        expected_urls = {
+            "law": (
+                "https://www.law.go.kr/LSW/lsInfoP.do?"
+                "lsiSeq=276653&efYd=20251001"
+            ),
+            "admrul": (
+                "https://www.law.go.kr/LSW/admRulInfoP.do?"
+                "admRulSeq=2100000269822"
+            ),
+            "ordin": (
+                "https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=2124625"
+            ),
+        }
+        for document in self.legal_documents:
+            with self.subTest(law_type=document.metadata["law_type"]):
+                chunk = chunk_document(document)[0]
+                citation = build_citation(chunk, document)
+                self.assertEqual(
+                    citation.source_url,
+                    expected_urls[document.metadata["law_type"]],
+                )
+                self.assertEqual(citation.locator, "기본정보")
+                self.assertNotIn("OC=", citation.source_url.upper())
+
+    def test_legal_citation_rejects_article_locator(self) -> None:
         chunk = chunk_document(self.law)[0]
-        citation = build_citation(chunk, self.law)
-        self.assertEqual(
-            citation.source_url,
-            "https://www.law.go.kr/lsInfoP.do?lsiSeq=276653&efYd=20251001",
+        article_chunk = replace(
+            chunk,
+            heading_path=("제1조(목적)",),
+            citation_locator="제1조(목적)",
         )
-        self.assertEqual(citation.locator, "제1조(목적)")
-        self.assertNotIn("OPENLAW_API_KEY", citation.source_url)
+
+        with self.assertRaises(ValueError):
+            build_citation(article_chunk, self.law)
 
     def test_service_key_case_and_encoding_variants_are_removed(self) -> None:
         variants = ("SeRvIcEkEy", "service%4Bey", "service%254Bey")
@@ -204,6 +281,15 @@ class ContractAndCitationTests(unittest.TestCase):
             sanitize_public_url(url),
             "https://open.law.go.kr/LSO/openApi/guideResult.do",
         )
+
+    def test_legal_document_rejects_authenticated_source_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "sanitized HTTPS official URL"):
+            replace(
+                self.law,
+                source_url=(
+                    f"{self.law.source_url}&OC=DO_NOT_STORE_THIS_VALUE"
+                ),
+            )
 
     def test_actual_secret_is_rejected_even_when_encoded_under_unknown_name(self) -> None:
         secret = "REAL-secret/123"

@@ -15,12 +15,37 @@ from .url_safety import contains_secret_query_name, sanitize_official_url
 
 
 SCHEMA_VERSION = "1.0"
+LEGAL_CONTENT_LEVEL = "metadata_only"
+LEGAL_METADATA_CONTRACT_VERSION = "legal-metadata-v1"
+LEGAL_METADATA_FIELDS = (
+    "content_level",
+    "document_kind",
+    "effective_date",
+    "issued_date",
+    "law_name",
+    "law_type",
+    "organization",
+    "revision_type",
+    "source_sequence",
+)
+LEGAL_SECTION_HEADING = ("기본정보",)
+LEGAL_SECTION_TYPE = "basic_info"
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_DATE_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_DECIMAL_IDENTIFIER_PATTERN = re.compile(r"^[0-9]+$")
 
 
 class SourceType(str, Enum):
     SUBSIDY = "subsidy"
     LAW = "law"
+
+
+class LegalDocumentType(str, Enum):
+    """A source subtype stored in the shared legal-information index."""
+
+    LAW = "law"
+    ADMINISTRATIVE_RULE = "admrul"
+    LOCAL_ORDINANCE = "ordin"
 
 
 class RegionScope(str, Enum):
@@ -82,6 +107,65 @@ def compute_content_hash(content: str) -> str:
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def is_canonical_date(value: Any) -> bool:
+    """Return whether ``value`` is a real calendar date in YYYY-MM-DD form."""
+
+    if not isinstance(value, str) or not _CANONICAL_DATE_PATTERN.fullmatch(value):
+        return False
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.isoformat() == value
+
+
+def render_legal_metadata_summary(metadata: Mapping[str, Any]) -> str:
+    """Render the only legal content shape accepted by the metadata-only contract."""
+
+    if metadata.get("content_level") != LEGAL_CONTENT_LEVEL:
+        raise ValueError("legal metadata summaries require metadata_only content")
+    try:
+        LegalDocumentType(metadata.get("law_type"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("legal metadata summaries require a supported law_type") from exc
+
+    for key in (
+        "document_kind",
+        "law_name",
+        "organization",
+        "revision_type",
+        "source_sequence",
+    ):
+        value = metadata.get(key)
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or "\n" in value
+            or "\r" in value
+        ):
+            raise ValueError(f"legal metadata summaries require normalized {key}")
+    source_sequence = metadata["source_sequence"]
+    if not _DECIMAL_IDENTIFIER_PATTERN.fullmatch(source_sequence):
+        raise ValueError("legal metadata summaries require a numeric source_sequence")
+    for key in ("issued_date", "effective_date"):
+        if not is_canonical_date(metadata.get(key)):
+            raise ValueError(
+                f"legal metadata summaries require canonical YYYY-MM-DD {key}"
+            )
+
+    return "\n".join(
+        (
+            f"법령명: {metadata['law_name']}",
+            f"법령유형: {metadata['document_kind']}",
+            f"소관기관: {metadata['organization']}",
+            f"제개정구분: {metadata['revision_type']}",
+            f"공포·발령일: {metadata['issued_date']}",
+            f"시행일: {metadata['effective_date']}",
+        )
+    )
+
+
 def compute_document_id(
     *,
     source_type: SourceType | str,
@@ -89,16 +173,48 @@ def compute_document_id(
     source_updated_at: str | None,
     effective_from: str | None,
     content_hash: str,
+    law_type: LegalDocumentType | str | None = None,
+    source_sequence: str | None = None,
 ) -> str:
-    """Build the reference ID from stable source and version fields."""
+    """Build a deterministic source-version ID.
+
+    Legal IDs include the source subtype, stable entity ID, revision sequence,
+    and effective date so two revisions effective on the same date cannot collide.
+    Subsidy IDs retain their existing source/version format.
+    """
 
     source_value = SourceType(source_type).value
+    if source_value == SourceType.LAW.value:
+        if law_type is None:
+            raise ValueError("law document IDs require law_type")
+        if not isinstance(source_id, str) or not _DECIMAL_IDENTIFIER_PATTERN.fullmatch(
+            source_id
+        ):
+            raise ValueError("law document IDs require a numeric source_id")
+        if not isinstance(source_sequence, str) or not _DECIMAL_IDENTIFIER_PATTERN.fullmatch(
+            source_sequence
+        ):
+            raise ValueError("law document IDs require a numeric source_sequence")
+        if not is_canonical_date(effective_from):
+            raise ValueError(
+                "law document IDs require a canonical YYYY-MM-DD effective_from"
+            )
+        identity = (
+            f"{source_value}:{LegalDocumentType(law_type).value}:"
+            f"{source_id}:{source_sequence}"
+        )
+    else:
+        if law_type is not None or source_sequence is not None:
+            raise ValueError(
+                "law_type and source_sequence apply only to law document IDs"
+            )
+        identity = f"{source_value}:{source_id}"
     version = (
         effective_from
-        if source_value == SourceType.LAW.value and effective_from
+        if source_value == SourceType.LAW.value
         else source_updated_at or effective_from or content_hash[:16]
     )
-    return f"{source_value}:{source_id}:{version}"
+    return f"{identity}:{version}"
 
 
 def validate_region_name(value: Any, *, allow_national: bool = True) -> None:
