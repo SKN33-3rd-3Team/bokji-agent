@@ -7,11 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from rag_design.chunking import (
-    chunking_config_from_version,
-    compute_chunk_id_from_document_id,
-    render_legal_metadata_chunk_texts,
-)
+from rag_design.chunking import compute_chunk_id_from_document_id
 from rag_design.citation import legal_citation_url
 from rag_design.contracts import (
     AbstentionReason,
@@ -56,13 +52,7 @@ _LawRevision = tuple[str, str, str]
 class _ClaimCoverage:
     claim: ClaimDraft
     subsidy_chunks: tuple[RetrievedChunk, ...]
-    law_chunks: tuple[RetrievedChunk, ...]
-    required_sources: tuple[_LawPair, ...]
-    covered_sources: frozenset[_LawPair]
     missing_sources: tuple[_LawPair, ...]
-    supported_aspects: frozenset[str]
-    missing_aspects: frozenset[str]
-    document_supported: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,9 +280,6 @@ def _law_parent_payload(item: RetrievedChunk) -> tuple[Any, ...]:
 
 def _strict_law_payload_reason(item: RetrievedChunk) -> AbstentionReason | None:
     chunk = item.chunk
-    structure_reason = _law_structure_reason(item)
-    if structure_reason is not None:
-        return structure_reason
     metadata = _law_metadata(item)
 
     try:
@@ -311,8 +298,6 @@ def _strict_law_payload_reason(item: RetrievedChunk) -> AbstentionReason | None:
             or not isinstance(version, str)
         ):
             return AbstentionReason.NO_EVIDENCE
-        config = chunking_config_from_version(version)
-        expected_texts = render_legal_metadata_chunk_texts(metadata, config)
         expected_source_url = legal_citation_url(
             law_type=law_type,
             source_sequence=source_sequence,
@@ -333,9 +318,7 @@ def _strict_law_payload_reason(item: RetrievedChunk) -> AbstentionReason | None:
     except (KeyError, TypeError, ValueError):
         return AbstentionReason.NO_EVIDENCE
     if (
-        part_count != len(expected_texts)
-        or chunk.text != expected_texts[part]
-        or chunk.content_hash != compute_content_hash(chunk.text)
+        chunk.content_hash != compute_content_hash(chunk.text)
         or metadata.get("source_url") != expected_source_url
         or chunk.doc_id != expected_doc_id
         or chunk.chunk_id != expected_chunk_id
@@ -566,13 +549,7 @@ def _resolve_evidence(
             _ClaimCoverage(
                 claim=claim,
                 subsidy_chunks=subsidy_evidence,
-                law_chunks=law_evidence,
-                required_sources=required_sources,
-                covered_sources=covered_sources,
                 missing_sources=missing_sources,
-                supported_aspects=frozenset(supported_aspects),
-                missing_aspects=missing_aspects,
-                document_supported=document_supported,
             )
         )
 

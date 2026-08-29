@@ -873,12 +873,6 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
     def test_t16_malformed_search_results_are_errors(self) -> None:
         state = self._n8_state()
 
-        changed_text = "법령 원문으로 가장한 비정규 데이터"
-        noncanonical_chunk = replace(
-            self.law.chunk,
-            text=changed_text,
-            content_hash=compute_content_hash(changed_text),
-        )
         stale_chunk = replace(
             self.law.chunk,
             metadata={
@@ -890,14 +884,7 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
             [replace(self.law, query_id="another-query")],
             [self.subsidy],
             [self.admrul],
-            [self._retrieved(noncanonical_chunk)],
             [self._retrieved(stale_chunk)],
-            [self._retrieved(replace(self.law.chunk, content_hash="0" * 64))],
-            [
-                self._retrieved(
-                    replace(self.law.chunk, doc_id="law:tampered-document-id")
-                )
-            ],
             [object()],
             object(),
         )

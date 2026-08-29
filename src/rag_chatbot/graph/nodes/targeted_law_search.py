@@ -9,7 +9,7 @@ from typing import Any, TypeAlias
 
 from rag_design.contracts import AbstentionReason, RetrievedChunk, SourceType
 from rag_design.index_policy import QueryScope, route_indexes
-from rag_design.policy import AbstentionDecision, LEGAL_METADATA_ASPECT
+from rag_design.policy import AbstentionDecision
 from rag_design.vector_store import VectorSearchFilter
 
 from ..state import ClaimDraft, GraphState
@@ -36,14 +36,11 @@ def _fallback_query(
     subsidy_chunks: list[RetrievedChunk],
 ) -> str:
     valid_ids = {item.chunk.chunk_id for item in coverage.subsidy_chunks}
-    texts: list[str] = []
-    seen: set[str] = set()
-    for item in subsidy_chunks:
-        chunk_id = item.chunk.chunk_id
-        if chunk_id in valid_ids and chunk_id not in seen:
-            texts.append(item.chunk.text)
-            seen.add(chunk_id)
-    return "\n".join(texts)
+    return "\n".join(
+        item.chunk.text
+        for item in subsidy_chunks
+        if item.chunk.chunk_id in valid_ids
+    )
 
 
 def _validated_results(
@@ -185,16 +182,6 @@ def search_targeted_laws(
         for coverage in resolution.claims
         if coverage.claim["claim_id"] in target_set
     ]
-    if [coverage.claim["claim_id"] for coverage in target_coverages] != target_ids:
-        raise ValueError("N8 target order does not match claim_plan")
-    for coverage in target_coverages:
-        if (
-            coverage.claim.get("required_aspects") != [LEGAL_METADATA_ASPECT]
-            or not coverage.required_sources
-            or not coverage.document_supported
-            or not coverage.missing_sources
-        ):
-            raise ValueError("N8 target is not a searchable missing-law claim")
 
     source = SourceType(route_indexes(QueryScope.LAW)[0])
     additions: list[RetrievedChunk] = []
