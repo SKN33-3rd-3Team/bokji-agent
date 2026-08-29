@@ -19,6 +19,10 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   `decide_abstention()`, `supported_legal_evidence_aspects()`가 있다.
 - `rag_design.index_policy`와 `vector_store`에는 `route_indexes(QueryScope.LAW)`,
   `VectorSearchFilter`, `ChromaVectorStore.search()`가 있다.
+- `rag_design.chunking`에는 canonical 법령 text renderer와 `compute_chunk_id(Document,
+  ...)`가 있고, `rag_design.citation`에는 subtype별 공식 공개 URL을 만드는
+  `legal_citation_url()`이 있다. N7은 parent `Document`가 없으므로 기존 chunk ID 공식을
+  재구현하지 않고 doc ID 기반 최소 helper를 같은 모듈에서 추출해 공유해야 한다.
 - 법령 인덱스는 `metadata_only`이며 지원 aspect는 `legal_metadata`뿐이다.
 - 테스트는 표준 `unittest`를 사용한다. 관련 기존 테스트 42개는 통과했으며 전체
   suite는 현재 로컬의 `requests`, `chromadb` 미설치 때문에 기준선부터 완전 통과하지
@@ -112,8 +116,8 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   chunk라도 terminal `fail`이다. 실제 law `source_id`와 `source_sequence`도 nonempty
   ASCII decimal 문자열로 검증하며 정수 변환하지 않는다. 한 expected pair에서 같은
   `as_of`에 유효한 서로 다른 `source_sequence`가 동시에 참조되면 어느 버전도 임의
-  선택하지 않고 `CONFLICT`/`fail`한다. 같은 source sequence의 canonical chunk parts는
-  conflict가 아니다.
+  선택하지 않고 `CONFLICT`/`fail`한다. 같은 source sequence의 여러 chunk는 아래의
+  revision·part 불변조건을 모두 만족한 canonical part일 때만 함께 허용한다.
 - 각 law chunk는 `LegalDocumentType`, `compute_document_id()`,
   `compute_content_hash()`, `supported_legal_evidence_aspects()`,
   `is_canonical_date()`와 `chunk_matches_filter()` 등 기존 계약을 조합해 검증한다.
@@ -126,6 +130,44 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   새로 만들지 않는다. N7에서 strict LAW date/interval 위반은 `STALE`/`fail`, hash·
   computed document identity·canonical metadata 위반은 terminal `NO_EVIDENCE`/`fail`로
   고정한다. N8 검색 결과의 같은 위반은 adapter 계약 오류로 전파하고 merge하지 않는다.
+- 각 current law hit는 위 검증에 더해 다음 parentless deterministic 계약을 모두
+  만족해야 한다.
+  - `chunk_part`와 `chunk_part_count`는 bool이 아닌 int이고
+    `0 <= chunk_part < chunk_part_count`, `chunk_part_count > 0`이며
+    `chunk.ordinal == chunk_part`다.
+  - `chunking_config_from_version()`과 `render_legal_metadata_chunk_texts()`로 얻은 text
+    목록 길이가 `chunk_part_count`와 같고, 해당 part text와
+    `compute_content_hash(text)`가 실제 `text`·`content_hash`와 정확히 같다.
+  - `legal_citation_url(law_type=..., source_sequence=...,
+    effective_from=...)`가 metadata의 `source_url`과 정확히 같아야 한다.
+  - `compute_document_id()` 결과가 `doc_id`와 같고,
+    `compute_chunk_id_from_document_id(doc_id, heading_path, chunk_part,
+    chunking_version)` 결과가 `chunk_id`와 같아야 한다. 임의 URL, ordinal, document/chunk
+    ID는 N7에서 terminal `NO_EVIDENCE`/`fail`, N8에서 adapter 오류·전체 미병합이다.
+- 새 N7에는 chunk ID 공식을 복제하지 않는다. `rag_design.chunking`에 정확히
+  `compute_chunk_id_from_document_id(document_id, heading_path, part,
+  config_version)`를 최소 추출하고, 기존 공개 `compute_chunk_id(Document, ...)`가 이
+  helper에 delegate하게 해 API와 결과를 보존한다. N7 strict validator는 새 helper를
+  직접 import한다. `vector_store.py`의 기존 private ingest inline 공식 통합은 이번
+  N7/N8 범위 밖이며 변경 파일에 추가하지 않는다.
+- N7이 참조한 current law chunks를 revision key
+  `(law_type, source_id, source_sequence)`로 묶는다. 같은 revision의 모든 chunk는
+  top-level `schema_version`, `doc_id`, `source_type`, `heading_path`,
+  `citation_locator`가 같고, metadata는 `chunk_part`만 제외한 전체 mapping이 정확히
+  같아야 한다. part별로 달라도 되는 값은 top-level `chunk_id`, `text`, `ordinal`,
+  `content_hash`와 metadata의 `chunk_part`뿐이며 각각 위 deterministic 검증을 통과해야
+  한다. parent invariant 불일치나 같은 `chunk_part`를 서로 다른 evidence payload가
+  가리키는 경우는 `CONFLICT`/`fail`이다. 서로 다른 canonical part는 허용하며 retrieval
+  subset일 수 있으므로 part 번호의 연속성이나 전체 part 수만큼의 수집을 요구하지 않는다.
+  `RetrievedChunk.rank`, `score`, `score_type`, `retriever_version` telemetry는 revision
+  parent 비교에서 제외하고 query/source/index provenance는 앞선 공통 검증으로 별도
+  확인한다.
+- 날짜·interval 검증으로 current 후보를 정한 뒤, 같은 revision에 둘 이상이 있으면
+  parent/part coherence를 개별 canonical payload·ID 실패 매핑보다 먼저 판정한다. 따라서
+  같은 revision의 parent field가 다르거나 같은 part가 상이한 payload를 가리키면 N7은
+  `CONFLICT`; coherent group 안의 단독 arbitrary URL/ID/ordinal/text 위반은 terminal
+  `NO_EVIDENCE`다. 이 precedence로 same-sequence/different-doc·metadata 사례가 단순
+  fabricated hit로 낮아지지 않게 한다.
 - claim별 `legal_metadata`는 선언한 모든 expected pair가 위 검증을 통과한 현재
   canonical law evidence로 덮일 때만 supported다. clean provenance, 유효한 subsidy
   support, metadata-only aspect, retry count 0인 상태에서 일부 expected pair가 전혀
@@ -244,6 +286,8 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   - `supported_legal_evidence_aspects()`가 canonical metadata-only chunk로 인정
   - N7과 동일한 strict date/hash/document-ID 계약을 통과하고 `as_of`가 chunk의
     `[effective_from, effective_to)` 안에 있음
+  - N7과 같은 official `source_url`, part range/count, `ordinal`, rendered text/hash와
+    deterministic document/chunk ID 계약을 통과함
 - 잘못된 결과나 search callable 예외는 빈 결과로 바꾸지 않고 명시적 오류로 전파한다.
   wrong subtype/source ID를 포함한 identity mismatch도 오류다. 정상적인 빈 pair 검색이
   하나라도 나오면 그 N8 실행에서 앞서 수집한 결과까지 claim/law chunks에 merge하지
@@ -261,11 +305,22 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   처리하며 전체 N8 update를 merge하지 않는다. 이미 state에 들어온 conflict는 N7이
   `CONFLICT`/`fail`, N8이 새 결과에서 발견한 conflict는 명시적 conflict 오류로
   전파한다.
+- 같은 pre-dedupe 후보를 revision key로도 묶어 N7과 동일한 top-level·metadata parent
+  invariant와 part uniqueness를 확인한다. 같은 revision의 서로 다른 canonical part는
+  허용하지만 parent invariant가 다르거나 같은 part가 서로 다른 payload를 가리키면
+  adapter/conflict 오류로 전체 update를 merge하지 않는다. evidence-relevant payload가
+  완전히 같고 retrieval telemetry만 다른 동일 `chunk_id` 반복 hit는 기존 계약대로 한
+  payload로 보고 first-seen dedupe한다. subset retrieval에는 contiguous/full-part 조건을
+  추가하지 않는다.
 - 검증된 검색 결과 ID만 대상 claim의 기존 `evidence_chunk_ids` 뒤에 합치고
   `chunk_id` 기준 최초 순서를 보존해 dedupe한다. N8은 `status`를 supported로 확정하지
   않으며 기존 substantive `status`도 임의 변경하지 않는다.
 - 반환 `law_chunks`는 기존 전체 목록 뒤에 신규 결과를 붙이고 `chunk_id` 기준 최초
-  항목을 보존해 dedupe한다. 다른 claims와 입력 state 객체는 수정하지 않는다.
+  항목을 보존해 dedupe한다. `claim_plan`은 정상 빈 결과와 성공 결과 모두
+  `copy.deepcopy()`한 뒤 반환·수정해 nested `evidence_chunk_ids`, `reasons`,
+  `required_law_sources` 목록·dict가 입력 claim과 alias되지 않게 한다. law chunk는 기존
+  read-only value 계약을 유지해 list만 새로 만들고 전체 deep copy하지 않는다. 다른
+  state 필드는 partial merge로 보존한다.
 
 ### State 확장
 
@@ -298,6 +353,9 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 | fabricated ID와 valid ID가 함께 있으면 valid 하나로 통과할 수 있다. | 모든 declared evidence ID를 union에서 exactly-once resolve하고 unknown/dual/cross-query 등 provenance 오류는 retry 없이 fail한다. |
 | 같은 법령 identity의 여러 현행 sequence가 동시에 들어올 수 있다. | `(law_type, source_id)`별 current `source_sequence`를 dedupe 전에 계산해 둘 이상이면 임의 선택 없이 conflict/fail하고 N8은 전체 미병합한다. |
 | 같은 `chunk_id`의 서로 다른 payload가 first-seen dedupe에 숨을 수 있다. | chunk 전체·query/source/index가 같은 duplicate만 허용하고 다른 payload는 dedupe 전 provenance 오류로 전체 미병합한다. |
+| 같은 revision의 chunk parts가 서로 다른 parent metadata를 가리킬 수 있다. | revision key별 top-level parent fields와 `chunk_part` 외 metadata를 exact 비교하고, invariant mismatch·같은 part의 상이한 payload는 N7 conflict/N8 전체 미병합으로 처리한다. canonical subset parts는 허용한다. |
+| parent `Document`가 없는 N7에서 chunk ID 공식을 새로 복제할 위험이 있다. | N7은 `compute_chunk_id_from_document_id()`를 사용하고 기존 `compute_chunk_id()`가 그 helper에 delegate한다. `vector_store.py`의 기존 private ingest 공식 통합은 범위 밖이다. |
+| N8의 shallow claim copy가 nested producer state를 alias할 수 있다. | 빈 결과와 성공 결과 모두 `copy.deepcopy(claim_plan)`을 반환하고 immutable/read-only law values는 deep copy하지 않는다. |
 | N8에 검색 가능한 claim 문장이 없다. | optional `search_query`를 추가하고 검증된 matching subsidy text만 deterministic fallback으로 허용한다. |
 | 그림의 법률 분류와 저장소 `law_type`이 다르다. | 저장소의 `law`, `admrul`, `ordin`과 전 subtype 공통 `source_sequence`만 사용한다. |
 | law 검색 결과가 substantive 법률 주장도 지지하는 것으로 오해될 수 있다. | subsidy evidence가 이미 substantive claim을 지지하고 남은 aspect가 `legal_metadata`일 때만 보충 가능하다. article/interpretation은 즉시 fail한다. |
@@ -309,32 +367,37 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 
 | 파일 | 변경 |
 | --- | --- |
+| `rag_design/chunking.py` | `compute_chunk_id_from_document_id()` 최소 추출, 기존 `compute_chunk_id(Document, ...)` delegate로 API·결과 보존 |
 | `src/rag_chatbot/graph/state.py` | `ClaimType`, total `LawSourceRef`, `EvidenceGateVerdict`, `ClaimDraft`, `GraphState` optional 필드 추가 |
 | `src/rag_chatbot/graph/nodes/evidence_gate.py` | 공용 provenance/coverage resolver와 `evaluate_evidence(state: GraphState) -> dict` 구현 |
 | `src/rag_chatbot/graph/nodes/targeted_law_search.py` | `LawSearch`, `search_targeted_laws(state, *, search)` 구현 |
 | `src/rag_chatbot/graph/nodes/__init__.py` | 두 실제 노드 함수 re-export |
 | `tests/test_evidence_gate_and_targeted_law_search.py` | fake searcher 기반 단일 `unittest` 파일 추가 |
 
-`rag_design`, requirements, graph builder와 N5/N6/N9 파일은 변경하지 않는다.
+구현 변경 파일은 위 6개로 고정한다. `rag_design`에서는 `chunking.py`의 공유 helper 추출
+외에는 건드리지 않고 requirements, graph builder와 N5/N6/N9 파일은 변경하지 않는다.
 
 ## 구현 단계
 
-1. `state.py`에 claim/source identity type, verdict와 optional producer/output 필드를
+1. `rag_design.chunking`에서 doc ID 기반 chunk ID helper를 추출하고 기존 API의 결과
+   동등성을 고정한다.
+2. `state.py`에 claim/source identity type, verdict와 optional producer/output 필드를
    추가한다.
-2. N7 입력 검증에서 query ID, exact claim type, ordered unique claims/evidence/source
+3. N7 입력 검증에서 query ID, exact claim type, ordered unique claims/evidence/source
    pairs, safety bool, counters, canonical `as_of`를 확인한다.
-3. N7/N8이 함께 쓰는 단일 resolver에서 declared evidence를 exactly-once resolve하고
+4. N7/N8이 함께 쓰는 단일 resolver에서 declared evidence를 exactly-once resolve하고
    query/pool/source/policy/law identity provenance를 검증한다.
-4. LAW는 기존 schema/hash/document/canonical/date helpers를 조합해 strict 검증하고,
+5. LAW는 기존 schema/hash/document/canonical/date/citation helpers와 공유 chunk ID
+   helper를 조합해 per-hit deterministic 계약 및 revision/part coherence를 검증하고,
    subsidy는 기존 `MetadataFilter`/`chunk_matches_filter()`의 optional date 경계를 유지한다.
-5. claim별 all-of law source coverage와 실제 supported aspects를 계산해 provenance
+6. claim별 all-of law source coverage와 실제 supported aspects를 계산해 provenance
    terminal fail, 4-way verdict, retry 상한과 stale 방지 전체 output을 반환한다.
-6. N8에서 N7 provenance output과 exact target 재계산을 확인한 뒤 missing pair별 exact
+7. N8에서 N7 provenance output과 exact target 재계산을 확인한 뒤 missing pair별 exact
    metadata filter로 direct callable을 호출하고, 결과 identity/contract 검증,
-   same-ID payload·복수 current sequence pre-dedupe 검증 후 claim별 evidence·전체 law
-   chunk dedupe를 구현한다.
-7. 실제 노드 함수를 `nodes/__init__.py`에서 re-export한다.
-8. 단일 테스트 파일로 연결부·provenance 실패 경계·입력 불변성과 metadata-only 제한을
+   same-ID payload·revision coherence·복수 current sequence pre-dedupe 검증 후 deep-copied
+   claim별 evidence·전체 law chunk dedupe를 구현한다.
+8. 실제 노드 함수를 `nodes/__init__.py`에서 re-export한다.
+9. 단일 테스트 파일로 연결부·provenance 실패 경계·입력 불변성과 metadata-only 제한을
    검증한다.
 
 ## 테스트 매트릭스
@@ -360,11 +423,13 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 | T15 | fake search 실제 호출 계약 | missing pair마다 LAW source, 동일 query ID, canonical as-of와 exact `law_type/source_id` filter |
 | T15-A | N8 entry provenance 묶음 검증 | safety/verdict/count/NO_EVIDENCE/missing-docs, canonical as-of와 재계산 target exact equality가 틀리면 search 전 오류 |
 | T16 | wrong subtype/unrelated source, non-ASCII·nondecimal source ID/sequence와 result mismatch | malformed/unexpected pair는 N7 terminal fail; N8 wrong pair 결과는 명시적 오류·미병합 |
-| T17 | 기존+신규 same-ID law chunks | evidence-relevant payload가 동일한 duplicate만 first-seen 허용; same-ID/different payload와 복수 current sequence는 dedupe 전 거부·전체 미병합 |
+| T17 | 기존+신규 same-ID law chunks와 same-part payload | evidence-relevant payload가 동일한 telemetry duplicate만 first-seen 허용; same-ID/different payload, 같은 revision·part의 상이한 payload와 복수 current sequence는 dedupe 전 거부·전체 미병합 |
 | T18 | search 예외 | 그대로 전파하고 빈 결과로 은폐하지 않음 |
-| T19 | input immutability와 partial merge | 입력 lists/dicts 불변, `slots` 등 무관 state 유지, N7 output key 매번 초기화 |
+| T19 | input immutability, nested alias와 partial merge | 빈 검색·성공 검색 모두 반환 claim의 nested list/dict를 수정해도 입력 claim은 불변; law value는 그대로 재사용하고 `slots` 등 무관 state 유지, N7 output key 매번 초기화 |
 | T20 | 여러 `required_law_sources`의 일부/전체 충족 | all-of라서 일부만 있으면 정확히 missing, unrelated top hit로 대체 금지, 전부 충족 시 pass |
-| T21 | LAW date/hash/document identity 변조 | from/effective/issued/optional dates canonical, effective 일치, `to > from`, hash와 computed doc ID 검증 |
+| T21 | LAW date/hash/URL/deterministic identity/ordinal 변조 | date·interval, rendered text/hash, exact official citation URL, computed doc/chunk ID, part range/count와 `ordinal == chunk_part` 검증 |
+| T22 | 같은 revision의 multi-part와 parent 불일치 | canonical한 서로 다른 subset parts는 pass; schema/doc/source/heading/locator, effective/date 등 `chunk_part` 외 metadata가 다르거나 같은 part가 상이한 payload면 N7 CONFLICT, N8 오류·전체 미병합 |
+| T23 | chunk ID helper 호환성과 관련 회귀 | 같은 Document·heading·part·config에서 기존 `compute_chunk_id()`와 새 `compute_chunk_id_from_document_id()` 결과가 정확히 동일하고 기존 chunking/vector-store 관련 회귀가 유지됨 |
 
 테스트 파일은 기존 collector 테스트처럼 repository root의 `src`를 `sys.path`에
 bootstrap한다. 현재 Codex 환경에는 `python`이 PATH에 없으므로 로컬 검증은 번들
@@ -396,19 +461,26 @@ git diff --check
 - safety, conflict, canonical as-of와 source별 저장소 날짜 계약을 기존 filter helper로
   fail-closed 검증한다.
 - LAW는 canonical date/effective interval, content hash, computed document ID와 canonical
-  metadata-only projection을 기존 helpers로 검증하며 같은 identity의 복수 current
-  sequence를 conflict 처리한다. subsidy `None` dates는 기존 unbounded 계약을 유지한다.
+  metadata-only projection, exact official citation URL, part/ordinal과 deterministic chunk
+  ID를 기존·공유 helpers로 검증한다. 같은 identity의 복수 current sequence와 같은
+  revision의 parent/part ambiguity는 conflict 처리하고 canonical subset parts는 허용한다.
+  subsidy `None` dates는 기존 unbounded 계약을 유지한다.
+- 새 N7은 chunk ID 공식을 복제하지 않고 `compute_chunk_id_from_document_id()`를 직접
+  사용하며, 기존 `compute_chunk_id(Document, ...)`는 그 helper에 delegate해 API·출력을
+  보존한다. `vector_store.py`의 기존 private ingest inline 공식 통합은 범위 밖이다.
 - N8이 proven `insufficient_law` state의 missing pair만 exact identity filter로 검색하고
   검증된 결과만 순서 보존·dedupe 병합한다. top hit identity 역선택은 없다.
 - N8은 combined 기존·신규 law candidates의 same-ID evidence payload와 identity별 current
-  sequence conflict를 dedupe 전에 검증하며, 불일치·conflict에서 전체 update를
-  merge하지 않는다.
+  sequence, revision parent/part coherence를 dedupe 전에 검증하며, 불일치·conflict에서
+  전체 update를 merge하지 않는다.
 - N8은 verdict/count/decision/missing-docs, target 재계산과 as-of를 독립 검증해
   malformed/unknown/duplicate/non-law/stale/추가·누락 target을 검색하지 않는다.
 - metadata-only 법령을 substantive 근거로 승격하지 않고 article/interpretation은
   검색 없이 fail한다. 실제로 지원된 claim별 aspect를 반영해 이미 충족된
   `legal_metadata`를 `missing_aspects`에 다시 넣지 않는다.
 - 잘못된 입력과 검색 오류를 숨기지 않으며 입력 state와 무관 필드를 수정하지 않는다.
+  N8의 빈 결과·성공 결과 claim plan은 nested alias가 없는 deep copy이고 law chunk value는
+  불필요하게 복제하지 않는다.
 - 신규 테스트와 관련 회귀가 통과하고 전체 suite의 기존 환경 실패를 구분해 기록한다.
 - 새 의존성, factory, graph builder, LLM 질의 생성, N5/N6/N9 구현을 추가하지 않는다.
 - N5/N6가 official structured metadata에서 `required_aspects`, nonempty
