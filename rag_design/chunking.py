@@ -103,6 +103,21 @@ def render_legal_metadata_chunk_texts(
     return tuple(f"{prefix}\n\n{part}" for part in parts)
 
 
+def compute_chunk_id_from_document_id(
+    document_id: str,
+    heading_path: tuple[str, ...],
+    part: int,
+    config_version: str,
+) -> str:
+    """Derive a stable chunk ID from a parent ID and source location."""
+
+    identity = "\x1f".join(
+        (document_id, *heading_path, str(part), config_version)
+    )
+    suffix = sha256(identity.encode("utf-8")).hexdigest()[:20]
+    return f"{document_id}:chunk:{suffix}"
+
+
 def compute_chunk_id(
     document: Document,
     heading_path: tuple[str, ...],
@@ -111,11 +126,9 @@ def compute_chunk_id(
 ) -> str:
     """Derive a stable ID from source location and chunking configuration."""
 
-    identity = "\x1f".join(
-        (document.doc_id, *heading_path, str(part), config_version)
+    return compute_chunk_id_from_document_id(
+        document.doc_id, heading_path, part, config_version
     )
-    suffix = sha256(identity.encode("utf-8")).hexdigest()[:20]
-    return f"{document.doc_id}:chunk:{suffix}"
 
 
 def _prefix(document: Document, heading_path: tuple[str, ...]) -> str:

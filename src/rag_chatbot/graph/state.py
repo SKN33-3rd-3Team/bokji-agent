@@ -1,7 +1,7 @@
-"""답변 그래프 State 계약 (N9~N12 범위, Issue #11).
+"""답변 그래프 State 계약 (N7~N12 범위).
 
-이 파일은 N9~N12 노드가 주고받는 필드만 정의한다. N1~N8, N13~N14가
-쓰는 필드(slots 세부, claim_plan의 생성 단계, subsidy_chunks/law_chunks 등)는
+이 파일은 N7~N12 노드가 주고받는 필드만 정의한다. N1~N6, N13~N14가
+쓰는 필드(slots 세부, claim_plan의 생성 단계 등)는
 해당 노드를 만드는 Issue에서 이 파일에 이어서 추가한다.
 
 공용 파일이므로 변경 시 담당자 1인이 제안 -> 리뷰 -> 반영 순서로만 수정한다.
@@ -9,9 +9,24 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from rag_design.contracts import RetrievedChunk
+from rag_design.policy import AbstentionDecision
+
+
+ClaimType = Literal["eligibility", "amount", "duplicate"]
+EvidenceGateVerdict = Literal[
+    "pass",
+    "insufficient_document",
+    "insufficient_law",
+    "fail",
+]
+
+
+class LawSourceRef(TypedDict):
+    law_type: Literal["law", "admrul", "ordin"]
+    source_id: str
 
 
 class SlotState(TypedDict, total=False):
@@ -26,12 +41,15 @@ class SlotState(TypedDict, total=False):
 class ClaimDraft(TypedDict, total=False):
     claim_id: str
     policy_id: str
-    claim_type: str
+    claim_type: ClaimType
     doc_check_required: bool
     law_check_required: bool
     evidence_chunk_ids: list[str]
     status: str
     reasons: list[str]
+    search_query: str
+    required_aspects: list[str]
+    required_law_sources: list[LawSourceRef]
 
 
 class EligibilityVerdict(TypedDict, total=False):
@@ -65,3 +83,11 @@ class GraphState(TypedDict, total=False):
     duplicate_verdicts: list[DuplicateVerdict]
     assembled_result: dict[str, Any]
     node_trace: list[str]
+    as_of: str
+    safety_blocked: bool
+    evidence_gate_verdict: EvidenceGateVerdict
+    abstention_decision: AbstentionDecision
+    missing_document_claim_ids: list[str]
+    missing_law_claim_ids: list[str]
+    doc_retry_count: int
+    law_retry_count: int

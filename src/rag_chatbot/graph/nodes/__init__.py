@@ -1,9 +1,7 @@
-"""노드 함수를 한 곳에서 re-export한다.
+"""노드 함수를 한 곳에서 re-export한다."""
 
-"""
+from .evidence_gate import evaluate_evidence
+from .targeted_law_search import search_targeted_laws
 
-# from .eligibility_verdict import determine_eligibility # N9 자격 판정 (예시)
 
-__all__ = [
-    # "determine_eligibility", (N9 예시)
-]
+__all__ = ["evaluate_evidence", "search_targeted_laws"]
