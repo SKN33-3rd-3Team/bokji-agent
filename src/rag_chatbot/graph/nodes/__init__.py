@@ -2,8 +2,8 @@
 
 """
 
-# from .eligibility_verdict import determine_eligibility # N9 자격 판정 (예시)
+from .duplicate_benefit import check_duplicate_benefit  # N11 중복수급 판정
 
 __all__ = [
-    # "determine_eligibility", (N9 예시)
+    "check_duplicate_benefit",
 ]
