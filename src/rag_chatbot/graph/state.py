@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from rag_design.contracts import RetrievedChunk
+from rag_design.contracts import EvidenceStatus, RetrievedChunk
 
 
 class SlotState(TypedDict, total=False):
@@ -30,7 +30,7 @@ class ClaimDraft(TypedDict, total=False):
     doc_check_required: bool
     law_check_required: bool
     evidence_chunk_ids: list[str]
-    status: str
+    status: EvidenceStatus  # rag_design.contracts.EvidenceStatus 값
     reasons: list[str]
 
 
