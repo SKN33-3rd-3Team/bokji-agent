@@ -2,8 +2,8 @@
 
 """
 
-# from .eligibility_verdict import determine_eligibility # N9 자격 판정 (예시)
+from .result_assembly import assemble_result  # N12 결과 조립
 
 __all__ = [
-    # "determine_eligibility", (N9 예시)
+    "assemble_result",
 ]
