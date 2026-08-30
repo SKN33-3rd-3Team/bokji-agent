@@ -2,8 +2,8 @@
 
 """
 
-# from .eligibility_verdict import determine_eligibility # N9 자격 판정 (예시)
+from .benefit_calculator import calculate_benefit_amount  # N10 지원금 계산
 
 __all__ = [
-    # "determine_eligibility", (N9 예시)
+    "calculate_benefit_amount",
 ]
