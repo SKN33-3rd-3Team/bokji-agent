@@ -15,7 +15,7 @@ from rag_design.contracts import Document, SourceType
 from rag_design.embeddings import HashEmbeddingProvider
 from rag_design.vector_store import ChromaVectorStore, VectorStoreConfig
 
-from rag_chatbot.graph.nodes.policy_search import search_policies
+from rag_chatbot.graph.nodes.policy_search import _build_query, search_policies
 
 try:
     import chromadb as _chromadb  # noqa: F401
@@ -95,6 +95,45 @@ class SearchPoliciesNodeTests(unittest.TestCase):
     def test_search_policies_requires_as_of(self) -> None:
         with self.assertRaises(ValueError):
             search_policies({"query_id": "q-3", "slots": {}}, self.store)
+
+
+class BuildQueryTests(unittest.TestCase):
+    """검색 질의 조립 (2026-08-31 변경).
+
+    예전에는 interests 키워드만 썼고 사용자의 실제 문장은 검색에 전혀
+    반영되지 않았다. "안녕"으로 시작한 대화가 고정 fallback 질의로 넘어가
+    관계없는 정책 5건이 추천된 일이 있었다.
+    """
+
+    def test_interests_and_question_are_combined(self) -> None:
+        query = _build_query({"interests": ["육아"]}, "아이 키우는데 지원 뭐 있나요")
+        self.assertIn("육아", query)
+        self.assertIn("아이 키우는데", query)
+
+    def test_question_alone_is_enough_when_no_interest_keyword_matched(self) -> None:
+        # 관심사 키워드 표에 없는 표현이어도 질문 자체로 검색할 수 있어야 한다.
+        query = _build_query({"interests": []}, "혼자 사는데 월세가 너무 부담돼요")
+        self.assertIn("월세", query)
+
+    def test_greeting_too_short_to_be_query_material_uses_fallback(self) -> None:
+        self.assertEqual(_build_query({"interests": []}, "안녕"), "생활 지원 복지 서비스")
+
+    def test_no_material_at_all_uses_fallback(self) -> None:
+        self.assertEqual(_build_query({"interests": []}, None), "생활 지원 복지 서비스")
+
+    def test_query_never_carries_pii(self) -> None:
+        # 검색 로그와 임베딩 provider로 PII가 나가면 안 된다.
+        query = _build_query(
+            {"interests": ["주거"]},
+            "제 번호는 010-1234-5678이고 1990년 3월 15일생인데 월세 지원 있나요",
+        )
+        self.assertNotIn("010-1234-5678", query)
+        self.assertNotIn("1990년 3월 15일", query)
+        self.assertIn("월세", query)
+
+    def test_long_question_is_truncated(self) -> None:
+        query = _build_query({"interests": []}, "월세" * 300)
+        self.assertLessEqual(len(query), 220)
 
 
 if __name__ == "__main__":
