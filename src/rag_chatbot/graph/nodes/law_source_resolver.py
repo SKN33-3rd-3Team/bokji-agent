@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Protocol
 
-from rag_chatbot.graph.state import RequiredLawSource
+from ..state import RequiredLawSource
 
 # 근거법령 섹션 내용 형식: "법령명(제N조)||법령명(제N조)" (filtered_to_document.py,
 # 예전에 확인했던 실제 형식 그대로).

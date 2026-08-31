@@ -24,8 +24,8 @@ from __future__ import annotations
 from rag_design.contracts import SourceType
 from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
 
-from rag_chatbot.graph.llm_gateway import redact_sensitive_text
-from rag_chatbot.graph.state import GraphState
+from ..llm_gateway import redact_sensitive_text
+from ..state import GraphState
 
 DEFAULT_TOP_K = 5
 # interests가 비어있을 때 쓰는 넓은 검색어. 결정사항 로그의 "interests 없음

@@ -31,11 +31,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from rag_chatbot.graph.nodes.law_source_resolver import (
+from .law_source_resolver import (
     LawSourceResolver,
     resolve_required_law_sources,
 )
-from rag_chatbot.graph.state import ClaimDraft, GraphState, RetrievedChunk
+from ..state import ClaimDraft, GraphState, RetrievedChunk
 
 CLAIM_TYPES = ("eligibility", "amount", "duplicate")
 
