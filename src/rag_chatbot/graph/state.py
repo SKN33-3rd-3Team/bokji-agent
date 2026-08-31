@@ -1,7 +1,7 @@
-"""답변 그래프 State 계약 (N9~N12 범위, Issue #11).
+"""답변 그래프 State 계약 (N1~N3, N9~N12 범위, Issue #11).
 
-이 파일은 N9~N12 노드가 주고받는 필드만 정의한다. N1~N8, N13~N14가
-쓰는 필드(slots 세부, claim_plan의 생성 단계, subsidy_chunks/law_chunks 등)는
+이 파일은 N1~N3(N2a 포함), N9~N12 노드가 주고받는 필드만 정의한다.
+N4~N8, N13~N14가 쓰는 필드(claim_plan의 생성 단계, law_chunks 소비 상세 등)는
 해당 노드를 만드는 Issue에서 이 파일에 이어서 추가한다.
 
 공용 파일이므로 변경 시 담당자 1인이 제안 -> 리뷰 -> 반영 순서로만 수정한다.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from rag_design.contracts import RetrievedChunk
+from rag_design.contracts import Citation, RetrievedChunk
 
 
 class SlotState(TypedDict, total=False):
@@ -56,7 +56,12 @@ class DuplicateVerdict(TypedDict, total=False):
 
 class GraphState(TypedDict, total=False):
     query_id: str
+    user_input: str
     slots: SlotState
+    missing_slots: list[str]
+    general_law_references: list[Citation]
+    needs_input: bool
+    followup_question: str | None
     subsidy_chunks: list[RetrievedChunk]
     law_chunks: list[RetrievedChunk]
     claim_plan: list[ClaimDraft]
