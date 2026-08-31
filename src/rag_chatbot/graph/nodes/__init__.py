@@ -2,8 +2,8 @@
 
 """
 
-# from .eligibility_verdict import determine_eligibility # N9 자격 판정 (예시)
+from .eligibility_verdict import determine_eligibility  # N9 자격 판정
 
 __all__ = [
-    # "determine_eligibility", (N9 예시)
+    "determine_eligibility",
 ]
