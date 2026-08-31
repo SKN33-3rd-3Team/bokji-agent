@@ -41,6 +41,7 @@ data/processed/*
 !data/processed/subsidy_manifest.json
 !data/processed/law_manifest.json
 *_log.txt
+*.bin
 
 # Persistent vector indexes
 .runtime/vector_db/

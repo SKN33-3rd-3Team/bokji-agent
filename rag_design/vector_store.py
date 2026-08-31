@@ -728,33 +728,53 @@ class ChromaVectorStore:
             "rag_expected_count": expected_count,
         }
 
+    # Chroma's sqlite backend binds one SQL variable per matched row when it
+    # resolves a get() with no id/where filter; an unbatched get() on a large
+    # collection (tens of thousands of chunks) can exceed sqlite's bound
+    # parameter limit ("too many SQL variables"). Reading in fixed-size pages
+    # keeps each underlying query well under that limit regardless of
+    # collection size.
+    _READ_RECORDS_BATCH_SIZE = 500
+    _MAX_QUERY_N_RESULTS = 2000
+
     def _read_records(
         self, collection: Any
     ) -> dict[str, tuple[str, Mapping[str, Any]]]:
-        try:
-            result = collection.get(include=["metadatas", "documents"])
-        except Exception as exc:
-            raise VectorStoreError("failed to read a Chroma generation") from exc
-        ids = list(result.get("ids") or [])
-        documents = list(result.get("documents") or [])
-        metadatas = list(result.get("metadatas") or [])
-        if not (len(ids) == len(documents) == len(metadatas)):
-            raise CorruptVectorRecordError(
-                "Chroma generation returned inconsistent record arrays"
-            )
         records: dict[str, tuple[str, Mapping[str, Any]]] = {}
-        for record_id, document, metadata in zip(ids, documents, metadatas):
-            if (
-                not isinstance(record_id, str)
-                or not isinstance(document, str)
-                or not isinstance(metadata, Mapping)
-                or record_id in records
-            ):
-                raise CorruptVectorRecordError(
-                    "Chroma generation contains an invalid record"
+        offset = 0
+        while True:
+            try:
+                result = collection.get(
+                    include=["metadatas", "documents"],
+                    limit=self._READ_RECORDS_BATCH_SIZE,
+                    offset=offset,
                 )
-            self._decode_chunk(record_id, document, metadata)
-            records[record_id] = (document, metadata)
+            except Exception as exc:
+                raise VectorStoreError("failed to read a Chroma generation") from exc
+            ids = list(result.get("ids") or [])
+            if not ids:
+                break
+            documents = list(result.get("documents") or [])
+            metadatas = list(result.get("metadatas") or [])
+            if not (len(ids) == len(documents) == len(metadatas)):
+                raise CorruptVectorRecordError(
+                    "Chroma generation returned inconsistent record arrays"
+                )
+            for record_id, document, metadata in zip(ids, documents, metadatas):
+                if (
+                    not isinstance(record_id, str)
+                    or not isinstance(document, str)
+                    or not isinstance(metadata, Mapping)
+                    or record_id in records
+                ):
+                    raise CorruptVectorRecordError(
+                        "Chroma generation contains an invalid record"
+                    )
+                self._decode_chunk(record_id, document, metadata)
+                records[record_id] = (document, metadata)
+            if len(ids) < self._READ_RECORDS_BATCH_SIZE:
+                break
+            offset += self._READ_RECORDS_BATCH_SIZE
         return records
 
     def _verify_generation(
@@ -1152,11 +1172,20 @@ class ChromaVectorStore:
         vector = self._validate_embeddings(
             [self.embedding_provider.embed_query(query)], 1
         )[0]
+        # Fetch all pushdown matches so post-filtering can still return true
+        # top-k, but capped: an uncapped n_results=count query binds one SQL
+        # variable per candidate row and, on a large collection, exceeds
+        # sqlite's bound-parameter limit the same way an unbatched get() does
+        # (see _read_records). Cosine-similarity ranking clusters true
+        # matches near the top, so a generous cap still yields the correct
+        # top-k in practice; only a search_filter that rejects almost every
+        # near-neighbor on a very large collection could theoretically drop a
+        # true match ranked beyond the cap.
+        requested_n_results = min(count, self._MAX_QUERY_N_RESULTS)
         try:
-            # Fetch all pushdown matches so post-filtering can still return true top-k.
             result = collection.query(
                 query_embeddings=[vector],
-                n_results=count,
+                n_results=requested_n_results,
                 where=self._query_where(search_filter),
                 include=["documents", "metadatas", "distances"],
             )

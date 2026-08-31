@@ -11,7 +11,8 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
-from .contracts import Chunk, SourceType
+from .chunking import ChunkingConfig, chunk_document
+from .contracts import Chunk, Document, SourceType
 from .embeddings import (
     EmbeddingProviderError,
     HashEmbeddingProvider,
@@ -58,6 +59,57 @@ def _load_chunks(path: Path) -> list[Chunk]:
     return chunks
 
 
+def _load_documents(path: Path) -> list[Document]:
+    documents: list[Document] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            documents.append(Document.from_dict(json.loads(line)))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid document JSONL at line {line_number}") from exc
+    return documents
+
+
+def _chunk_documents(
+    documents: Sequence[Document],
+    source_type: SourceType,
+    config: ChunkingConfig,
+) -> list[Chunk]:
+    """Chunk every document, failing fast on a source_type mismatch.
+
+    A mixed-source input file is rejected here (with the offending doc_id)
+    rather than later at ``sync_snapshot``, which only reports the mismatch
+    count, not which document caused it.
+    """
+
+    chunks: list[Chunk] = []
+    for document in documents:
+        if document.source_type is not source_type:
+            raise ValueError(
+                f"document {document.doc_id} has source_type="
+                f"{document.source_type.value}, expected {source_type.value}"
+            )
+        try:
+            chunks.extend(chunk_document(document, config))
+        except ValueError as exc:
+            raise ValueError(
+                f"failed to chunk document {document.doc_id}: {exc}"
+            ) from exc
+    return chunks
+
+
+def _secret_values() -> tuple[str, ...]:
+    return tuple(
+        value
+        for value in (
+            os.environ.get("DATA_GO_KR_API_KEY"),
+            os.environ.get("OPENLAW_API_KEY"),
+        )
+        if value
+    )
+
+
 def _metadata_filters(values: Sequence[str]) -> dict[str, str | int | float | bool]:
     """Parse key=value filters while preserving supported JSON scalar types."""
 
@@ -94,6 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--snapshot-id", required=True)
     index.add_argument("--chunks", type=Path, required=True)
     index.add_argument("--chunking-version")
+
+    index_documents = subparsers.add_parser("index-documents")
+    index_documents.add_argument("--source", choices=("subsidy", "law"), required=True)
+    index_documents.add_argument("--snapshot-id", required=True)
+    index_documents.add_argument("--documents", type=Path, required=True)
+    index_documents.add_argument("--max-chars", type=int, default=800)
+    index_documents.add_argument("--overlap-chars", type=int, default=100)
+    index_documents.add_argument("--chunks-out", type=Path)
 
     search = subparsers.add_parser("search")
     search.add_argument("--source", choices=("subsidy", "law"), required=True)
@@ -132,17 +192,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _load_chunks(args.chunks),
                 snapshot_id=args.snapshot_id,
                 chunking_version=args.chunking_version,
-                secret_values=tuple(
-                    value
-                    for value in (
-                        os.environ.get("DATA_GO_KR_API_KEY"),
-                        os.environ.get("OPENLAW_API_KEY"),
-                    )
-                    if value
-                ),
+                secret_values=_secret_values(),
             )
             payload = asdict(result)
             payload["source_type"] = result.source_type.value
+        elif args.command == "index-documents":
+            documents = _load_documents(args.documents)
+            chunking_config = ChunkingConfig(args.max_chars, args.overlap_chars)
+            chunks = _chunk_documents(documents, source_type, chunking_config)
+            if args.chunks_out is not None:
+                with args.chunks_out.open("w", encoding="utf-8") as handle:
+                    for chunk in chunks:
+                        handle.write(json.dumps(chunk.to_dict(), ensure_ascii=False))
+                        handle.write("\n")
+            result = store.sync_snapshot(
+                source_type,
+                chunks,
+                snapshot_id=args.snapshot_id,
+                secret_values=_secret_values(),
+            )
+            payload = asdict(result)
+            payload["source_type"] = result.source_type.value
+            payload["document_count"] = len(documents)
+            payload["chunk_count"] = len(chunks)
         elif args.command == "search":
             search_filter = VectorSearchFilter(
                 as_of=args.as_of,
