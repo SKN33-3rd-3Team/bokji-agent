@@ -27,8 +27,12 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+import re
+
 from dotenv import load_dotenv
 from rag_design.citation import sanitize_public_url
+from rag_design.url_safety import SECRET_QUERY_NAMES
 
 from .region_utils import extract_region, load_sigungu_code_table
 
@@ -123,11 +127,45 @@ def _normalize_updated_at(value: str | None) -> str | None:
         return None
 
 
+_EMBEDDED_URL_PATTERN = re.compile(r"https?://[^\s)\]}>,;\"']+")
+
+
+def _strip_secret_query_params(url: str) -> str:
+    """본문 속에 인용된(citation이 아닌) URL에서 시크릿성 쿼리파라미터 이름만 제거한다.
+
+    지원내용/신청방법 등 원문에 포함된 외부 링크(예: 지자체 게시판)는 우리가
+    통제하지 않는 임의의 도메인이라 sanitize_public_url(공식 도메인 전용)을
+    쓸 수 없다. 그런데 "key=258"처럼 실제로는 게시글 번호일 뿐인데 파라미터
+    이름이 SECRET_QUERY_NAMES와 우연히 겹치는 경우가 있어서, vector_store의
+    보안 검증(contains_credential_material)에 오탐으로 걸린다. 값이 아니라
+    "이름"만 보고 걸러내는 것이므로, 여기서도 이름만 보고 해당 파라미터만
+    제거하고(bbsNo/nttNo 같은 나머지 파라미터는 그대로 둔다) 실제 진짜
+    시크릿 값 자체를 판단하려 하지 않는다.
+    """
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    kept = [
+        (name, value)
+        for name, value in parse_qsl(parts.query, keep_blank_values=True)
+        if unquote(name).casefold() not in SECRET_QUERY_NAMES
+    ]
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(kept, doseq=True), parts.fragment)
+    )
+
+
+def _sanitize_embedded_urls(text: str) -> str:
+    """본문에 박혀 있는 모든 URL에 대해 시크릿성 쿼리파라미터 이름만 제거한다."""
+    return _EMBEDDED_URL_PATTERN.sub(lambda m: _strip_secret_query_params(m.group(0)), text)
+
+
 def _clean_text(text: str) -> str:
-    """공백/개행 정규화. 빈 줄과 앞뒤 공백만 정리하고 내용은 손대지 않는다."""
+    """공백/개행 정규화 + 본문 속 URL의 시크릿성 쿼리파라미터 제거."""
     lines = [line.strip() for line in text.replace("\r\n", "\n").split("\n")]
     lines = [line for line in lines if line]
-    return "\n".join(lines)
+    cleaned = "\n".join(lines)
+    return _sanitize_embedded_urls(cleaned)
 
 
 def _build_sections(item: dict) -> list[dict]:
