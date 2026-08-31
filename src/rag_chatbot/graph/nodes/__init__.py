@@ -17,6 +17,15 @@ from .eligibility_verdict import determine_eligibility  # N9 자격 판정
 from .benefit_calculator import calculate_benefit_amount  # N10 지원금 계산
 from .duplicate_benefit import check_duplicate_benefit  # N11 중복수급 판정
 from .result_assembly import assemble_result  # N12 결과 조립
+from .answer_generation import generate_answer  # N13 답변 생성
+from .final_verification import (  # N14 최종 Claim-Citation 검증
+    route_final_verification,
+    verify_final_answer,
+)
+from .claim_extractor import (  # N5 plan_claims에 주입하는 ClaimExtractor 구현체
+    LLMClaimExtractor,
+    RuleBasedClaimExtractor,
+)
 
 __all__ = [
     "parse_slots",
@@ -35,4 +44,9 @@ __all__ = [
     "calculate_benefit_amount",
     "check_duplicate_benefit",
     "assemble_result",
+    "generate_answer",
+    "verify_final_answer",
+    "route_final_verification",
+    "RuleBasedClaimExtractor",
+    "LLMClaimExtractor",
 ]

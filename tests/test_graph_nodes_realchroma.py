@@ -59,7 +59,7 @@ class DetermineEligibilityRealChromaTests(unittest.TestCase):
         self.store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
 
         subsidy_document = _load_subsidy_document()
-        self.policy_id = subsidy_document.doc_id
+        self.policy_id = subsidy_document.source_id
         self.subsidy_chunks = chunk_document(subsidy_document)
 
     def tearDown(self) -> None:
@@ -91,7 +91,16 @@ class DetermineEligibilityRealChromaTests(unittest.TestCase):
             result,
             {
                 "eligibility_verdicts": [
-                    {"policy_id": self.policy_id, "verdict": "충족", "reasons": ["근거 문장"]}
+                    {
+                        "policy_id": self.policy_id,
+                        "verdict": "충족",
+                        "reasons": ["근거 문장"],
+                        # 실제 문서 metadata로 대조한 조건은 연령뿐이다.
+                        # 나머지는 문서 쪽에 구조화된 기준이 없어 비교 자체를
+                        # 못 하므로 "확인 안 함"으로 정직하게 남는다.
+                        "checked": ["연령"],
+                        "unchecked": ["장애 여부", "성별", "소득 수준", "취업 상태"],
+                    }
                 ]
             },
         )

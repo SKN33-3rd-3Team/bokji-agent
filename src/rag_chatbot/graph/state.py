@@ -1,9 +1,8 @@
+"""답변 그래프 State 계약 (N1~N14 범위).
 
-"""답변 그래프 State 계약 (N1~N12 범위).
-
-이 파일은 N1~N12 노드가 주고받는 필드만 정의한다. N1~N3, N13~N14가
-쓰는 필드는
-해당 노드를 만드는 Issue에서 이 파일에 이어서 추가한다.
+이 파일은 N1~N14 노드가 주고받는 필드를 정의한다. N1~N3(슬롯 파싱/적합성
+체크/추가 정보 요청) 필드는 Issue #21에서, N13~N14(답변 생성/최종 검증)
+필드는 Issue #25(graph builder 조립)에서 이어서 추가했다.
 
 공용 파일이므로 변경 시 담당자 1인이 제안 -> 리뷰 -> 반영 순서로만 수정한다.
 """
@@ -13,6 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal, TypedDict
 
+from rag_design.contracts import Citation, RetrievedChunk
 from rag_design.contracts import Citation, RetrievedChunk
 from rag_design.contracts import RetrievedChunk
 from rag_design.policy import AbstentionDecision
@@ -110,6 +110,30 @@ class DuplicateVerdict(TypedDict, total=False):
     condition_note: str
 
 
+class CitationEntry(TypedDict, total=False):
+    """N13/N14가 사용자에게 노출하는 인용 한 건.
+
+    LLM 출력에서 직접 만들지 않는다 - state["claim_plan"]의 evidence_chunk_ids
+    (N7이 이미 검증한 근거)와 subsidy_chunks/law_chunks의
+    chunk.metadata["source_url"]만으로 조립한다 (answer_generation.py 참고).
+    """
+
+    policy_id: str
+    chunk_id: str
+    source_url: str | None
+    label: str
+
+
+AnswerStatus = Literal["complete", "partial", "abstained"]
+"""N14 최종 검증 결과.
+
+complete: 모든 인용이 검증됐고 assembled_result에 "정보 부족" 표시가 없음.
+partial: 답변은 나가지만 일부 인용이 걸러졌거나 일부 정책이 정보 부족임 -
+    사용자에게 부분 응답임을 알려야 한다.
+abstained: 검증된 근거가 아예 없어 답변 자체를 노출하지 않음 (확인 불가).
+"""
+
+
 class GraphState(TypedDict, total=False):
     query_id: str
     user_input: str
@@ -142,3 +166,10 @@ class GraphState(TypedDict, total=False):
     missing_law_claim_ids: list[str]
     doc_retry_count: int
     law_retry_count: int
+    # --- N13 (답변 생성) ---
+    draft_answer: str
+    citations: list[CitationEntry]
+    # --- N14 (최종 Claim-Citation 검증) ---
+    final_answer: str
+    final_citations: list[CitationEntry]
+    answer_status: AnswerStatus

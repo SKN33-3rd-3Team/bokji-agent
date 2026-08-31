@@ -18,7 +18,8 @@ assembled_result를 만든다.
 
 법령 검색 로직 (지원금 계산 불가 시):
 1. 그 정책(SUBSIDY) 문서의 근거법령(section_type="legal_basis") chunk를
-   doc_id로 좁혀 재검색한다. 본문이 "유아교육법(제24조)||영유아보육법(제34조)"
+   source_id(=claim_plan이 쓰는 policy_id)로 좁혀 재검색한다. (예전엔 여기가
+   doc_id로 잘못 필터링돼서 항상 빈 결과만 나왔었다 - 2026-08-31 수정.) 본문이 "유아교육법(제24조)||영유아보육법(제34조)"
    처럼 "||"로 여러 법령을 이어붙인 텍스트라, 각 항목에서 조항 표기
    "(제24조)" 같은 괄호 부분을 떼어내 법령명만 뽑아낸다.
    TODO(팀 확인 필요): 이 파싱은 현재 원문 표기 방식에 맞춘 휴리스틱이라
@@ -78,7 +79,7 @@ def _find_related_law(policy_id: str, store: ChromaVectorStore, query_id: str) -
             query_id=f"{query_id}-legal-basis",
             top_k=1,
             search_filter=VectorSearchFilter(
-                metadata_equals={"doc_id": policy_id, "section_type": "legal_basis"}
+                metadata_equals={"source_id": policy_id, "section_type": "legal_basis"}
             ),
         )
     except CollectionNotFoundError:
