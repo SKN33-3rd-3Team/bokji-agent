@@ -24,6 +24,7 @@
     python -m rag_chatbot.collectors.gov_24.gov24 list
     python -m rag_chatbot.collectors.gov_24.gov24 detail
     python -m rag_chatbot.collectors.gov_24.gov24 conditions
+    python -m rag_chatbot.collectors.gov_24.gov24 conditions-retry-failed
     python -m rag_chatbot.collectors.gov_24.gov24 all
     python -m rag_chatbot.collectors.gov_24.gov24 detail 50
 
@@ -355,6 +356,33 @@ def run_conditions(limit: int | None = None) -> None:
     fetch_many("conditions", CONDITIONS_URL, ids, CONDITIONS_OUT)
 
 
+def _load_failed_ids(out_path: str) -> list[str]:
+    """out_path에 대응하는 ``_failed_ids.json``에서 실패 서비스ID 목록을 읽는다.
+
+    파일이 없거나 비어 있으면 빈 리스트를 반환한다.
+    """
+    failed_path = out_path.replace(".json", "_failed_ids.json")
+    if not Path(failed_path).exists():
+        return []
+    return load(failed_path)
+
+
+def run_conditions_retry_failed() -> None:
+    """전체 목록이 아니라, 이전에 실패한 서비스ID만 다시 조회해서 기존 결과에 병합한다.
+
+    conditions_failed_ids.json에 있는 ID만 대상으로 하기 때문에 전체
+    10000여 건을 다시 훑지 않고 실제로 실패했던 몇 건만 빠르게 재시도할 때
+    쓴다. fetch_many가 결과를 서비스ID로 병합해서 저장하므로, 기존
+    CONDITIONS_OUT 내용은 그대로 유지된 채 성공한 재시도분만 추가된다.
+    """
+    ids = _load_failed_ids(CONDITIONS_OUT)
+    if not ids:
+        log("[conditions] 재시도할 실패 ID가 없습니다 (failed_ids 파일이 없거나 비어 있음).")
+        return
+    log(f"[conditions] failed_ids 기준으로 {len(ids)}건만 재시도합니다.")
+    fetch_many("conditions", CONDITIONS_URL, ids, CONDITIONS_OUT)
+
+
 if __name__ == "__main__":
     step = sys.argv[1] if len(sys.argv) > 1 else "list"
     limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
@@ -365,6 +393,8 @@ if __name__ == "__main__":
         run_detail(limit)
     elif step == "conditions":
         run_conditions(limit)
+    elif step == "conditions-retry-failed":
+        run_conditions_retry_failed()
     elif step == "all":
         run_list()
         run_detail(limit)
@@ -372,5 +402,5 @@ if __name__ == "__main__":
     else:
         log(
             "사용법: python -m rag_chatbot.collectors.gov_24.gov24 "
-            "[list|detail|conditions|all] [테스트건수]"
+            "[list|detail|conditions|conditions-retry-failed|all] [테스트건수]"
         )
