@@ -11,6 +11,7 @@ from rag_design.chunking import chunk_document
 from rag_design.contracts import Document, RetrievedChunk, SourceType
 
 from rag_chatbot.graph.nodes.claim_plan import plan_claims
+from rag_chatbot.graph.nodes.law_source_resolver import LawSourceResolver
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -106,6 +107,100 @@ class PlanClaimsNodeTests(unittest.TestCase):
         update = plan_claims({"subsidy_chunks": []}, self.extractor)
 
         self.assertEqual(update["claim_plan"], [])
+
+    def test_required_law_sources_populated_when_law_check_required(self) -> None:
+        """N7 리뷰 피드백 #3: law_check_required=True인 claim에
+        required_aspects/required_law_sources가 채워지는지 - 근거법령 섹션이
+        있는 문서로 직접 구성해서 끝까지 연동되는지 증명."""
+
+        from datetime import datetime, timezone
+        from rag_design.contracts import Document, Section, SourceType, compute_content_hash
+
+        legal_basis_content = "유아교육법(제24조)||영유아보육법(제34조)"
+        sections = (
+            Section(
+                heading_path=("지원 대상",),
+                content="3~5세 유아입니다.",
+                metadata={"section_type": "support_target"},
+            ),
+            Section(
+                heading_path=("근거법령",),
+                content=legal_basis_content,
+                metadata={"section_type": "legal_basis"},
+            ),
+        )
+        content = "\n".join(s.content for s in sections)
+        document = Document(
+            schema_version="1.0",
+            doc_id="subsidy:test-policy:2026-01-01",
+            source_type=SourceType.SUBSIDY,
+            source_name="테스트",
+            source_id="test-policy",
+            source_url="https://www.gov.kr/test",
+            title="테스트 정책",
+            content=content,
+            sections=sections,
+            collected_at=datetime.now(timezone.utc).isoformat(),
+            source_updated_at=None,
+            effective_from="2026-01-01",
+            effective_to=None,
+            license="테스트",
+            content_hash=compute_content_hash(content),
+            metadata={"region_scope": "national", "region_names": ["전국"]},
+            parse_warnings=(),
+            sensitive_data_status="clear",
+        )
+        chunks = chunk_document(document)
+        subsidy_chunks = [as_retrieved(c, rank=i + 1) for i, c in enumerate(chunks)]
+
+        class LawRequiringExtractor:
+            def extract(self, *, policy_id: str, text: str) -> list[dict]:
+                if "유아" not in text:  # 근거법령 청크 자체에는 claim 안 만듦
+                    return []
+                return [
+                    {
+                        "claim_type": "eligibility",
+                        "law_check_required": True,
+                        "reasons": [text],
+                        "required_aspects": ["나이 자격요건"],
+                    }
+                ]
+
+        law_index = {
+            "유아교육법": {"law_type": "law", "source_id": "L001"},
+            "영유아보육법": {"law_type": "law", "source_id": "L002"},
+        }
+
+        class FakeResolver:
+            def resolve(self, law_name: str):
+                return law_index.get(law_name)
+
+        state = {"subsidy_chunks": subsidy_chunks}
+        update = plan_claims(state, LawRequiringExtractor(), FakeResolver())
+
+        claim_plan = update["claim_plan"]
+        self.assertEqual(len(claim_plan), 1)  # 근거법령 청크는 claim 안 만들어짐
+        claim = claim_plan[0]
+        self.assertEqual(claim["required_aspects"], ["나이 자격요건"])
+        self.assertEqual(
+            claim["required_law_sources"],
+            [
+                {"law_type": "law", "source_id": "L001"},
+                {"law_type": "law", "source_id": "L002"},
+            ],
+        )
+
+    def test_required_law_sources_empty_when_no_resolver_given(self) -> None:
+        """resolver를 안 주면 에러 없이 그냥 빈 리스트로 나가야 함 (선택적 기능)."""
+
+        state = {"subsidy_chunks": self.subsidy_chunks}
+        law_extractor = FakeClaimExtractor()  # duplicate claim은 law_check_required=True
+
+        update = plan_claims(state, law_extractor)  # law_resolver 생략
+
+        law_claims = [c for c in update["claim_plan"] if c["claim_type"] == "duplicate"]
+        self.assertTrue(law_claims)
+        self.assertTrue(all(c["required_law_sources"] == [] for c in law_claims))
 
     def test_policy_id_matches_chunk_source_id(self) -> None:
         """N7 리뷰 피드백: policy_id는 doc_id가 아니라 원본 source_id여야 함."""

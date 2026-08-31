@@ -24,17 +24,28 @@ status 값은 rag_design.contracts.EvidenceStatus와 동일한 문자열을 쓴�
     (원문 그대로 발췌 전제 하에서는 "conflict"는 발생하지 않는다 - claim이
     원문 자체를 인용한 거라 원문과 모순될 수가 없다.)
 
+재시도(N7 리뷰 피드백 #5, 그림 E11: N7 -> N6 근거 부족):
+    claim.doc_retry_count > 0이면 "재시도"로 판단해서, N4가 처음 가져온
+    top-K 범위 밖까지 넓혀서 재검색한다 (store가 주어졌을 때만 - 주어지지
+    않으면 기존 subsidy_chunks 범위 내에서만 조용히 검증한다). 재검색은
+    VectorSearchFilter.metadata_equals={"source_id": policy_id}로 그
+    정책의 청크만 훨씬 큰 top_k로 다시 가져온다 - 의미 검색이 아니라
+    "그 정책의 청크를 최대한 다 끌어오는" 목적이라 쿼리 텍스트 자체는
+    중요하지 않다.
+
 TODO(N6, 확인 필요):
     - "운영기관 원문(public_detail_url) 실시간 조회"까지 포함할지 여부가
-      팀에서 아직 미정. 확정 전까지는 N4가 이미 가져온 subsidy_chunks
-      범위 내에서만 대조한다.
+      팀에서 아직 미정. 확정 전까지는 벡터DB(N4/재검색) 범위 내에서만
+      대조한다.
 """
 
 from __future__ import annotations
 
-from rag_design.contracts import EvidenceStatus, RetrievedChunk
+from rag_design.contracts import EvidenceStatus, RetrievedChunk, SourceType
 
 from rag_chatbot.graph.state import ClaimDraft, GraphState
+
+DEFAULT_WIDEN_TOP_K = 20
 
 
 def _group_chunks_by_policy(
@@ -49,11 +60,55 @@ def _group_chunks_by_policy(
     return grouped
 
 
-def verify_official_documents(state: GraphState) -> dict:
-    """doc_check_required=True인 claim의 reasons가 원문에 실제로 있는지 확인한다."""
+def _widen_search(store, policy_id: str, query_id: str, top_k: int) -> list[RetrievedChunk]:
+    """그 정책(policy_id)의 청크를 top_k까지 넓혀서 다시 가져온다.
+
+    의미 검색이 목적이 아니라 "이 정책의 청크를 최대한 다 끌어오는" 게
+    목적이라, query 텍스트는 아무 값이나 넣어도 metadata_equals가
+    정확히 그 정책으로 좁혀준다.
+    """
+
+    from rag_design.vector_store import VectorSearchFilter
+
+    return list(
+        store.search(
+            SourceType.SUBSIDY,
+            policy_id,  # 의미 검색 대상 아님, metadata_equals가 실제 필터
+            query_id=query_id,
+            top_k=top_k,
+            search_filter=VectorSearchFilter(metadata_equals={"source_id": policy_id}),
+        )
+    )
+
+
+def _merge_unique_chunks(
+    base: list[RetrievedChunk], extra: list[RetrievedChunk]
+) -> list[RetrievedChunk]:
+    seen = {chunk.chunk.chunk_id for chunk in base}
+    merged = list(base)
+    for chunk in extra:
+        if chunk.chunk.chunk_id not in seen:
+            merged.append(chunk)
+            seen.add(chunk.chunk.chunk_id)
+    return merged
+
+
+def verify_official_documents(
+    state: GraphState,
+    *,
+    store=None,
+    widen_top_k: int = DEFAULT_WIDEN_TOP_K,
+) -> dict:
+    """doc_check_required=True인 claim의 reasons가 원문에 실제로 있는지 확인한다.
+
+    store를 주면, doc_retry_count > 0인 claim에 한해 그 정책을 top_k까지
+    넓혀서 재검색한 뒤 대조한다 (N7 리뷰 피드백 #5). store가 없으면
+    재시도 claim도 에러 없이 기존 범위 내에서만 검증한다 (선택적 기능).
+    """
 
     claim_plan = state.get("claim_plan") or []
     subsidy_chunks = state.get("subsidy_chunks") or []
+    query_id = state.get("query_id", "")
     chunks_by_policy = _group_chunks_by_policy(subsidy_chunks)
 
     updated_plan: list[ClaimDraft] = []
@@ -64,7 +119,14 @@ def verify_official_documents(state: GraphState) -> dict:
             updated_plan.append(claim)
             continue
 
-        policy_chunks = chunks_by_policy.get(claim["policy_id"], [])
+        policy_id = claim["policy_id"]
+        policy_chunks = chunks_by_policy.get(policy_id, [])
+
+        is_retry = claim.get("doc_retry_count", 0) > 0
+        if is_retry and store is not None:
+            widened = _widen_search(store, policy_id, query_id, widen_top_k)
+            policy_chunks = _merge_unique_chunks(policy_chunks, widened)
+
         reasons = claim.get("reasons", [])
 
         # N7 리뷰 피드백 반영: evidence_chunk_ids에는 "정책에 속한 청크
