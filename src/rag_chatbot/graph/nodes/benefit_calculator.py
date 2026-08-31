@@ -15,13 +15,23 @@ N9와 동일하게, amount claim이 가리키는 정책 문서를 vectorDB에서
 - 규칙이 모호하거나 조건부(예: 소득 구간별 차등)인 경우 amount=None으로 두고
   calculation_note에 사유를 남긴다. 임의로 대표값을 만들지 않는다.
 
+- 재검색 시 doc_id뿐 아니라 section_type="support_details"(지원내용 섹션,
+  스펙에서 말하는 SUBSIDY DETAIL에 해당)까지 좁혀서 검색한다. 이 정책 문서에
+  지원내용 섹션 자체가 없으면(= "지원금 제도가 포함되지 않은 경우"에 가까움)
+  검색 결과가 아예 없게 되어 자연스럽게 amount=None으로 떨어진다 - 별도의
+  "이게 지원금 제도인지" 판단 로직을 추측으로 만들지 않고, 문서 구조 자체로
+  게이팅한다.
+
 미해결 사항 (TODO, 팀 확인 필요):
 xlsx Metadata 시트의 calculation_rule 필드("신규 - LLM 추출 결과 캐싱 여부
 결정 필요")가 아직 chunk에 없다. 그래서 이 구현은 chunk metadata에 이미
 숫자로 들어있는 값(amount/benefit_amount 키)만 그대로 쓰고, 자연어 문장에서
 금액을 추출하는 로직은 넣지 않았다 (추측 금지). 그런 chunk가 없다면 이
 노드는 항상 amount=None을 반환한다 - N10 프롬프트(규칙 추출용 LLM 호출)가
-먼저 연결돼야 실제 계산이 가능해진다.
+먼저 연결돼야 실제 계산이 가능해진다. (참고: 정부24 원천 데이터 어디에도
+실제 지원 금액 숫자 필드가 없는 것으로 확인됨 - LLM 추출 대상이 될 원문은
+지원내용 섹션의 자연어 문장뿐이라, 금액이 아예 존재하지 않는 서비스형
+정책과 진짜 계산 실패를 구분하는 문제가 남아있음.)
 """
 
 from __future__ import annotations
@@ -96,7 +106,9 @@ def calculate_benefit_amount(state: GraphState, store: ChromaVectorStore) -> dic
                 f"{policy_id} 지원금액",
                 query_id=f"{state.get('query_id', 'n10')}-{policy_id}-recheck",
                 top_k=_RECHECK_TOP_K,
-                search_filter=VectorSearchFilter(metadata_equals={"doc_id": policy_id}),
+                search_filter=VectorSearchFilter(
+                    metadata_equals={"doc_id": policy_id, "section_type": "support_details"}
+                ),
             )
         except CollectionNotFoundError:
             # 아직 정책이 하나도 색인되지 않은 상태 - 근거를 못 찾은 것과 동일하게
