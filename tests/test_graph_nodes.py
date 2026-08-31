@@ -11,6 +11,7 @@ from rag_design.contracts import (
     compute_content_hash,
 )
 from src.rag_chatbot.graph.nodes import calculate_benefit_amount
+from src.rag_chatbot.llm import FailingLLMClient, FakeLLMClient
 
 
 def _amount_claim(policy_id: str, status: EvidenceStatus, reasons=("근거 문장",)) -> dict:
@@ -165,3 +166,78 @@ def test_multiple_eligible_policies_are_not_summed_together():
 
     by_policy = {entry["policy_id"]: entry["amount"] for entry in result["benefit_amounts"]}
     assert by_policy == {"policy-a": 100000.0, "policy-b": 200000.0}
+
+
+def test_llm_extracts_amount_from_chunk_text_when_structured_field_missing():
+    llm = FakeLLMClient(response='{"amount": 280000, "reason": "원문에 월 28만원 지원이라고 명시됨"}')
+    state = {
+        "eligibility_verdicts": [_verdict("policy-a", "충족")],
+        "claim_plan": [_amount_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore({"policy-a": [_retrieved_chunk("policy-a", {})]})  # 구조화 금액 필드 없음
+
+    result = calculate_benefit_amount(state, store, llm_client=llm)
+
+    entry = result["benefit_amounts"][0]
+    assert entry["amount"] == 280000.0
+    assert "LLM이 원문에서 추출한 금액" in entry["calculation_note"]
+    assert len(llm.calls) == 1
+
+
+def test_llm_returns_null_amount_for_conditional_rule_kept_as_none():
+    llm = FakeLLMClient(response='{"amount": null, "reason": "소득 구간별로 금액이 달라져 확정할 수 없음"}')
+    state = {
+        "eligibility_verdicts": [_verdict("policy-a", "충족")],
+        "claim_plan": [_amount_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore({"policy-a": [_retrieved_chunk("policy-a", {})]})
+
+    result = calculate_benefit_amount(state, store, llm_client=llm)
+
+    entry = result["benefit_amounts"][0]
+    assert entry["amount"] is None  # LLM도 확정 못 하면 추측하지 않음
+    assert "소득 구간별" in entry["calculation_note"]
+
+
+def test_llm_call_failure_keeps_amount_none_with_note():
+    state = {
+        "eligibility_verdicts": [_verdict("policy-a", "충족")],
+        "claim_plan": [_amount_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore({"policy-a": [_retrieved_chunk("policy-a", {})]})
+
+    result = calculate_benefit_amount(state, store, llm_client=FailingLLMClient())
+
+    entry = result["benefit_amounts"][0]
+    assert entry["amount"] is None
+    assert "LLM 규칙 추출 호출 실패" in entry["calculation_note"]
+
+
+def test_llm_invalid_json_response_does_not_guess_amount():
+    llm = FakeLLMClient(response="28만원 정도 될 것 같습니다")  # JSON 아님
+    state = {
+        "eligibility_verdicts": [_verdict("policy-a", "충족")],
+        "claim_plan": [_amount_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore({"policy-a": [_retrieved_chunk("policy-a", {})]})
+
+    result = calculate_benefit_amount(state, store, llm_client=llm)
+
+    entry = result["benefit_amounts"][0]
+    assert entry["amount"] is None
+    assert "파싱하지 못함" in entry["calculation_note"]
+
+
+def test_llm_not_called_when_structured_amount_already_present():
+    llm = FakeLLMClient(response='{"amount": 999999, "reason": "호출되면 안 됨"}')
+    state = {
+        "eligibility_verdicts": [_verdict("policy-a", "충족")],
+        "claim_plan": [_amount_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore({"policy-a": [_retrieved_chunk("policy-a", {"amount": 300000})]})
+
+    result = calculate_benefit_amount(state, store, llm_client=llm)
+
+    entry = result["benefit_amounts"][0]
+    assert entry["amount"] == 300000.0  # 구조화 필드가 있으면 LLM 자체를 안 부름
+    assert llm.calls == []

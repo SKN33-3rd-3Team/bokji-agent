@@ -22,20 +22,32 @@ N9와 동일하게, amount claim이 가리키는 정책 문서를 vectorDB에서
   "이게 지원금 제도인지" 판단 로직을 추측으로 만들지 않고, 문서 구조 자체로
   게이팅한다.
 
+LLM 규칙 추출 (2026-08-31 기준 DRAFT - 프롬프트/모델 미확정. 팀에서
+skt/A.X-4.0-Light, Qwen/Qwen3.5-9B, Bllossom/llama-3.2-Korean-Bllossom-3B
+세 모델 비교 중, RunPod Serverless로 서빙 예정): chunk metadata에 이미
+구조화된 amount/benefit_amount 필드가 없으면, llm_client가 주어졌을 때만
+그 chunk의 원문(지원내용 섹션 텍스트)을 LLM에 보내 "원문에 명시된 금액"만
+JSON으로 추출하게 한다 - LLM은 절대 계산하거나 추측하지 않고, 원문에 없으면
+null을 내도록 프롬프트에서 강제한다. llm_client가 없거나 호출/파싱이
+실패하면 amount=None + 사유를 그대로 남긴다 (추측 금지 원칙 유지).
+
 미해결 사항 (TODO, 팀 확인 필요):
-xlsx Metadata 시트의 calculation_rule 필드("신규 - LLM 추출 결과 캐싱 여부
-결정 필요")가 아직 chunk에 없다. 그래서 이 구현은 chunk metadata에 이미
-숫자로 들어있는 값(amount/benefit_amount 키)만 그대로 쓰고, 자연어 문장에서
-금액을 추출하는 로직은 넣지 않았다 (추측 금지). 그런 chunk가 없다면 이
-노드는 항상 amount=None을 반환한다 - N10 프롬프트(규칙 추출용 LLM 호출)가
-먼저 연결돼야 실제 계산이 가능해진다. (참고: 정부24 원천 데이터 어디에도
-실제 지원 금액 숫자 필드가 없는 것으로 확인됨 - LLM 추출 대상이 될 원문은
-지원내용 섹션의 자연어 문장뿐이라, 금액이 아예 존재하지 않는 서비스형
-정책과 진짜 계산 실패를 구분하는 문제가 남아있음.)
+- xlsx Metadata 시트의 calculation_rule 필드("신규 - LLM 추출 결과 캐싱 여부
+  결정 필요")가 아직 chunk에 없다.
+- "LLM은 규칙만 추출, 코드가 결정론적 산술 수행"이라는 원래 설계의 산술
+  단계(예: "가구원수 x 단가"처럼 곱셈이 필요한 규칙)는 아직 안 만들었다 -
+  지금은 원문에 이미 명시된 단일 금액만 그대로 쓰고, 계산식이 필요한
+  규칙은 amount=None으로 남긴다. 실제 규칙 스키마가 정해지면 이 부분에
+  산술 로직을 추가해야 한다.
+- 정부24 원천 데이터 어디에도 실제 지원 금액 숫자 필드가 없는 것으로
+  확인됨 - LLM 추출 대상이 될 원문은 지원내용 섹션의 자연어 문장뿐이라,
+  금액이 아예 존재하지 않는 서비스형 정책과 진짜 계산 실패를 구분하는
+  문제가 남아있음.
 """
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 
 from rag_design.contracts import EvidenceStatus, SourceType
@@ -45,6 +57,7 @@ from rag_design.vector_store import (
     VectorSearchFilter,
 )
 
+from ...llm import LLMCallError, LLMClient
 from ..state import BenefitAmount, ClaimDraft, GraphState
 
 _UNCERTAIN_STATUSES = {
@@ -57,7 +70,9 @@ _RECHECK_TOP_K = 3
 _AMOUNT_METADATA_KEYS = ("amount", "benefit_amount")
 
 
-def calculate_benefit_amount(state: GraphState, store: ChromaVectorStore) -> dict:
+def calculate_benefit_amount(
+    state: GraphState, store: ChromaVectorStore, llm_client: LLMClient | None = None
+) -> dict:
     """state["eligibility_verdicts"](충족인 정책만)와 state["claim_plan"]
     (amount claim, 이전 노드가 전달)을 바탕으로 state["benefit_amounts"]를
     채워 반환한다 (partial state update).
@@ -65,6 +80,10 @@ def calculate_benefit_amount(state: GraphState, store: ChromaVectorStore) -> dic
     store: N9와 동일하게 재확인용 vectorDB 검색에 쓰는 ChromaVectorStore(또는
     동일한 ``search(...)`` 시그니처를 가진 객체). LangGraph 그래프 조립 시
     ``functools.partial(calculate_benefit_amount, store=store)``로 주입한다.
+
+    llm_client: chunk에 구조화 금액 필드가 없을 때만 쓰는 선택적 LLM 클라이언트
+    (``src.rag_chatbot.llm.LLMClient``). None이면(기본값) LLM을 호출하지 않고
+    바로 amount=None으로 남긴다.
     """
     eligible_policy_ids = {
         verdict["policy_id"]
@@ -131,15 +150,13 @@ def calculate_benefit_amount(state: GraphState, store: ChromaVectorStore) -> dic
             None,
         )
         if structured_amount is None:
+            llm_amount, note = _extract_amount_via_llm(chunk.text, llm_client)
             amounts.append(
                 {
                     "policy_id": policy_id,
-                    "amount": None,
+                    "amount": llm_amount,
                     "rule_chunk_id": chunk.chunk_id,
-                    "calculation_note": (
-                        "근거 chunk에 구조화된 금액 필드가 없어 계산 규칙 추출이 "
-                        "필요함 (LLM 규칙 추출 단계 미구현)"
-                    ),
+                    "calculation_note": note,
                 }
             )
             continue
@@ -154,3 +171,54 @@ def calculate_benefit_amount(state: GraphState, store: ChromaVectorStore) -> dic
         )
 
     return {"benefit_amounts": amounts}
+
+
+def _extract_amount_via_llm(
+    chunk_text: str, llm_client: LLMClient | None
+) -> tuple[float | None, str]:
+    """chunk 원문에서 LLM으로 "이미 명시된 금액"만 뽑아낸다 (계산/추측 금지).
+
+    DRAFT(팀 확인 필요, 확정 전): 프롬프트/출력 스키마가 아직 설계 중이라
+    아래는 임시다. LLM이 계산식이 필요한 규칙(예: 소득 구간별 차등)까지
+    만나면 amount를 null로 두도록 프롬프트에서 강제한다 - 산술 로직은 아직
+    이 함수에 없다(위 모듈 docstring의 미해결 사항 참고).
+    """
+    if llm_client is None:
+        return None, (
+            "근거 chunk에 구조화된 금액 필드가 없어 계산 규칙 추출이 필요함 "
+            "(LLM 미연결 - RUNPOD_* 환경변수 설정 또는 llm_client 인자 필요)"
+        )
+
+    prompt = (
+        "다음은 복지 정책의 지원내용 원문이다. 사용자가 받을 수 있는 지원 "
+        "금액을 구조화된 JSON으로만 추출하라. 절대 새로운 숫자를 계산하거나 "
+        "추측하지 마라 - 원문에 명시된 확정 금액이 없으면(예: 소득 구간별로 "
+        "달라지는 경우, 금액이 아예 언급되지 않는 경우) amount를 null로 둬라.\n\n"
+        '출력 형식(다른 텍스트 없이 이 JSON 하나만): '
+        '{"amount": <숫자 또는 null>, "reason": "<한 줄 설명>"}\n\n'
+        f"원문:\n{chunk_text}"
+    )
+    try:
+        response = llm_client.complete(
+            prompt,
+            system="너는 복지 정책 원문에서 금액만 추출하는 도구다. 절대 계산하거나 추측하지 않는다.",
+        )
+    except LLMCallError as exc:
+        return None, f"LLM 규칙 추출 호출 실패: {exc}"
+
+    try:
+        parsed = json.loads(response)
+        amount = parsed.get("amount")
+        reason = parsed.get("reason", "")
+    except (ValueError, AttributeError, TypeError):
+        return None, f"LLM 응답을 JSON으로 파싱하지 못함 (추측 금지, 원본 미신뢰): {response[:200]!r}"
+
+    if amount is None:
+        return None, reason or "LLM이 원문에서 확정 금액을 추출하지 못함(조건부이거나 명시 안 됨)"
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+        return None, f"LLM이 숫자가 아닌 amount를 반환함 (신뢰하지 않음): {amount!r}"
+
+    note = "LLM이 원문에서 추출한 금액"
+    if reason:
+        note += f" (근거: {reason})"
+    return float(amount), note
