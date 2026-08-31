@@ -94,6 +94,12 @@ class EligibilityVerdict(TypedDict, total=False):
     policy_id: str
     verdict: str
     reasons: list[str]
+    # N9가 실제로 대조한 조건과, 대조하지 못한 조건(한국어 이름).
+    # "충족"이 "모든 자격 조건 만족"으로 읽히지 않게 하려고 함께 싣는다 -
+    # 지금 문서 metadata에는 연령 기준밖에 없어서, 장애·성별·소득·취업은
+    # 슬롯이 있어도 비교 자체를 못 한다(eligibility_verdict.py 참고).
+    checked: list[str]
+    unchecked: list[str]
 
 
 class BenefitAmount(TypedDict, total=False):
@@ -101,6 +107,17 @@ class BenefitAmount(TypedDict, total=False):
     amount: float | None
     rule_chunk_id: str
     calculation_note: str
+    # 금액의 성격. amount만 화면에 띄우면 "200,000원"이 월인지 연인지 1회인지,
+    # 확정인지 상한인지 알 수 없어서 사용자가 그만큼 받는다고 읽는다.
+    # period: "month" | "year" | "once" | None
+    period: str | None
+    # 원문이 "최대"/"한도"/"이내"로 적은 금액인지. 원천 데이터의 42.5%가 이렇다.
+    is_maximum: bool
+    # per_unit: "person"(1인당) | "household"(가구당) | None
+    per_unit: str | None
+    # 원문에 근거가 있을 때만 계산한 총액(월 단가 x 개월수, 1인당 x 가구원수).
+    # 근거가 없으면 None - 기간을 모르는데 12를 곱하지 않는다.
+    total_amount: float | None
 
 
 class DuplicateVerdict(TypedDict, total=False):
@@ -137,6 +154,10 @@ abstained: 검증된 근거가 아예 없어 답변 자체를 노출하지 않�
 class GraphState(TypedDict, total=False):
     query_id: str
     user_input: str
+    # 이번 턴 발화(user_input)는 되묻기에 답할 때마다 덮어써진다
+    # ("서울, 2000-03-26, 여성..."). 그래서 N4 검색에 쓸 **원래 질문**을
+    # 따로 보존한다 - N1이 첫 턴에 한 번만 채우고 이후 턴에는 건드리지 않는다.
+    initial_user_input: str
     # 이번 그래프 실행 전체의 공통 기준일. N4(검색 필터)와 N7(시행일 검증)이
     # 각자 date.today()를 따로 계산하면 자정 경계 등에서 어긋날 수 있어서,
     # 그래프 시작 시점에 한 번 정해서 모든 노드가 이 값을 공유한다.
