@@ -53,7 +53,12 @@ def plan_claims(state: GraphState, extractor: ClaimExtractor) -> dict:
     claim_plan: list[ClaimDraft] = []
 
     for chunk in subsidy_chunks:
-        policy_id = chunk.chunk.doc_id
+        # policy_id는 doc_id(합성 해시값)가 아니라 원본 소스ID
+        # (chunk.metadata["source_id"])를 쓴다 (N7 리뷰 피드백 반영) -
+        # N7이 정책과 법령 근거가 같은 출처인지 이 값으로 대조하는데,
+        # 법령 쪽도 같은 방식(원본 source_id)으로 식별되기 때문에 형태를
+        # 맞춰야 비교가 가능하다.
+        policy_id = chunk.chunk.metadata["source_id"]
         # 정책 하나가 여러 청크로 쪼개져 있을 수 있어서, claim_id는
         # policy_id가 아니라 청크 고유 chunk_id를 기준으로 유일하게 만든다
         # (policy_id는 여러 claim이 같은 정책을 가리키도록 공유되는 게 맞음).

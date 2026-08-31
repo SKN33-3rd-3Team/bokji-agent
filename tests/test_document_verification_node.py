@@ -44,7 +44,9 @@ class VerifyOfficialDocumentsNodeTests(unittest.TestCase):
         self.subsidy_chunks = [
             as_retrieved(chunk, rank=i + 1) for i, chunk in enumerate(chunks)
         ]
-        self.policy_id = self.subsidy_chunks[0].chunk.doc_id
+        # policy_id는 doc_id가 아니라 원본 source_id 기준 (N7 리뷰 피드백 반영,
+        # N5의 policy_id 산출 방식과 맞춰야 그룹핑이 실제로 매칭된다).
+        self.policy_id = self.subsidy_chunks[0].chunk.metadata["source_id"]
         # 실제 원문에 있는 문장을 그대로 가져와서 "원문 그대로 발췌" 전제를 재현
         self.verbatim_reason = "국공립 및 사립유치원에 다니는 3~5세 유아입니다."
         self.assertIn(
@@ -110,6 +112,26 @@ class VerifyOfficialDocumentsNodeTests(unittest.TestCase):
         update = verify_official_documents(state)
 
         self.assertEqual(update["claim_plan"][0]["status"], EvidenceStatus.UNSUPPORTED.value)
+
+    def test_evidence_chunk_ids_only_includes_the_matching_chunk(self) -> None:
+        """N7 리뷰 피드백: evidence_chunk_ids는 정책의 청크 전부가 아니라,
+        reason이 실제로 발견된 청크만 포함해야 함."""
+
+        claim = self._claim()  # verbatim_reason은 "지원대상" 청크에만 있음
+        state = {"claim_plan": [claim], "subsidy_chunks": self.subsidy_chunks}
+
+        update = verify_official_documents(state)
+
+        evidence_ids = update["claim_plan"][0]["evidence_chunk_ids"]
+        matching_chunk_ids = [
+            c.chunk.chunk_id
+            for c in self.subsidy_chunks
+            if self.verbatim_reason in c.chunk.text
+        ]
+        self.assertEqual(set(evidence_ids), set(matching_chunk_ids))
+        # 정책에 청크가 3개 있지만, 근거는 1개 청크에서만 나와야 함
+        self.assertEqual(len(evidence_ids), 1)
+        self.assertLess(len(evidence_ids), len(self.subsidy_chunks))
 
     def test_empty_claim_plan_yields_empty_result(self) -> None:
         update = verify_official_documents(

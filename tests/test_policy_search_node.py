@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import gc
 import json
 from pathlib import Path
@@ -63,6 +64,7 @@ class SearchPoliciesNodeTests(unittest.TestCase):
     def test_search_policies_returns_subsidy_chunks(self) -> None:
         state = {
             "query_id": "q-1",
+            "as_of": date(2026, 1, 1),
             "slots": {"interests": ["유아학비"], "region_names": []},
         }
 
@@ -75,7 +77,11 @@ class SearchPoliciesNodeTests(unittest.TestCase):
         self.assertTrue(all(c.query_id == "q-1" for c in chunks))
 
     def test_search_policies_falls_back_to_broad_query_when_no_interests(self) -> None:
-        state = {"query_id": "q-2", "slots": {"region_names": []}}
+        state = {
+            "query_id": "q-2",
+            "as_of": date(2026, 1, 1),
+            "slots": {"region_names": []},
+        }
 
         update = search_policies(state, self.store, top_k=3)
 
@@ -84,7 +90,11 @@ class SearchPoliciesNodeTests(unittest.TestCase):
 
     def test_search_policies_requires_query_id(self) -> None:
         with self.assertRaises(ValueError):
-            search_policies({"slots": {}}, self.store)
+            search_policies({"as_of": date(2026, 1, 1), "slots": {}}, self.store)
+
+    def test_search_policies_requires_as_of(self) -> None:
+        with self.assertRaises(ValueError):
+            search_policies({"query_id": "q-3", "slots": {}}, self.store)
 
 
 if __name__ == "__main__":

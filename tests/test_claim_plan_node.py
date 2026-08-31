@@ -107,6 +107,22 @@ class PlanClaimsNodeTests(unittest.TestCase):
 
         self.assertEqual(update["claim_plan"], [])
 
+    def test_policy_id_matches_chunk_source_id(self) -> None:
+        """N7 리뷰 피드백: policy_id는 doc_id가 아니라 원본 source_id여야 함."""
+
+        state = {"subsidy_chunks": self.subsidy_chunks}
+
+        update = plan_claims(state, self.extractor)
+
+        expected_source_ids = {
+            chunk.chunk.metadata["source_id"] for chunk in self.subsidy_chunks
+        }
+        actual_policy_ids = {c["policy_id"] for c in update["claim_plan"]}
+        self.assertEqual(actual_policy_ids, expected_source_ids)
+        # doc_id(합성 해시값)가 아니라는 것도 명시적으로 확인
+        doc_ids = {chunk.chunk.doc_id for chunk in self.subsidy_chunks}
+        self.assertTrue(actual_policy_ids.isdisjoint(doc_ids - expected_source_ids))
+
 
 if __name__ == "__main__":
     unittest.main()

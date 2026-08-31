@@ -20,8 +20,6 @@ ChromaVectorStore는 graph.py 조립 시점에 한 번 생성해서 이 노드�
 
 from __future__ import annotations
 
-from datetime import date
-
 from rag_design.contracts import SourceType
 from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
 
@@ -52,16 +50,24 @@ def search_policies(
     region은 N2 하드 게이트를 통과한 뒤에만 이 노드가 실행되므로
     slots["region_names"]가 비어있는 경우를 별도로 처리하지 않는다
     (E3: N2 -> N4는 "충분: slots" 경로에서만 온다).
+
+    검색 기준일은 date.today()를 직접 계산하지 않고 state["as_of"]를 쓴다
+    (N7 리뷰 피드백 반영) - N4 검색과 N7 시행일 검증이 같은 기준일을
+    보게 하기 위함. as_of는 그래프 시작 시점(N1 이전)에 한 번 정해서
+    State에 넣어둔다고 가정한다.
     """
 
     slots = state.get("slots") or {}
     query_id = state.get("query_id")
     if not query_id:
         raise ValueError("state['query_id'] is required to search policies")
+    as_of = state.get("as_of")
+    if as_of is None:
+        raise ValueError("state['as_of'] is required to search policies")
 
     query = _build_query(slots)
     region_names = tuple(slots.get("region_names") or ())
-    search_filter = VectorSearchFilter(region_names=region_names, as_of=date.today())
+    search_filter = VectorSearchFilter(region_names=region_names, as_of=as_of)
 
     results = store.search(
         SourceType.SUBSIDY,

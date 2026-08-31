@@ -40,9 +40,12 @@ from rag_chatbot.graph.state import ClaimDraft, GraphState
 def _group_chunks_by_policy(
     subsidy_chunks: list[RetrievedChunk],
 ) -> dict[str, list[RetrievedChunk]]:
+    # N5와 동일하게 doc_id(합성 해시값)가 아니라 chunk.metadata["source_id"]
+    # (원본 소스ID)로 묶는다 (N7 리뷰 피드백 반영) - claim.policy_id도 이제
+    # source_id 기준이라, 그룹 키를 맞춰야 아래 조회가 실제로 매칭된다.
     grouped: dict[str, list[RetrievedChunk]] = {}
     for chunk in subsidy_chunks:
-        grouped.setdefault(chunk.chunk.doc_id, []).append(chunk)
+        grouped.setdefault(chunk.chunk.metadata["source_id"], []).append(chunk)
     return grouped
 
 
@@ -62,21 +65,27 @@ def verify_official_documents(state: GraphState) -> dict:
             continue
 
         policy_chunks = chunks_by_policy.get(claim["policy_id"], [])
-        if not policy_chunks:
-            updated_plan.append(
-                {
-                    **claim,
-                    "status": EvidenceStatus.UNSUPPORTED.value,
-                    "evidence_chunk_ids": [],
-                }
-            )
-            continue
-
-        source_text = "\n".join(chunk.chunk.text for chunk in policy_chunks)
         reasons = claim.get("reasons", [])
-        found_reasons = [reason for reason in reasons if reason and reason in source_text]
 
-        if reasons and len(found_reasons) == len(reasons):
+        # N7 리뷰 피드백 반영: evidence_chunk_ids에는 "정책에 속한 청크
+        # 전부"가 아니라, reason이 실제로 발견된 그 청크만 넣는다. 그래서
+        # 원문을 다 이어붙여서 한 번에 검사하지 않고, 청크 하나하나를
+        # 따로 검사해서 어느 청크에서 발견됐는지 추적한다.
+        matched_chunk_ids: list[str] = []
+        found_reasons: set[str] = set()
+        for chunk in policy_chunks:
+            chunk_text = chunk.chunk.text
+            chunk_has_match = False
+            for reason in reasons:
+                if reason and reason in chunk_text:
+                    found_reasons.add(reason)
+                    chunk_has_match = True
+            if chunk_has_match:
+                matched_chunk_ids.append(chunk.chunk.chunk_id)
+
+        if not policy_chunks:
+            status = EvidenceStatus.UNSUPPORTED.value
+        elif reasons and len(found_reasons) == len(reasons):
             status = EvidenceStatus.SUPPORTED.value
         elif found_reasons:
             status = EvidenceStatus.PARTIAL.value
@@ -87,9 +96,7 @@ def verify_official_documents(state: GraphState) -> dict:
             {
                 **claim,
                 "status": status,
-                "evidence_chunk_ids": (
-                    [chunk.chunk.chunk_id for chunk in policy_chunks] if found_reasons else []
-                ),
+                "evidence_chunk_ids": matched_chunk_ids,
             }
         )
 
