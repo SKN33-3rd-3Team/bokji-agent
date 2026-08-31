@@ -21,6 +21,16 @@ metadata(age_start/age_end 등)를 slots와 직접 대조해서, "근거 문장�
 
 근거 문장에 명시되지 않은 조건은 절대 판단하지 않고 미확인을 반환한다
 (추측 금지).
+
+LLM 사용 범위(2026-08-31 기준, 프롬프트/모델 아직 확정 전 - 팀에서
+skt/A.X-4.0-Light, Qwen/Qwen3.5-9B, Bllossom/llama-3.2-Korean-Bllossom-3B
+세 모델을 비교 중이고 RunPod Serverless로 서빙 예정): 충족/미충족/미확인
+자체는 여전히 규칙(구조화 metadata 비교)이 결정한다 - LLM이 판정을 내리게
+하면 "추론 금지" 원칙이 깨지기 때문이다. LLM은 규칙이 이미 확정한 위반
+사유(예: age_start/age_end 비교 결과)를 사람이 읽기 좋은 문장으로 다듬는
+데만 쓴다("JA코드 자연어화"). LLM 호출이 없거나 실패해도 규칙이 만든
+원래 문장을 그대로 쓰므로, 판정 결과나 노드 동작 자체는 LLM 유무와 무관하게
+동일하다.
 """
 
 from __future__ import annotations
@@ -35,6 +45,7 @@ from rag_design.vector_store import (
     VectorSearchFilter,
 )
 
+from ...llm import LLMCallError, LLMClient
 from ..state import ClaimDraft, EligibilityVerdict, GraphState
 
 _UNCERTAIN_STATUSES = {
@@ -46,7 +57,9 @@ _UNCERTAIN_STATUSES = {
 _RECHECK_TOP_K = 3
 
 
-def determine_eligibility(state: GraphState, store: ChromaVectorStore) -> dict:
+def determine_eligibility(
+    state: GraphState, store: ChromaVectorStore, llm_client: LLMClient | None = None
+) -> dict:
     """state["slots"](사용자 정보)와 state["claim_plan"](이전 노드가 전달한,
     검증 완료된 정책 정보)을 바탕으로 state["eligibility_verdicts"]를 채워
     반환한다 (partial state update).
@@ -56,6 +69,11 @@ def determine_eligibility(state: GraphState, store: ChromaVectorStore) -> dict:
     있다). LangGraph 그래프 조립 시 이 store 인스턴스는 체크포인트에 저장되는
     state에 넣지 않고, ``functools.partial(determine_eligibility, store=store)``
     형태로 노드 함수에 주입한다.
+
+    llm_client: 위반 사유 문장을 자연어로 다듬을 때만 쓰는 선택적 LLM
+    클라이언트 (``src.rag_chatbot.llm.LLMClient``). None이면(기본값) LLM을
+    아예 호출하지 않고 규칙이 만든 문장을 그대로 쓴다 - 판정 로직에는 영향
+    없음.
     """
     slots = state.get("slots", {})
     claims_by_policy: dict[str, list[ClaimDraft]] = defaultdict(list)
@@ -126,8 +144,9 @@ def determine_eligibility(state: GraphState, store: ChromaVectorStore) -> dict:
 
         violations = _find_structured_violations(recheck_chunks, slots)
         if violations:
+            reasons = _naturalize_reasons(violations, llm_client)
             verdicts.append(
-                {"policy_id": policy_id, "verdict": "미충족", "reasons": violations}
+                {"policy_id": policy_id, "verdict": "미충족", "reasons": reasons}
             )
             continue
 
@@ -163,3 +182,39 @@ def _find_structured_violations(
                 f"연령 조건 미충족: 최대 {age_end}세까지 지원 (사용자 age={age})"
             )
     return violations
+
+
+def _naturalize_reasons(rule_reasons: list[str], llm_client: LLMClient | None) -> list[str]:
+    """규칙이 만든 위반 사유(예: "연령 조건 미충족: 최소 65세부터 지원
+    (사용자 age=4)")를 LLM으로 자연스러운 한국어 문장으로 다듬는다.
+
+    DRAFT(팀 확인 필요, 확정 전): 프롬프트/출력 스키마가 아직 설계 중이라
+    아래 프롬프트는 임시다. 실제 서빙 모델(RunPod에 올라갈 fine-tuned
+    checkpoint)이 정해지고 프롬프트 설계가 끝나면 이 함수만 교체하면 된다.
+
+    llm_client가 없거나(None) 호출이 실패하면 규칙이 만든 원문 그대로
+    돌려준다 - 판정 결과 자체는 이 함수와 무관하게 이미 확정돼 있으므로,
+    LLM은 "있으면 문장이 더 자연스러워지는" 보조 역할일 뿐이다.
+    """
+    if llm_client is None or not rule_reasons:
+        return rule_reasons
+
+    prompt = (
+        "다음은 복지 정책 자격 조건 위반 사유를 규칙 기반으로 기계적으로 "
+        "생성한 문장이다. 사실 관계(숫자, 조건)는 하나도 바꾸지 말고, 표현만 "
+        "자연스러운 한국어 안내 문장으로 다듬어라. 새로운 조건을 추가하거나 "
+        "추측하지 마라. 문장마다 한 줄씩 출력해라.\n\n"
+        + "\n".join(f"- {reason}" for reason in rule_reasons)
+    )
+    try:
+        response = llm_client.complete(
+            prompt,
+            system="너는 복지 정책 안내 문장을 다듬는 보조 도구다. 사실을 절대 바꾸지 않는다.",
+        )
+    except LLMCallError:
+        return rule_reasons
+
+    naturalized = [line.strip("- ").strip() for line in response.splitlines() if line.strip()]
+    if not naturalized:
+        return rule_reasons
+    return naturalized

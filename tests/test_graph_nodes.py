@@ -14,6 +14,7 @@ from rag_design.contracts import (
     compute_content_hash,
 )
 from src.rag_chatbot.graph.nodes import determine_eligibility
+from src.rag_chatbot.llm import FailingLLMClient, FakeLLMClient
 
 
 def _claim(policy_id: str, status: EvidenceStatus, reasons=("근거 문장",)) -> dict:
@@ -222,3 +223,70 @@ def test_multiple_policies_are_judged_independently():
     by_policy = {v["policy_id"]: v["verdict"] for v in result["eligibility_verdicts"]}
     assert by_policy == {"policy-a": "충족", "policy-b": "미확인"}
     assert [c["doc_id"] for c in store.calls] == ["policy-a"]  # policy-b는 재검색 안 함
+
+
+def test_llm_client_none_leaves_rule_reasons_unchanged():
+    state = {
+        "slots": {"age": 4},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})]}
+    )
+
+    result = determine_eligibility(state, store, llm_client=None)
+
+    verdict = result["eligibility_verdicts"][0]
+    assert verdict["verdict"] == "미충족"
+    assert "연령 조건 미충족" in verdict["reasons"][0]  # 규칙이 만든 원문 그대로
+
+
+def test_llm_client_naturalizes_violation_reasons_when_provided():
+    llm = FakeLLMClient(response="이 정책은 만 65세 이상만 지원합니다. 현재 나이(4세)는 조건에 맞지 않습니다.")
+    state = {
+        "slots": {"age": 4},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})]}
+    )
+
+    result = determine_eligibility(state, store, llm_client=llm)
+
+    verdict = result["eligibility_verdicts"][0]
+    assert verdict["verdict"] == "미충족"  # 판정 자체는 LLM과 무관하게 규칙이 그대로 결정
+    assert verdict["reasons"] == ["이 정책은 만 65세 이상만 지원합니다. 현재 나이(4세)는 조건에 맞지 않습니다."]
+    assert len(llm.calls) == 1
+    assert "65" in llm.calls[0]["prompt"]  # 규칙이 찾은 사실이 프롬프트에 그대로 들어감
+
+
+def test_llm_call_failure_falls_back_to_rule_reasons():
+    state = {
+        "slots": {"age": 4},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})]}
+    )
+
+    result = determine_eligibility(state, store, llm_client=FailingLLMClient())
+
+    verdict = result["eligibility_verdicts"][0]
+    assert verdict["verdict"] == "미충족"  # LLM이 실패해도 판정은 안 흔들림
+    assert "연령 조건 미충족" in verdict["reasons"][0]  # 실패 시 규칙 원문으로 폴백
+
+
+def test_llm_not_called_when_verdict_is_충족():
+    llm = FakeLLMClient(response="아무 응답")
+    state = {
+        "slots": {"age": 70},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})]}
+    )
+
+    result = determine_eligibility(state, store, llm_client=llm)
+
+    assert result["eligibility_verdicts"][0]["verdict"] == "충족"
+    assert llm.calls == []  # 위반이 없으면 자연어화할 것도 없으니 LLM 자체를 안 부름
