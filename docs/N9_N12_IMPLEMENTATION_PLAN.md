@@ -28,9 +28,15 @@ N9 자격 판정, N10 지원금 계산, N11 중복수급 판정, N12 결과 조�
   타입을 `str`에서 `EvidenceStatus`로 좁힌 것 외에 `state.py` 변경 없음).
 - N9~N12는 원래 각자 별도 브랜치(`feat/11-n9-eligibility-verdict-node` 등
   4개)에서 개발됐고, 이번에 `feat/11-N9-N12-node`(구 이름
-  `feat/11-N8-N12-node` — N8은 별도 트랙인 `origin/feat/20-n7-n8-evidence-gate-law-search`에만
-  있고 이 통합 브랜치에는 포함된 적 없음, 이름만 처음 요청받은 그대로였다가
-  이번에 개명)로 순차 병합했다.
+  `feat/11-N8-N12-node` — 개발 당시에는 N8이 별도 트랙
+  `origin/feat/20-n7-n8-evidence-gate-law-search`에만 있어 이 통합 브랜치에
+  포함된 적 없었고, 이름만 처음 요청받은 그대로였다가 이번에 개명)로 순차
+  병합했다.
+- 그 뒤 팀이 N7·N8을 PR #22(`d892120`)로 `main`에 병합했고, 이 브랜치도
+  `git merge main`(`fc61911`)으로 그 내용을 받아왔다. `nodes/__init__.py`,
+  `state.py`의 병합 충돌은 두 트랙이 각자 추가한 export/필드를 합치는
+  방식으로 해결했다(상세는 "구현 단계" 8번 참고). 지금은 N7~N12가 같은
+  브랜치에 함께 있다.
 - 실제 정부24 API 원천(`data/raw/gov24_support_conditions.json`,
   `src/rag_chatbot/collectors/gov_24/to_document.py`)에는 나이 조건
   (JA0110/JA0111 → `age_start`/`age_end`)만 구조화 필드로 확인됐다. 금액,
@@ -50,8 +56,9 @@ N9 자격 판정, N10 지원금 계산, N11 중복수급 판정, N12 결과 조�
   미배포, 프롬프트/출력 스키마 미확정). 이번 구현은 이 상태를 반영해
   `llm_client: LLMClient | None = None`을 노드 시그니처에 추가하고, LLM이
   없거나 실패해도 규칙 기반 결과가 그대로 유지되게 만들었다.
-- 테스트는 표준 `unittest`(pytest로도 실행)를 쓴다. `feat/11-N9-N12-node`
-  기준 전체 suite는 153 passed / 116 subtests passed.
+- 테스트는 표준 `unittest`(pytest로도 실행)를 쓴다. N9~N12만 있던
+  `main` 병합 전에는 전체 suite가 153 passed / 116 subtests passed였고,
+  `main`(N7·N8 포함) 병합 후에는 247 passed / 238 subtests passed다.
 
 ## 확정 계약
 
@@ -271,6 +278,15 @@ N9 자격 판정, N10 지원금 계산, N11 중복수급 판정, N12 결과 조�
    `FailingLLMClient` 기반) 추가 후 통합 브랜치에 재병합.
 8. `scripts/manual_test_chain.py`로 N9→N10→N11→N12 실 체이닝을 실제
    `data/vector_db`(실 유아학비/근로·자녀장려금 데이터) 대상으로 검증.
+9. 팀이 PR #22(`d892120`)로 N7·N8을 `main`에 병합한 뒤, `feat/11-N9-N12-node`에서
+   `git merge main`을 실행 — `nodes/__init__.py`(양쪽이 각자 추가한 노드
+   re-export를 합침), `state.py`(N7·N8이 추가한 `RequiredLawSource`,
+   `EvidenceGateVerdict`, `as_of`/`safety_blocked`/`evidence_gate_verdict`
+   등 필드와 N9~N12 쪽 `ClaimDraft.status: EvidenceStatus` 변경을 합침)
+   두 곳만 실제 충돌이 있었고 수동으로 합쳐서 해결했다. 나머지 20개
+   파일은 CRLF/LF 개행 차이로 인한 노이즈만 있어 `git checkout -- .`로
+   제거하고, 병합 커밋(`fc61911`)을 만들기 전에 전체 suite(247 passed /
+   238 subtests passed)와 노드 import를 재확인했다.
 
 ## 테스트 계획
 
@@ -386,6 +402,11 @@ N7·N8 문서와 달리 이 구현은 원천 데이터 한계로 계약을 전�
   FakeStore 테스트(T14~T39)는 각 노드 커밋에는 존재하지만 통합 브랜치의
   이 파일에는 없다 — 파일을 분리(예: `test_n9_*.py`~`test_n12_*.py`)하는
   정리가 필요하다.
-- **참고, N9~N12와 별개 트랙**: N7(Evidence Gate)·N8(표적 법령 검색)은
-  `origin/feat/20-n7-n8-evidence-gate-law-search`에 이미 구현돼 있으나
-  `main`에는 아직 병합되지 않았고, 이번 N9~N12 통합에도 포함되지 않았다.
+- ~~참고, N9~N12와 별개 트랙: N7·N8은 main에 아직 병합되지 않았다~~ →
+  **2026-08-31 이후 해소됨**: 팀이 PR #22(`d892120`)로 N7(Evidence Gate)·
+  N8(표적 법령 검색)을 `main`에 병합했고, `feat/11-N9-N12-node`도
+  `git merge main`(`fc61911`)으로 받아와 지금은 N7~N12가 한 브랜치에 함께
+  있다("구현 단계" 9번 참고). 다만 N7~N8 자체의 계약 검증은 이 문서
+  범위가 아니라 `docs/N7_N8_IMPLEMENTATION_PLAN.md` 쪽 책임이다 — 이
+  문서는 N9~N12 노드가 그 병합 이후에도 기존 동작(테스트 247/238 전부
+  통과, import 정상)을 그대로 유지하는지까지만 확인했다.
