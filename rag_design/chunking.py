@@ -199,6 +199,12 @@ def chunk_document(
                     "region_scope",
                     "region_names",
                     "service_category",
+                    # JA0110/JA0111(정부24 지원조건조회 API)에서 파생된 나이 조건.
+                    # 문서 metadata에는 있는데 예전에는 여기 화이트리스트에 없어서
+                    # chunk metadata로 못 넘어가고 색인 단계에서 조용히 사라졌음
+                    # (N9가 재검색해도 못 보는 버그였음 - Issue #11에서 발견).
+                    "age_start",
+                    "age_end",
                 )
             )
             for key in source_metadata_fields:
