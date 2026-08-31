@@ -32,7 +32,26 @@ from rag_design.contracts import EvidenceStatus, RetrievedChunk
 
 
 class SlotState(TypedDict, total=False):
-    age: int | None
+    # 나이는 사용자가 말한 숫자를 그대로 쓰지 않는다. N1(slot_parser)이
+    # birth_date에서 파생해 채우는 값만 판정에 쓴다(Issue #21 리뷰 피드백:
+    # 복지제도 자격기준은 대부분 만 나이라, 자기신고 숫자를 그대로 쓰면
+    # 한국식 세는 나이와 헷갈려 경계에서 오판정이 난다).
+    birth_date: str | None
+    age: int | None  # 만 나이(파생값)
+    age_year_based: int | None  # 연 나이(파생값). 일부 청년 정책은 출생연도 기준.
+    age_ref_date: str | None  # 위 두 파생값을 계산한 기준일(ISO 문자열)
+    age_self_reported: int | None  # 사용자가 말한 숫자("30세" 등). 판정에는 쓰지 않음.
+    age_subject: str | None  # 연령 조건이 가리키는 대상(본인/자녀/가구원/unknown)
+    # 하드 게이트 슬롯(slot_schema.PROFILE_HARD_GATE_SLOTS): 값이 없으면 N3가
+    # 사용자에게 되묻는다.
+    gender: str | None
+    income_bracket: str | None
+    disability_status: str | None
+    employment_status: str | None
+    # 소프트 슬롯(slot_schema.SOFT_SLOTS): 있으면 쓰고 없으면 그냥 넘어간다.
+    marital_status: str | None
+    household_types: list[str]
+    pregnancy_status: str | None
     region_scope: str | None
     region_names: list[str]
     interests: list[str]
@@ -100,6 +119,11 @@ class GraphState(TypedDict, total=False):
     as_of: date
     slots: SlotState
     missing_slots: list[str]
+    # N2가 되묻기 상한(slot_schema.MAX_SLOT_ASKS)을 판단하는 데 쓰는 슬롯별
+    # 재질문 횟수. N3(request_missing_slots)가 슬롯을 물을 때마다 올린다.
+    slot_ask_counts: dict[str, int]
+    # 지역을 끝내 받지 못해 N2가 전국 범위로 좁혀 진행했을 때 True.
+    region_fallback_applied: bool
     general_law_references: list[Citation]
     needs_input: bool
     followup_question: str | None
