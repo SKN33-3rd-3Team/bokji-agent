@@ -13,7 +13,11 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from rag_chatbot.graph.nodes import evaluate_evidence, search_targeted_laws
+from rag_chatbot.graph.nodes import (
+    evaluate_evidence,
+    route_evidence_gate,
+    search_targeted_laws,
+)
 from rag_design.chunking import (
     ChunkingConfig,
     chunk_document,
@@ -244,6 +248,193 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
         self.assertEqual(result["law_retry_count"], 0)
         self.assertEqual(state, before)
 
+    def test_t1_subsidy_identity_requires_metadata_source_id(self) -> None:
+        different_doc_id = compute_document_id(
+            source_type=SourceType.SUBSIDY,
+            source_id=self.subsidy_document.source_id,
+            source_updated_at="2026-01-30",
+            effective_from=self.subsidy_document.effective_from,
+            content_hash=self.subsidy_document.content_hash,
+        )
+        self.assertNotEqual(different_doc_id, self.subsidy_document.doc_id)
+
+        for policy_id in (self.subsidy_document.doc_id, different_doc_id):
+            with self.subTest(policy_id=policy_id):
+                claim = self._claim()
+                claim["policy_id"] = policy_id
+
+                result = evaluate_evidence(self._state(claim))
+
+                self.assertFailReason(result, AbstentionReason.NO_EVIDENCE)
+                self.assertEqual(result["missing_document_claim_ids"], [])
+                self.assertEqual(result["missing_law_claim_ids"], [])
+
+    def test_t1_subsidy_parent_id_must_match_metadata_source_id(self) -> None:
+        tampered = self._retrieved(
+            replace(
+                self.subsidy.chunk,
+                metadata={
+                    **self.subsidy.chunk.metadata,
+                    "source_id": "different-source",
+                },
+            )
+        )
+        state = self._state()
+        state["claim_plan"][0]["policy_id"] = "different-source"
+        state["subsidy_chunks"] = [tampered]
+
+        result = evaluate_evidence(state)
+
+        self.assertFailReason(result, AbstentionReason.NO_EVIDENCE)
+        self.assertEqual(result["missing_document_claim_ids"], [])
+        self.assertEqual(result["missing_law_claim_ids"], [])
+
+    def test_t1_content_hash_versioned_subsidy_parent_id_passes(self) -> None:
+        metadata = {
+            **self.subsidy.chunk.metadata,
+            "source_updated_at": None,
+            "effective_from": None,
+        }
+        doc_id = compute_document_id(
+            source_type=SourceType.SUBSIDY,
+            source_id=metadata["source_id"],
+            source_updated_at=None,
+            effective_from=None,
+            content_hash=self.subsidy_document.content_hash,
+        )
+        self.assertNotEqual(doc_id, self.subsidy_document.doc_id)
+        chunk_id = compute_chunk_id_from_document_id(
+            doc_id,
+            self.subsidy.chunk.heading_path,
+            metadata["chunk_part"],
+            metadata["chunking_version"],
+        )
+        subsidy = self._retrieved(
+            replace(
+                self.subsidy.chunk,
+                chunk_id=chunk_id,
+                doc_id=doc_id,
+                metadata=metadata,
+            )
+        )
+        claim = self._claim(evidence_ids=[chunk_id])
+        claim["policy_id"] = metadata["source_id"]
+        state = self._state(claim)
+        state["subsidy_chunks"] = [subsidy]
+
+        result = evaluate_evidence(state)
+
+        self.assertEqual(result["evidence_gate_verdict"], "pass")
+
+    def test_t1_effective_from_versioned_subsidy_parent_id_is_canonical(self) -> None:
+        metadata = {
+            **self.subsidy.chunk.metadata,
+            "source_updated_at": None,
+            "effective_from": "2026-01-01",
+        }
+        doc_id = compute_document_id(
+            source_type=SourceType.SUBSIDY,
+            source_id=metadata["source_id"],
+            source_updated_at=None,
+            effective_from=metadata["effective_from"],
+            content_hash=self.subsidy_document.content_hash,
+        )
+        self.assertNotEqual(doc_id, self.subsidy_document.doc_id)
+        chunk_id = compute_chunk_id_from_document_id(
+            doc_id,
+            self.subsidy.chunk.heading_path,
+            metadata["chunk_part"],
+            metadata["chunking_version"],
+        )
+        subsidy = self._retrieved(
+            replace(
+                self.subsidy.chunk,
+                chunk_id=chunk_id,
+                doc_id=doc_id,
+                metadata=metadata,
+            )
+        )
+        claim = self._claim(evidence_ids=[chunk_id])
+        claim["policy_id"] = metadata["source_id"]
+        state = self._state(claim)
+        state["subsidy_chunks"] = [subsidy]
+
+        self.assertEqual(
+            evaluate_evidence(state)["evidence_gate_verdict"], "pass"
+        )
+
+        state["subsidy_chunks"] = [
+            replace(
+                subsidy,
+                chunk=replace(
+                    subsidy.chunk,
+                    metadata={**metadata, "effective_from": "2026-02-01"},
+                ),
+            )
+        ]
+        self.assertFailReason(
+            evaluate_evidence(state), AbstentionReason.NO_EVIDENCE
+        )
+
+    def test_t1_timezone_updated_subsidy_parent_id_is_canonical(self) -> None:
+        source_updated_at = "2026-01-29T10:22:13+09:00"
+        doc_id = compute_document_id(
+            source_type=SourceType.SUBSIDY,
+            source_id=self.subsidy_document.source_id,
+            source_updated_at=source_updated_at,
+            effective_from=self.subsidy_document.effective_from,
+            content_hash=self.subsidy_document.content_hash,
+        )
+        self.assertNotEqual(doc_id, self.subsidy_document.doc_id)
+        document = replace(
+            self.subsidy_document,
+            doc_id=doc_id,
+            source_updated_at=source_updated_at,
+        )
+        chunk = chunk_document(document)[0]
+        metadata = chunk.metadata
+        subsidy = self._retrieved(chunk)
+        claim = self._claim(evidence_ids=[chunk.chunk_id])
+        state = self._state(claim)
+        state["subsidy_chunks"] = [subsidy]
+
+        self.assertEqual(
+            evaluate_evidence(state)["evidence_gate_verdict"], "pass"
+        )
+
+        for invalid in ("2026-01-29T10:22:13", "not-a-timestamp"):
+            with self.subTest(source_updated_at=invalid):
+                invalid_doc_id = compute_document_id(
+                    source_type=SourceType.SUBSIDY,
+                    source_id=metadata["source_id"],
+                    source_updated_at=invalid,
+                    effective_from=metadata["effective_from"],
+                    content_hash=self.subsidy_document.content_hash,
+                )
+                invalid_chunk_id = compute_chunk_id_from_document_id(
+                    invalid_doc_id,
+                    subsidy.chunk.heading_path,
+                    metadata["chunk_part"],
+                    metadata["chunking_version"],
+                )
+                invalid_chunk = replace(
+                    subsidy.chunk,
+                    chunk_id=invalid_chunk_id,
+                    doc_id=invalid_doc_id,
+                    metadata={**metadata, "source_updated_at": invalid},
+                )
+                invalid_state = self._state(
+                    self._claim(evidence_ids=[invalid_chunk_id])
+                )
+                invalid_state["subsidy_chunks"] = [
+                    self._retrieved(invalid_chunk)
+                ]
+
+                self.assertFailReason(
+                    evaluate_evidence(invalid_state),
+                    AbstentionReason.NO_EVIDENCE,
+                )
+
     def test_t2_missing_n5_evidence_fields_retry_once_then_fail(self) -> None:
         variants = ("status", "reasons", "evidence_chunk_ids")
         for field_name in variants:
@@ -386,6 +577,35 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
                 self.assertFailReason(result, AbstentionReason.SAFETY)
                 self.assertEqual(result["missing_document_claim_ids"], [])
                 self.assertEqual(result["missing_law_claim_ids"], [])
+
+        result = evaluate_evidence(
+            {
+                "safety_blocked": True,
+                "doc_retry_count": 1,
+                "law_retry_count": 0,
+            }
+        )
+        self.assertFailReason(result, AbstentionReason.SAFETY)
+        self.assertEqual(result["doc_retry_count"], 1)
+        self.assertEqual(result["law_retry_count"], 0)
+
+    def test_t6_verdict_router_uses_exact_destinations(self) -> None:
+        expected = {
+            "insufficient_document": "document_verification",
+            "insufficient_law": "targeted_law_search",
+            "pass": "eligibility_verdict",
+            "fail": "terminal",
+        }
+        for verdict, destination in expected.items():
+            with self.subTest(verdict=verdict):
+                self.assertEqual(
+                    route_evidence_gate({"evidence_gate_verdict": verdict}),
+                    destination,
+                )
+
+        for state in ({}, {"evidence_gate_verdict": "unknown"}):
+            with self.subTest(state=state), self.assertRaises(ValueError):
+                route_evidence_gate(state)
 
     def test_t7_conflict_fails_without_retry(self) -> None:
         claim = self._claim()

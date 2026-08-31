@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from rag_design.chunking import compute_chunk_id_from_document_id
@@ -215,6 +215,59 @@ def _law_structure_reason(item: RetrievedChunk) -> AbstentionReason | None:
     if not isinstance(source_name, str) or not source_name.strip():
         return AbstentionReason.NO_EVIDENCE
     return None
+
+
+def _subsidy_updated_at_is_canonical(value: Any) -> bool:
+    if is_canonical_date(value):
+        return True
+    if not isinstance(value, str) or not ("T" in value or " " in value):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _subsidy_parent_id_is_canonical(item: RetrievedChunk) -> bool:
+    metadata = item.chunk.metadata
+    if not isinstance(metadata, Mapping):
+        return False
+    source_id = metadata.get("source_id")
+    if not isinstance(source_id, str) or not source_id.strip():
+        return False
+
+    source_updated_at = metadata.get("source_updated_at")
+    effective_from = metadata.get("effective_from")
+    if source_updated_at is not None:
+        if not _subsidy_updated_at_is_canonical(source_updated_at):
+            return False
+        content_hash = ""
+    elif effective_from is not None:
+        if not is_canonical_date(effective_from):
+            return False
+        content_hash = ""
+    else:
+        _, separator, content_hash_prefix = item.chunk.doc_id.rpartition(":")
+        if (
+            not separator
+            or len(content_hash_prefix) != 16
+            or any(
+                character not in "0123456789abcdef"
+                for character in content_hash_prefix
+            )
+        ):
+            return False
+        content_hash = f"{content_hash_prefix}{'0' * 48}"
+
+    expected_doc_id = compute_document_id(
+        source_type=SourceType.SUBSIDY,
+        source_id=source_id,
+        source_updated_at=source_updated_at,
+        effective_from=effective_from,
+        content_hash=content_hash,
+    )
+    return item.chunk.doc_id == expected_doc_id
 
 
 def _law_pair(item: RetrievedChunk) -> _LawPair:
@@ -443,6 +496,7 @@ def _resolve_evidence(
                     not isinstance(source_id, str)
                     or not source_id.strip()
                     or source_id != claim["policy_id"]
+                    or not _subsidy_parent_id_is_canonical(item)
                 ):
                     return _terminal_resolution(AbstentionReason.NO_EVIDENCE)
                 subsidy_evidence.append(item)
@@ -610,13 +664,24 @@ def _output(
     }
 
 
+def route_evidence_gate(state: GraphState) -> str:
+    """Return the exact next node for an N7 verdict."""
+
+    routes = {
+        "insufficient_document": "document_verification",
+        "insufficient_law": "targeted_law_search",
+        "pass": "eligibility_verdict",
+        "fail": "terminal",
+    }
+    try:
+        return routes[state["evidence_gate_verdict"]]
+    except (KeyError, TypeError):
+        raise ValueError("missing or unknown evidence_gate_verdict") from None
+
+
 def evaluate_evidence(state: GraphState) -> dict[str, Any]:
     """Validate every declared evidence ID and return an N7 partial update."""
 
-    query_id = _query_id(state)
-    claims = _claim_plan(state)
-    subsidy_chunks = _retrieved_chunks(state, "subsidy_chunks")
-    law_chunks = _retrieved_chunks(state, "law_chunks")
     doc_retry_count = _retry_count(state, "doc_retry_count")
     law_retry_count = _retry_count(state, "law_retry_count")
 
@@ -633,6 +698,11 @@ def evaluate_evidence(state: GraphState) -> dict[str, Any]:
             doc_retry_count=doc_retry_count,
             law_retry_count=law_retry_count,
         )
+
+    query_id = _query_id(state)
+    claims = _claim_plan(state)
+    subsidy_chunks = _retrieved_chunks(state, "subsidy_chunks")
+    law_chunks = _retrieved_chunks(state, "law_chunks")
 
     if any(_claim_status(claim) is EvidenceStatus.CONFLICT for claim in claims):
         return _output(
@@ -724,4 +794,4 @@ def evaluate_evidence(state: GraphState) -> dict[str, Any]:
     )
 
 
-__all__ = ["evaluate_evidence"]
+__all__ = ["evaluate_evidence", "route_evidence_gate"]

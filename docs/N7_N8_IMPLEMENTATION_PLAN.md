@@ -32,18 +32,24 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 
 ### 공통 입력 불변조건과 E9 직접 입력
 
-- `claim_plan`은 호출자가 만든 ordered `list[ClaimDraft]` 전체 plan이며 최소 1개 claim을
-  가져야 한다. key 누락·비-list·빈 plan은 vacuous `pass`를 막기 위해 명시적 입력
-  오류로 거부한다. `claim_id`는 비어 있지 않고 plan 안에서 유일해야 하며 N7/N8은
+- safety fail short-circuit 뒤의 safe 입력에서 `claim_plan`은 호출자가 만든 ordered
+  `list[ClaimDraft]` 전체 plan이며 최소 1개 claim을 가져야 한다. key 누락·비-list·빈
+  plan은 vacuous `pass`를 막기 위해 명시적 입력 오류로 거부한다. `claim_id`는 비어
+  있지 않고 plan 안에서 유일해야 하며 N7/N8은
   순서를 바꾸거나 입력 객체를 직접 수정하지 않는다. 중복 claim ID나 claim 내부 중복
   evidence ID도 명시적 입력 오류다.
-- 각 claim의 `policy_id`는 공백이 아닌 `str`, `doc_check_required`와
+- 각 claim의 `policy_id`는 안정적인 원천 provenance인
+  `Chunk.metadata["source_id"]`와 같은 공백이 아닌 `str`이어야 한다. 부모 subsidy
+  문서의 버전 포함 `Chunk.doc_id`는 별도로 canonical 일관성을 검증한다.
+  따라서 같은 `source_id`의 다른 버전도 선언 evidence ID가 가리킨 parent ID가
+  canonical하고 기존 `as_of` filter를 통과하면 허용한다.
+  `doc_check_required`와
   `law_check_required`는 실제 `bool`, `evidence_chunk_ids`와 `reasons`는 중복·공백이
   없는 문자열 목록이어야 한다. 잘못된 타입은 명시적 입력 오류다.
 - `claim_type`은 필수이며 정확히 `eligibility | amount | duplicate` 중 하나다. 누락,
   다른 문자열, 비문자열 값은 명시적 입력 오류다.
-- `query_id`는 공백이 아닌 `str`이어야 한다. 누락·비문자열·공백 값은 임의 생성하지
-  않고 명시적 입력 오류로 종료한다.
+- safe 입력의 `query_id`는 공백이 아닌 `str`이어야 한다. 누락·비문자열·공백 값은
+  임의 생성하지 않고 명시적 입력 오류로 종료한다.
 - E9로 직접 들어오는 `doc_check_required=False` claim도 자동으로 검증된 것으로 보지
   않는다. 다음을 모두 만족해야 문서 근거가 유효하다.
   - N5가 `status="supported"`, 비어 있지 않은 `reasons`, 비어 있지 않은
@@ -56,11 +62,13 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   - 실제 subsidy ID가 최소 하나 있고 해당 `RetrievedChunk.query_id`가 모두
     `state.query_id`와 같다.
   - 참조한 모든 subsidy chunk의 `source_type`이 `SourceType.SUBSIDY`이고
-    `chunk.metadata["source_id"] == claim.policy_id`다.
+    `chunk.metadata["source_id"] == claim.policy_id`다. metadata의 `source_id`와
+    선택된 version field로 재계산한 canonical parent ID도 `chunk.doc_id`와 같아야 한다.
 - 위 조건은 N6를 거친 claim의 subsidy evidence에도 동일하게 적용한다. status·reasons·
   evidence 목록 자체가 부족한 clean claim은 첫 실행 `insufficient_document`, retry
   소진 후 `fail`이다. 반면 선언 ID의 unknown/dual resolve, cross-query, wrong-source,
-  wrong-policy는 재검색으로 고칠 수 없는 입력 무결성 오류이므로 즉시 terminal `fail`하고
+  wrong-policy, wrong-parent-doc-id나 parent/metadata 불일치는 재검색으로 고칠 수 없는
+  입력 무결성 오류이므로 즉시 terminal `fail`하고
   두 missing 목록을 비운다. N5/N6 구현은 이번 범위가 아니다.
 
 ### 공식 법령 원천 선언
@@ -109,7 +117,8 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 - 선언된 evidence ID는 두 chunk pool의 `chunk_id` index에서 정확히 한 항목으로
   resolve해야 한다. resolve된 항목의 pool, `chunk.source_type`, `index_name`이 서로
   일치하고 `RetrievedChunk.query_id == state.query_id`여야 한다. unknown·duplicate·dual,
-  cross-query, wrong-source, subsidy wrong-policy, claim이 선언하지 않은 law identity는
+  cross-query, wrong-source, subsidy wrong-policy, wrong-parent-doc-id 또는
+  parent/metadata 불일치, claim이 선언하지 않은 law identity는
   retry 불가 terminal `NO_EVIDENCE`/`fail`이며 missing 목록은 둘 다 빈 목록이다.
 - law evidence의 identity는 실제 chunk metadata의 `(law_type, source_id)`로 계산하고
   claim의 `required_law_sources`에 정확히 있어야 한다. 예상하지 않은 pair는 canonical
@@ -191,6 +200,11 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   - `doc_retry_count: int`, `law_retry_count: int`
 - retry count 누락은 0으로 읽는다. `type(value) is int`, `0 <= value <= 1`만 받으며
   bool·음수·비-int·1 초과는 명시적 입력 오류다.
+- safety fail은 유효한 retry count를 보존해 출력한 뒤 query/claim/chunk 입력을 읽지
+  않는다. 따라서 unsafe 요청은 누락된 query/plan보다 먼저 `SAFETY -> fail`한다.
+- `route_evidence_gate()`는 `insufficient_document -> document_verification`,
+  `insufficient_law -> targeted_law_search`, `pass -> eligibility_verdict`,
+  `fail -> terminal`을 정확히 반환하며 verdict 누락·미지원 값은 입력 오류로 거부한다.
 - 문서와 법령 근거가 모두 부족하면 선행 단계인 문서 확인을 먼저 반환한다.
 - 최초 문서/법령 부족 판정은 해당 count를 1로 올려 `insufficient_*`를 반환한다.
   같은 종류의 부족이 다시 발견되면 추가 증가 없이 `fail`한다.
@@ -255,8 +269,9 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   만든다. callable은 state에 저장하지 않는다.
 - 질의 text는 optional `ClaimDraft.search_query`의 trim 결과를 우선한다. 없거나 비어
   있으면 대상 claim이 이미 참조한 subsidy evidence IDs 중 공통 입력 계약을 통과하고
-  `chunk.metadata["source_id"] == policy_id`인 `chunk.text`만 state 입력 순서대로
-  결합한다. 같은 policy의 미참조 chunk는 사용하지 않는다. 검증된 claim-bound text도
+  `chunk.metadata["source_id"] == policy_id`이고 canonical parent `doc_id`를 가진
+  `chunk.text`만 state 입력 순서대로 결합한다. 같은 policy의 미참조 chunk는 사용하지
+  않는다. 검증된 claim-bound text도
   없으면 검색어나 법령명을 추정하지 않고 해당 claim을 미충족으로 남겨 N7이
   fail-closed 한다. 비문자열 `search_query`는 명시적 입력 오류다.
 - 검색은 target claim 순서와 그 claim의 `required_law_sources` 순서를 보존해, 아직
@@ -331,6 +346,9 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
   `source_id: str`
 - `EvidenceGateVerdict = Literal["pass", "insufficient_document",
   "insufficient_law", "fail"]`
+- N7/N8 evidence binding의 `ClaimDraft.policy_id`는 안정 원천 ID인 chunk metadata의
+  `source_id`; 부모 subsidy 문서의 버전 포함 `Chunk.doc_id`는 이 원천 ID와
+  canonical하게 일치하는지 별도 검증
 - `ClaimDraft`: `claim_type: ClaimType`, `search_query: str`,
   `required_aspects: list[str]`, `required_law_sources: list[LawSourceRef]`
 - `GraphState`: `as_of: str`, `safety_blocked: bool`,
@@ -348,7 +366,7 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 | N7 프롬프트는 3-way지만 E11에 N6 재확인 경로가 있다. | E11/E12를 모두 지원하는 4-way verdict를 채택하고 N6 자체는 구현하지 않는다. |
 | 출력명이 `verdict`와 `evidence_gate_verdict`로 다르다. | `evidence_gate_verdict`로 통일하고 두 missing ID 목록과 두 count를 매번 반환한다. |
 | retry 초기값·상한·타입 규칙이 없다. | 누락=0, N7 부족 분기에서 증가, 종류별 1회, 잘못된 타입/범위는 오류로 고정한다. |
-| E9의 `doc_check_required=False`가 검증 bypass처럼 보인다. | N5 supported 상태·이유·실제 query/policy-matched subsidy evidence가 모두 있어야 인정한다. |
+| E9의 `doc_check_required=False`가 검증 bypass처럼 보인다. | N5 supported 상태·이유·실제 query/policy-matched 및 canonical parent subsidy evidence가 모두 있어야 인정한다. |
 | 법령 검색 대상 identity가 claim에 없다. | N5/N6가 official metadata 기반 ordered `required_law_sources`를 선언하고 N8은 exact pair filter만 사용한다. top hit 역선택은 금지한다. |
 | fabricated ID와 valid ID가 함께 있으면 valid 하나로 통과할 수 있다. | 모든 declared evidence ID를 union에서 exactly-once resolve하고 unknown/dual/cross-query 등 provenance 오류는 retry 없이 fail한다. |
 | 같은 법령 identity의 여러 현행 sequence가 동시에 들어올 수 있다. | `(law_type, source_id)`별 current `source_sequence`를 dedupe 전에 계산해 둘 이상이면 임의 선택 없이 conflict/fail하고 N8은 전체 미병합한다. |
@@ -369,9 +387,9 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 | --- | --- |
 | `rag_design/chunking.py` | `compute_chunk_id_from_document_id()` 최소 추출, 기존 `compute_chunk_id(Document, ...)` delegate로 API·결과 보존 |
 | `src/rag_chatbot/graph/state.py` | `ClaimType`, total `LawSourceRef`, `EvidenceGateVerdict`, `ClaimDraft`, `GraphState` optional 필드 추가 |
-| `src/rag_chatbot/graph/nodes/evidence_gate.py` | 공용 provenance/coverage resolver와 `evaluate_evidence(state: GraphState) -> dict` 구현 |
+| `src/rag_chatbot/graph/nodes/evidence_gate.py` | 공용 provenance/coverage resolver, `evaluate_evidence(state: GraphState) -> dict`, exact verdict router 구현 |
 | `src/rag_chatbot/graph/nodes/targeted_law_search.py` | `LawSearch`, `search_targeted_laws(state, *, search)` 구현 |
-| `src/rag_chatbot/graph/nodes/__init__.py` | 두 실제 노드 함수 re-export |
+| `src/rag_chatbot/graph/nodes/__init__.py` | 두 실제 노드 함수와 N7 verdict router re-export |
 | `tests/test_evidence_gate_and_targeted_law_search.py` | fake searcher 기반 단일 `unittest` 파일 추가 |
 
 구현 변경 파일은 위 6개로 고정한다. `rag_design`에서는 `chunking.py`의 공유 helper 추출
@@ -386,17 +404,18 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 3. N7 입력 검증에서 query ID, exact claim type, ordered unique claims/evidence/source
    pairs, safety bool, counters, canonical `as_of`를 확인한다.
 4. N7/N8이 함께 쓰는 단일 resolver에서 declared evidence를 exactly-once resolve하고
-   query/pool/source/policy/law identity provenance를 검증한다.
+   query/pool/source/policy/parent-doc/law identity provenance를 검증한다.
 5. LAW는 기존 schema/hash/document/canonical/date/citation helpers와 공유 chunk ID
    helper를 조합해 per-hit deterministic 계약 및 revision/part coherence를 검증하고,
    subsidy는 기존 `MetadataFilter`/`chunk_matches_filter()`의 optional date 경계를 유지한다.
 6. claim별 all-of law source coverage와 실제 supported aspects를 계산해 provenance
-   terminal fail, 4-way verdict, retry 상한과 stale 방지 전체 output을 반환한다.
+   terminal fail, 4-way verdict, retry 상한과 stale 방지 전체 output을 반환하고 exact
+   verdict router를 제공한다.
 7. N8에서 N7 provenance output과 exact target 재계산을 확인한 뒤 missing pair별 exact
    metadata filter로 direct callable을 호출하고, 결과 identity/contract 검증,
    same-ID payload·revision coherence·복수 current sequence pre-dedupe 검증 후 deep-copied
    claim별 evidence·전체 law chunk dedupe를 구현한다.
-8. 실제 노드 함수를 `nodes/__init__.py`에서 re-export한다.
+8. 실제 노드 함수와 verdict router를 `nodes/__init__.py`에서 re-export한다.
 9. 단일 테스트 파일로 연결부·provenance 실패 경계·입력 불변성과 metadata-only 제한을
    검증한다.
 
@@ -404,22 +423,23 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 
 | ID | 시나리오 | 핵심 확인 |
 | --- | --- | --- |
-| T0 | `claim_plan` 누락·비-list·빈 목록, `claim_type` 누락·3값 외 값 | vacuous `pass` 없이 명시적 입력 오류, `eligibility`, `amount`, `duplicate`만 허용 |
+| T0 | safe 입력의 `claim_plan` 누락·비-list·빈 목록, `claim_type` 누락·3값 외 값 | vacuous `pass` 없이 명시적 입력 오류, `eligibility`, `amount`, `duplicate`만 허용 |
 | T1 | E9 직접 claim의 유효한 N5 subsidy evidence | 날짜 경계가 없는 기존 subsidy fixture도 unbounded로 `pass`, ordered plan과 state 불변 |
 | T2 | E9 status/reasons/evidence 중 하나 부족 | 최초 `insufficient_document`, count 소진 후 `fail` |
 | T3 | 유효 subsidy + nonempty exact `required_law_sources`, law metadata 최초 부족 | clean provenance에서만 `insufficient_law`, count 1, 정확한 대상 IDs |
 | T4 | exact `(law_type, source_id)` canonical evidence 또는 N8 exact-pair 보충 | all-of pair가 모두 있을 때만 N7 `pass`; law-only substantive pass 불가 |
 | T5 | N8 pair 검색의 정상 빈 결과 | 해당 실행의 수집 결과 전체 미병합, 다음 N7에서 retry 소진 `fail`, 추가 루프 없음 |
-| T6 | safety 누락·비-bool·True | 모두 retry 없는 SAFETY `fail` |
+| T6 | safety 누락·비-bool·True, unsafe 요청의 query/plan 누락 | 유효 count를 보존하고 입력 parsing보다 먼저 SAFETY `fail` |
+| T6-A | N7 verdict route와 누락·미지원 verdict | 4개 verdict를 exact node label로 매핑하고 그 외 값은 입력 오류 |
 | T7 | conflict status 또는 한 law identity의 복수 current `source_sequence` | 임의 버전 선택 없이 즉시 CONFLICT `fail` |
 | T8 | `as_of`와 source별 interval 경계 | subsidy `None` dates는 unbounded, 값이 있으면 `[from,to)`; LAW는 strict canonical `[from,to)` |
 | T9 | counter 누락 및 잘못된 값 | 누락=0; bool·음수·비-int·1 초과는 명시적 오류 |
 | T10 | duplicate claim/evidence ID와 duplicate/invalid `LawSourceRef` pair | 입력 오류, leading-zero source ID 보존, 입력 plan 불변 |
 | T10-A | searchable claim의 source 목록 누락·빈 값, law-disabled claim의 nonempty 목록 | 전자는 identity 추정 없이 terminal fail/N8 미호출, 후자는 모순 입력 오류 |
-| T11 | valid ID와 fabricated ID 혼합, unknown/dual/cross-query/wrong-pool/wrong-policy evidence | valid 일부로 통과 금지; N7 terminal `fail`, missing 목록 empty, N8 미호출 |
+| T11 | valid ID와 fabricated ID 혼합, unknown/dual/cross-query/wrong-pool, metadata source_id와 다른 policy_id, doc_id를 policy_id로 쓴 evidence, source/version과 불일치하는 parent doc_id | exact source_id policy match와 canonical parent doc_id 외에는 통과 금지; N7 terminal `fail`, missing 목록 empty, N8 미호출 |
 | T12 | `required_aspects` 누락/빈값/미지원/flag 모순과 metadata+article 혼합 | article/interpretation은 N8 미호출; valid metadata가 있으면 `missing_aspects`에는 article만 남음 |
 | T13 | `search_query`와 fallback | explicit query 우선, 검증된 matching subsidy text만 입력순 결합, 매핑 없으면 검색 안 함 |
-| T14 | query ID 누락·비문자열·공백 | 검색/판정 전에 명시적 오류 |
+| T14 | safe 입력의 query ID 누락·비문자열·공백 | evidence 검색/판정 전에 명시적 오류 |
 | T15 | fake search 실제 호출 계약 | missing pair마다 LAW source, 동일 query ID, canonical as-of와 exact `law_type/source_id` filter |
 | T15-A | N8 entry provenance 묶음 검증 | safety/verdict/count/NO_EVIDENCE/missing-docs, canonical as-of와 재계산 target exact equality가 틀리면 search 전 오류 |
 | T16 | wrong subtype/unrelated source, non-ASCII·nondecimal source ID/sequence와 result mismatch | malformed/unexpected pair는 N7 terminal fail; N8 wrong pair 결과는 명시적 오류·미병합 |
@@ -452,12 +472,14 @@ git diff --check
 ## 완료 기준
 
 - N7이 E9 포함 모든 declared evidence ID를 state chunk union에서 exactly-once resolve하고
-  query/pool/source/policy/expected-law-identity provenance를 검증한다.
-- N7은 누락·비-list·빈 `claim_plan`을 거부해 빈 plan을 `pass`하지 않는다.
+  query/pool/source/policy/parent-doc/expected-law-identity provenance를 검증한다.
+- N7은 safe 입력에서 누락·비-list·빈 `claim_plan`을 거부해 빈 plan을 `pass`하지 않는다.
 - N7은 필수 `claim_type` 3값과 ordered-unique all-of `required_law_sources`를 검증하고,
   fabricated+valid 혼합이나 unexpected law pair를 retry 가능한 missing으로 낮추지 않는다.
 - N7이 4개 verdict, 종류별 retry 1회와 전체 relevant output key를 결정론적으로
   반환한다.
+- N7 verdict router가 4개 verdict를 exact node label로 매핑하고 누락·미지원 값을
+  거부한다.
 - safety, conflict, canonical as-of와 source별 저장소 날짜 계약을 기존 filter helper로
   fail-closed 검증한다.
 - LAW는 canonical date/effective interval, content hash, computed document ID와 canonical
@@ -486,7 +508,8 @@ git diff --check
 - N5/N6가 official structured metadata에서 `required_aspects`, nonempty
   `required_law_sources`와 유효한 subsidy evidence를 생산하지 않은 searchable law
   claim은 fail-closed된다. N8은 누락 identity를 추정하지 않는다. `search_query` 누락은
-  검증된 policy-matched subsidy text가 있을 때만 예외이며, 그것도 없으면 fail-closed다.
+  검증된 policy-matched 및 canonical parent subsidy text가 있을 때만 예외이며, 그것도
+  없으면 fail-closed다.
 - graph ingress/선행 producer가 실제 bool `safety_blocked`와 canonical `as_of`를 반드시
   공급한다. unsafe default, `date.today()` 추정, 누락 시 subsidy-only claim을 우회하는
   fallback은 없으며 graph builder가 범위 밖인 이번 변경의 명시적 integration

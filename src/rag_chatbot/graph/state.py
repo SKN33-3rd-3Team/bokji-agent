@@ -23,6 +23,10 @@ EvidenceGateVerdict = Literal[
     "fail",
 ]
 
+# N7/N8 evidence binding에서 ClaimDraft.policy_id는 안정적인 subsidy 원천 ID인
+# Chunk.metadata["source_id"]다. N7은 이 원천 ID와 Chunk.doc_id의 canonical
+# 일관성도 검증한다.
+
 
 class LawSourceRef(TypedDict):
     law_type: Literal["law", "admrul", "ordin"]
