@@ -16,8 +16,8 @@ metadata(age_start/age_end 등)를 slots와 직접 대조해서, "근거 문장�
 - 미충족: 재검색한 chunk의 구조화 조건과 slots가 명백히 어긋남
   (예: age_start/age_end 범위를 벗어남). 이 경우만 "위반이 확인됐다"고 본다.
 - 미확인: 그 외 전부 - claim 근거가 없거나(UNSUPPORTED/PARTIAL/CONFLICT),
-  재검색에서 해당 정책 chunk를 다시 찾지 못했거나, 슬롯/문서 어느 한쪽에
-  구조화 조건이 없어 비교 자체가 불가능한 경우.
+  재검색에서 해당 정책 chunk를 다시 찾지 못했거나(컬렉션이 아예 없는 경우 포함),
+  슬롯/문서 어느 한쪽에 구조화 조건이 없어 비교 자체가 불가능한 경우.
 
 근거 문장에 명시되지 않은 조건은 절대 판단하지 않고 미확인을 반환한다
 (추측 금지).
@@ -29,7 +29,11 @@ from collections import defaultdict
 from typing import Iterable
 
 from rag_design.contracts import EvidenceStatus, RetrievedChunk, SourceType
-from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
+from rag_design.vector_store import (
+    ChromaVectorStore,
+    CollectionNotFoundError,
+    VectorSearchFilter,
+)
 
 from ..state import ClaimDraft, EligibilityVerdict, GraphState
 
@@ -97,13 +101,19 @@ def determine_eligibility(state: GraphState, store: ChromaVectorStore) -> dict:
 
         # 여기까지 왔으면 관련 claim이 전부 SUPPORTED. 같은 정책 문서를
         # vectorDB에서 한 번 더 검색해 구조화 자격 조건을 재확인한다.
-        recheck_chunks = store.search(
-            SourceType.SUBSIDY,
-            f"{policy_id} 지원자격",
-            query_id=f"{state.get('query_id', 'n9')}-{policy_id}-recheck",
-            top_k=_RECHECK_TOP_K,
-            search_filter=VectorSearchFilter(metadata_equals={"doc_id": policy_id}),
-        )
+        try:
+            recheck_chunks = store.search(
+                SourceType.SUBSIDY,
+                f"{policy_id} 지원자격",
+                query_id=f"{state.get('query_id', 'n9')}-{policy_id}-recheck",
+                top_k=_RECHECK_TOP_K,
+                search_filter=VectorSearchFilter(metadata_equals={"doc_id": policy_id}),
+            )
+        except CollectionNotFoundError:
+            # 아직 어떤 정책도 색인되지 않은 상태 (컬렉션 자체가 없음) - 근거를
+            # 찾지 못한 것과 동일하게 취급한다. 여기서 예외를 그대로 흘려보내면
+            # 그래프 전체가 죽는다.
+            recheck_chunks = ()
         if not recheck_chunks:
             verdicts.append(
                 {
