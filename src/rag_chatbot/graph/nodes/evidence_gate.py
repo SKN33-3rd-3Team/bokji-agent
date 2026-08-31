@@ -141,13 +141,17 @@ def _claim_plan(state: GraphState) -> list[ClaimDraft]:
         pairs: list[_LawPair] = []
         for source in sources:
             if not isinstance(source, dict) or set(source) != {"law_type", "source_id"}:
-                raise ValueError("LawSourceRef must contain law_type and source_id")
+                raise ValueError(
+                    "RequiredLawSource must contain law_type and source_id"
+                )
             try:
                 law_type = LegalDocumentType(source["law_type"]).value
             except (TypeError, ValueError) as exc:
-                raise ValueError("LawSourceRef.law_type is unsupported") from exc
+                raise ValueError(
+                    "RequiredLawSource.law_type is unsupported"
+                ) from exc
             source_id = _ascii_decimal(
-                source["source_id"], "LawSourceRef.source_id"
+                source["source_id"], "RequiredLawSource.source_id"
             )
             pairs.append((law_type, source_id))
         if len(set(pairs)) != len(pairs):
@@ -189,8 +193,10 @@ def _retry_count(state: GraphState, field_name: str) -> int:
 
 def _as_of_date(state: GraphState) -> date:
     value = state.get("as_of")
+    if type(value) is date:
+        return value
     if not is_canonical_date(value):
-        raise ValueError("as_of must be a canonical YYYY-MM-DD date")
+        raise ValueError("as_of must be a date or canonical YYYY-MM-DD string")
     return date.fromisoformat(value)
 
 

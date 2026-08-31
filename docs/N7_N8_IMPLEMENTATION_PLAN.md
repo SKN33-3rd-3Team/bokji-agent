@@ -76,12 +76,12 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 - state 계약에 다음 total `TypedDict`를 추가한다. 두 key는 모두 필수다.
 
   ```python
-  class LawSourceRef(TypedDict):
+  class RequiredLawSource(TypedDict):
       law_type: Literal["law", "admrul", "ordin"]
       source_id: str
   ```
 
-- `ClaimDraft.required_law_sources`는 optional `list[LawSourceRef]`다. 각 `source_id`는
+- `ClaimDraft.required_law_sources`는 optional `list[RequiredLawSource]`다. 각 `source_id`는
   비어 있지 않은 ASCII decimal 문자열이어야 하며 정수로 바꾸지 않아 선행 0을
   보존한다. identity는 `(law_type, source_id)`이고 입력 순서를 보존하며 pair 중복은
   명시적 입력 오류다. 목록은 all-of라서 선언된 모든 pair가 충족되어야 한다.
@@ -103,9 +103,9 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 - `safety_blocked`는 명시적인 실제 `bool`이어야 한다. 누락 또는 비-bool이면 안전을
   추정하지 않고 `AbstentionReason.SAFETY`로 즉시 `fail`한다. `True`도 즉시 `fail`이다.
 - claim `status="conflict"`는 retry 없이 즉시 `fail`한다.
-- `as_of`는 subsidy-only E9를 포함한 모든 N7 evidence 판정에서 필수다.
-  `is_canonical_date()`와 `date.fromisoformat()`을 모두 통과해야 한다. 누락·오류는
-  retry 없이 `AbstentionReason.STALE`과 `fail`이다. `date.today()`를 사용하지 않는다.
+- `as_of`는 subsidy-only E9를 포함한 모든 N7 evidence 판정에서 필수인 `date`다.
+  기존 canonical `YYYY-MM-DD` 문자열 입력도 얇은 정규화 계층에서 호환한다. 누락·오류는
+  retry 없이 `AbstentionReason.STALE`과 `fail`이며 `date.today()`를 사용하지 않는다.
 - 위 공통 검증 뒤에는 declared ID exact resolution과 provenance를 먼저 확정하고,
   통과한 실제 chunk에만 strict date/freshness와 coverage 판정을 적용한다.
 - 참조한 각 실제 chunk에
@@ -253,8 +253,8 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 - 각 target은 `law_check_required=True`, `required_aspects`가 정확히
   `["legal_metadata"]`, nonempty ordered-unique `required_law_sources`를 가져야 한다.
   이미 모든 expected pair가 충족된 target은 stale target이며 검색하지 않는다.
-- N8도 `as_of`를 직접 `is_canonical_date()`로 검사하고 `date.fromisoformat()`으로
-  변환한다. 누락·비문자열·비canonical 값은 search를 호출하지 않고 명시적 입력 오류다.
+- N8도 N7과 같은 정규화 helper로 `as_of`를 `date`로 확정한다. 누락·비canonical 값은
+  search를 호출하지 않고 명시적 입력 오류다.
 - 공개 함수는 factory 없이 다음 하나다.
 
   ```python
@@ -341,17 +341,16 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 
 기존 `TypedDict(total=False)`에 필요한 producer/output 필드만 추가한다.
 
-- `ClaimType = Literal["eligibility", "amount", "duplicate"]`
-- total `LawSourceRef`: `law_type: Literal["law", "admrul", "ordin"]`,
+- total `RequiredLawSource`: `law_type: Literal["law", "admrul", "ordin"]`,
   `source_id: str`
 - `EvidenceGateVerdict = Literal["pass", "insufficient_document",
   "insufficient_law", "fail"]`
 - N7/N8 evidence binding의 `ClaimDraft.policy_id`는 안정 원천 ID인 chunk metadata의
   `source_id`; 부모 subsidy 문서의 버전 포함 `Chunk.doc_id`는 이 원천 ID와
   canonical하게 일치하는지 별도 검증
-- `ClaimDraft`: `claim_type: ClaimType`, `search_query: str`,
-  `required_aspects: list[str]`, `required_law_sources: list[LawSourceRef]`
-- `GraphState`: `as_of: str`, `safety_blocked: bool`,
+- `ClaimDraft`: `claim_type: str`, `search_query: str`,
+  `required_aspects: list[str]`, `required_law_sources: list[RequiredLawSource]`
+- `GraphState`: `as_of: date`, `safety_blocked: bool`,
   `evidence_gate_verdict: EvidenceGateVerdict`,
   `abstention_decision: AbstentionDecision`,
   `missing_document_claim_ids: list[str]`, `missing_law_claim_ids: list[str]`,
@@ -386,7 +385,7 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 | 파일 | 변경 |
 | --- | --- |
 | `rag_design/chunking.py` | `compute_chunk_id_from_document_id()` 최소 추출, 기존 `compute_chunk_id(Document, ...)` delegate로 API·결과 보존 |
-| `src/rag_chatbot/graph/state.py` | `ClaimType`, total `LawSourceRef`, `EvidenceGateVerdict`, `ClaimDraft`, `GraphState` optional 필드 추가 |
+| `src/rag_chatbot/graph/state.py` | total `RequiredLawSource`, `EvidenceGateVerdict`, `ClaimDraft`, `GraphState` optional 필드 추가 |
 | `src/rag_chatbot/graph/nodes/evidence_gate.py` | 공용 provenance/coverage resolver, `evaluate_evidence(state: GraphState) -> dict`, exact verdict router 구현 |
 | `src/rag_chatbot/graph/nodes/targeted_law_search.py` | `LawSearch`, `search_targeted_laws(state, *, search)` 구현 |
 | `src/rag_chatbot/graph/nodes/__init__.py` | 두 실제 노드 함수와 N7 verdict router re-export |
@@ -434,7 +433,7 @@ N7 Evidence Gate와 N8 표적 법령 검색을 기존 `GraphState`, RAG 계약, 
 | T7 | conflict status 또는 한 law identity의 복수 current `source_sequence` | 임의 버전 선택 없이 즉시 CONFLICT `fail` |
 | T8 | `as_of`와 source별 interval 경계 | subsidy `None` dates는 unbounded, 값이 있으면 `[from,to)`; LAW는 strict canonical `[from,to)` |
 | T9 | counter 누락 및 잘못된 값 | 누락=0; bool·음수·비-int·1 초과는 명시적 오류 |
-| T10 | duplicate claim/evidence ID와 duplicate/invalid `LawSourceRef` pair | 입력 오류, leading-zero source ID 보존, 입력 plan 불변 |
+| T10 | duplicate claim/evidence ID와 duplicate/invalid `RequiredLawSource` pair | 입력 오류, leading-zero source ID 보존, 입력 plan 불변 |
 | T10-A | searchable claim의 source 목록 누락·빈 값, law-disabled claim의 nonempty 목록 | 전자는 identity 추정 없이 terminal fail/N8 미호출, 후자는 모순 입력 오류 |
 | T11 | valid ID와 fabricated ID 혼합, unknown/dual/cross-query/wrong-pool, metadata source_id와 다른 policy_id, doc_id를 policy_id로 쓴 evidence, source/version과 불일치하는 parent doc_id | exact source_id policy match와 canonical parent doc_id 외에는 통과 금지; N7 terminal `fail`, missing 목록 empty, N8 미호출 |
 | T12 | `required_aspects` 누락/빈값/미지원/flag 모순과 metadata+article 혼합 | article/interpretation은 N8 미호출; valid metadata가 있으면 `missing_aspects`에는 article만 남음 |

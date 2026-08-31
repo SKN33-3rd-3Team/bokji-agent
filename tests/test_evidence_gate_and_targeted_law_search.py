@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import sys
 import unittest
@@ -632,7 +632,13 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
         self.assertEqual(result["missing_law_claim_ids"], [])
 
     def test_t8_as_of_and_half_open_intervals_fail_stale(self) -> None:
-        for value in (None, "20260826", "2026-02-30"):
+        invalid_values = (
+            None,
+            "20260826",
+            "2026-02-30",
+            datetime(2026, 8, 26),
+        )
+        for value in invalid_values:
             with self.subTest(as_of=value):
                 state = self._state()
                 if value is None:
@@ -679,6 +685,12 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
         state = self._state(claim)
         state["law_chunks"] = [self._retrieved(undated_law)]
         self.assertFailReason(evaluate_evidence(state), AbstentionReason.STALE)
+
+    def test_t8_date_as_of_is_accepted(self) -> None:
+        state = self._state()
+        state["as_of"] = date.fromisoformat(self.as_of)
+
+        self.assertEqual(evaluate_evidence(state)["evidence_gate_verdict"], "pass")
 
     def test_t9_retry_counter_contract(self) -> None:
         claim = self._claim(evidence_ids=[])
