@@ -27,7 +27,11 @@ from __future__ import annotations
 from collections import defaultdict
 
 from rag_design.contracts import EvidenceStatus, SourceType
-from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
+from rag_design.vector_store import (
+    ChromaVectorStore,
+    CollectionNotFoundError,
+    VectorSearchFilter,
+)
 
 from ..state import ClaimDraft, DuplicateVerdict, GraphState
 
@@ -85,13 +89,18 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
             )
             continue
 
-        recheck_chunks = store.search(
-            SourceType.SUBSIDY,
-            f"{policy_id} 중복수급 병급 제한",
-            query_id=f"{state.get('query_id', 'n11')}-{policy_id}-recheck",
-            top_k=_RECHECK_TOP_K,
-            search_filter=VectorSearchFilter(metadata_equals={"doc_id": policy_id}),
-        )
+        try:
+            recheck_chunks = store.search(
+                SourceType.SUBSIDY,
+                f"{policy_id} 중복수급 병급 제한",
+                query_id=f"{state.get('query_id', 'n11')}-{policy_id}-recheck",
+                top_k=_RECHECK_TOP_K,
+                search_filter=VectorSearchFilter(metadata_equals={"doc_id": policy_id}),
+            )
+        except CollectionNotFoundError:
+            # 아직 정책이 하나도 색인되지 않은 상태 - 근거를 못 찾은 것과 동일하게
+            # 취급한다 (여기서 예외를 흘려보내면 그래프 전체가 죽는다).
+            recheck_chunks = ()
         if not recheck_chunks:
             verdicts.append(
                 {
