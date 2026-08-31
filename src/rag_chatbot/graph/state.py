@@ -26,6 +26,7 @@ EvidenceGateVerdict = Literal[
 # N7/N8 evidence binding에서 ClaimDraft.policy_id는 안정적인 subsidy 원천 ID인
 # Chunk.metadata["source_id"]다. N7은 이 원천 ID와 Chunk.doc_id의 canonical
 # 일관성도 검증한다.
+from rag_design.contracts import EvidenceStatus, RetrievedChunk
 
 
 class SlotState(TypedDict, total=False):
@@ -49,7 +50,7 @@ class ClaimDraft(TypedDict, total=False):
     doc_check_required: bool
     law_check_required: bool
     evidence_chunk_ids: list[str]
-    status: str
+    status: EvidenceStatus  # rag_design.contracts.EvidenceStatus 값
     reasons: list[str]
     search_query: str
     # law_check_required=True인 claim에만 채워짐 (N7 리뷰 피드백, Issue #16).
