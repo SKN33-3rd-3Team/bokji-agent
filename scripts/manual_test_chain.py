@@ -207,7 +207,7 @@ def run_node(label: str, fn, *args) -> None:
 run_node("N9 (determine_eligibility)", determine_eligibility, state, store)
 run_node("N10 (calculate_benefit_amount)", calculate_benefit_amount, state, store)
 run_node("N11 (check_duplicate_benefit)", check_duplicate_benefit, state, store)
-run_node("N12 (assemble_result)", assemble_result, state)
+run_node("N12 (assemble_result)", assemble_result, state, store)
 
 print("\n=== 최종 state (N13에 넘어갈 값) ===")
 print(json.dumps(
