@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 import unittest
 
 from rag_design.validation_runner import calculate_summary, load_questions, run_questions, write_report
@@ -20,7 +22,7 @@ def test_runner_injects_questions_and_writes_reports(tmp_path):
         return {"answer_status": "complete", "policies": [{"policy_id": "p1"}], "final_citations": [{"policy_id": "p1"}], "timing": {"phases": {"request_total": 0.01}}}
 
     loaded = load_questions(question_path)
-    records = run_questions(loaded, fake_ask, top_k=5)
+    records = run_questions(loaded, fake_ask, top_k=5, workers=1)
     summary = calculate_summary(records, top_k=5)
     output = tmp_path / "out"
     write_report(output, records, summary, question_path=question_path, top_k=5)
@@ -39,3 +41,33 @@ def test_question_file_rejects_duplicate_ids(tmp_path):
     path.write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n", encoding="utf-8")
     with unittest.TestCase().assertRaisesRegex(ValueError, "duplicate question_id"):
         load_questions(path)
+
+
+def test_runner_executes_in_parallel_and_preserves_result_order():
+    questions = [
+        {"question_id": f"q{i}", "question": f"question-{i}", "expected_policy_ids": [], "should_abstain": True}
+        for i in range(6)
+    ]
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_ask(question, session_id, *, top_k):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return {"answer_status": "abstained", "policies": [], "final_citations": []}
+
+    records = run_questions(questions, fake_ask, workers=3)
+
+    assert max_active >= 2
+    assert [row["question_id"] for row in records] == [f"q{i}" for i in range(6)]
+
+
+def test_runner_rejects_invalid_worker_count():
+    with unittest.TestCase().assertRaisesRegex(ValueError, "workers"):
+        run_questions([], lambda *args, **kwargs: {}, workers=0)

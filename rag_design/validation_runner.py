@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,11 +98,19 @@ def run_questions(
     ask_fn: Callable[..., Mapping],
     *,
     top_k: int = 5,
+    workers: int = 4,
 ) -> list[dict]:
-    """Inject every question into ``ask_fn`` and return public evaluation records."""
+    """Inject questions concurrently and preserve their input order in results.
 
-    records: list[dict] = []
-    for item in questions:
+    The service currently exposes process-global diagnostic timers.  Their values
+    can overlap across requests, so parallel evaluation deliberately records each
+    worker's wall-clock latency instead of the response's diagnostic timer.
+    """
+
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 32:
+        raise ValueError("workers must be an integer between 1 and 32")
+
+    def run_one(item: Mapping) -> dict:
         question_id = str(item["question_id"])
         started = time.perf_counter()
         error: str | None = None
@@ -126,7 +135,7 @@ def run_questions(
             if isinstance(citation, Mapping) and citation.get("policy_id")
         ]
         answer_status = response.get("answer_status")
-        records.append({
+        return {
             "question_id": question_id,
             "expected_policy_ids": list(item["expected_policy_ids"]),
             "retrieved_policy_ids": retrieved,
@@ -134,10 +143,16 @@ def run_questions(
             "should_abstain": item["should_abstain"],
             "abstained": answer_status == "abstained",
             "answer_status": answer_status,
-            "latency_ms": _request_latency_ms(response, elapsed_ms),
+            "latency_ms": (
+                _request_latency_ms(response, elapsed_ms) if workers == 1 else elapsed_ms
+            ),
             "error": error,
-        })
-    return records
+        }
+
+    if workers == 1:
+        return [run_one(item) for item in questions]
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rag-validation") as pool:
+        return list(pool.map(run_one, questions))
 
 
 def calculate_summary(records: Sequence[Mapping], *, top_k: int) -> dict:
@@ -209,6 +224,7 @@ def write_report(
     *,
     question_path: Path,
     top_k: int,
+    workers: int = 1,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_hash = hashlib.sha256(question_path.read_bytes()).hexdigest()
@@ -217,6 +233,7 @@ def write_report(
         "question_set": str(question_path),
         "question_set_sha256": dataset_hash,
         "top_k": top_k,
+        "workers": workers,
         "question_count": len(records),
         **summary,
     }
@@ -242,7 +259,7 @@ def write_report(
 
 질문 세트 SHA-256: `{dataset_hash}`
 
-질문 수: {len(records)}, Top-k: {top_k}
+질문 수: {len(records)}, Top-k: {top_k}, 병렬 worker: {workers}
 
 | 영역 | 지표 | 값 | 설명 |
 |---|---|---:|---|
@@ -263,5 +280,6 @@ def write_report(
 - Dev set 결과이며 Holdout 결과가 아닙니다. Holdout은 최종 설정 확정 뒤 Gate 6에서 한 번만 실행합니다.
 - 자동 지표는 의미적 답변 정확성을 확정하지 않습니다. `results.jsonl`을 근거로 사람 검토를 병행해야 합니다.
 - 검색 평가는 현재 서비스 공개 응답의 정책 ID 단위입니다. 세부 chunk 단위 평가는 검색 trace를 별도 공개할 때 추가합니다.
+- worker가 2 이상이면 서비스 전역 진단 타이머 대신 질문 작업별 wall-clock 시간으로 지연시간을 계산합니다.
 """
     (output_dir / "report.md").write_text(report, encoding="utf-8")
