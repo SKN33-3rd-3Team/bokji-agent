@@ -110,7 +110,7 @@ def _handle_signup() -> None:
 
 
 def page_login() -> None:
-    st.caption("복지 에이전트에 로그인하고 상담 내역과 내 정보를 이어서 관리하세요.")
+    st.caption("복지 에이전트에 로그인하고 계정과 마이페이지 정보를 관리하세요.")
     _, mid, _ = st.columns([1, 3, 1])
     with mid:
         with st.form("form_login", border=True):
@@ -143,7 +143,7 @@ def page_signup() -> None:
 
             st.space("small")
             st.markdown("**기본 정보 (선택)**")
-            st.caption("입력하면 마이페이지에 저장되고 추천에 활용됩니다.")
+            st.caption("입력한 정보는 마이페이지에 저장됩니다.")
             st.selectbox("거주 지역", [_REGION_NONE, *SIDO_OPTIONS], key="su_region")
             st.pills("해당하는 지원조건", INTEREST_OPTIONS, selection_mode="multi",
                      key="su_interests", default=[])

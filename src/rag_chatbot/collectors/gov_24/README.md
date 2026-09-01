@@ -26,7 +26,7 @@ SIGUNGU_CODE_CSV=
 ```bash
 $env:PYTHONPATH="src"
 
-# 전체 실행 (10,957건 전부, 시간이 오래 걸림)
+# 전체 실행 (10,968건 전부, 시간이 오래 걸림)
 python -m rag_chatbot.collectors.gov_24
 
 # 테스트: 목록 앞 50건만으로 파이프라인 전체를 빠르게 확인
@@ -60,14 +60,16 @@ PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.merge_gov24 50
 PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 ```
 
-`detail`/`conditions` 전체 실행은 페이지 단위로 다시 받아 원본 파일을
-갱신한다. 실패 ID 전용 명령은 `cond[서비스ID::EQ]` 단건 필터를 사용한다.
+`detail`/`conditions` 전체 실행은 매번 1페이지부터 새
+`.partial`에 수집한다. `totalCount`와 `serviceList` ID 집합을 모두
+검증한 뒤에만 기존 원본 파일을 원자적으로 교체한다.
+실패 ID 전용 명령은 `cond[서비스ID::EQ]` 단건 필터를 사용한다.
 
 ## 산출물
 
 | 파일 | 내용 | 저장소 포함 여부 |
 | --- | --- | --- |
-| `data/raw/gov24_*.json` | API 원본 응답 | 아니오 (재생성 가능) |
+| `data/raw/gov24_*.json` | API 응답에서 추출·정규화한 row 배열 | 아니오 (재생성 가능) |
 | `data/raw/gov24_*_failed_ids.json` | 상세조회/지원조건조회 중 API 호출이 끝내 실패한 서비스ID 목록 | 아니오 (재생성 가능) |
 | `data/raw/gov24_merged.json` | 서비스ID 기준 병합 | 아니오 (재생성 가능) |
 | `data/processed/subsidy_documents.jsonl` | `Document` 스키마 전체(현재 10,968건) | 아니오 (재생성 가능) |
@@ -78,8 +80,10 @@ PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 ## 알아둘 것
 
 - `serviceDetail`/`supportConditions` 전체 수집은 `page`/`perPage`로 순회한다.
-  단건 재시도만 `cond[서비스ID::EQ]`를 사용한다. `servId`는 서버가 무시해
-  첫 페이지가 반복되므로 사용하지 않는다.
+  두 endpoint의 단건 재시도는 `cond[서비스ID::EQ]`를 사용하고,
+  exact 응답의 count와 서비스ID를 검증한다. `servId`는 사용하지 않는다.
+- `gov24_support_conditions.json`의 새 canonical 형식은 flat row 배열이다.
+  기존 exact wrapper 배열도 런타임 loader가 계속 읽는다.
 - `Document.source_url`은 반드시 공식 도메인(`data.go.kr`/`gov.kr`/`law.go.kr`)
   이어야 해서, "온라인신청사이트URL"이 아니라 "상세조회URL"(gov.kr)을 쓴다.
   공개 URL은 공통 안전 정책으로 HTTPS canonical URL로 만들며 인증 쿼리와
@@ -95,10 +99,12 @@ PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 - 요청 하나가 실패하면(`gov24.py`) 지수 백오프로 최대 `MAX_RETRIES`(기본
   3)번까지 같은 요청을 재시도한 뒤에도 실패해야 `data/raw/gov24_*_failed_ids.json`에
   최종 실패로 기록한다.
-- `detail`/`conditions`를 다시 실행하면, `data/raw/gov24_service_*.json`에
-  이미 저장된 성공 결과는 그대로 재사용하고 재호출하지 않는다. 직전 실행의
-  실패 목록에 있던 서비스ID만 다시 시도한다. 서비스ID를 key로 병합하기 때문에
-  몇 번을 재실행해도 같은 서비스ID가 중복 레코드로 쌓이지 않는다.
+- `detail`/`conditions` 전체 실행은 이전 성공분을 이어받지 않고
+  1페이지부터 다시 수집한다. 중간 `.partial`은 재개에 사용하지
+  않으며 다음 전체 실행에서 새로 만든다.
+- 지정된 실패 ID만 재시도하려면
+  `conditions-retry-failed` 명령을 사용한다. 재시도가 전부 성공할 때만
+  기존 flat row를 보존한 새 snapshot을 promote한다.
 
 ### 지역 정보
 

@@ -30,6 +30,7 @@ State 계약(참고자료 "State_연결부" 시트 E2/E3/E4):
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from rag_design.contracts import NATIONAL_REGION_NAME, RegionScope
@@ -54,6 +55,9 @@ def check_slot_completeness(state: GraphState) -> dict:
 
     slots: SlotState = state.get("slots", {})
     ask_counts = state.get("slot_ask_counts", {})
+    reference_date = state.get("as_of")
+    if reference_date is not None and type(reference_date) is not date:
+        raise ValueError("state['as_of'] must be a date")
 
     missing: list[str] = []
     updates: dict[str, object] = {}
@@ -72,7 +76,7 @@ def check_slot_completeness(state: GraphState) -> dict:
             missing.append(REGION_SLOT)
 
     for field in PROFILE_HARD_GATE_SLOTS:
-        if _has_profile_value(slots, field):
+        if _has_profile_value(slots, field, reference_date=reference_date):
             continue
         if ask_counts.get(field, 0) >= MAX_SLOT_ASKS:
             # 물어볼 만큼 물어봤다. 계속 되묻는 대신 "미확인"으로 확정한다.
@@ -110,7 +114,9 @@ def _has_region(slots: SlotState) -> bool:
     return True
 
 
-def _has_profile_value(slots: SlotState, field: str) -> bool:
+def _has_profile_value(
+    slots: SlotState, field: str, *, reference_date: date | None = None
+) -> bool:
     """프로필 슬롯이 채워졌는지 본다.
 
     ``birth_date``는 열거형이 아니라 N1이 이미 실제 날짜인지 검증한 ISO
@@ -124,7 +130,7 @@ def _has_profile_value(slots: SlotState, field: str) -> bool:
         # 조립(resolve_filter_slots)은 "날짜가 아니다"로 연령 조건을 건너뛰면,
         # 나이 조건 없이 검색이 진행되는데 아무도 그 사실을 모른다. 두 곳이
         # 같은 판정 함수를 쓰게 한다 - 회귀 방지.
-        return parse_birth_date(value) is not None
+        return parse_birth_date(value, reference_date) is not None
     return is_valid_slot_value(field, value)
 
 

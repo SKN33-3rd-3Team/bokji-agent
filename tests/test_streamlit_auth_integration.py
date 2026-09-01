@@ -35,11 +35,8 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         self._tmp.cleanup()
 
     # -- 공통 헬퍼 --------------------------------------------------------
-    # 로그아웃/탈퇴 흐름은 마지막에 ``goto("chat")`` 로 상담 화면을 한 번
-    # 렌더링한다. 그 첫 렌더가 ``get_store("korean")`` 에서 multilingual-e5
-    # 모델 로딩 + 샘플 색인을 수행해 수십 초가 걸릴 수 있다(프로세스당 1회).
-    # 전체 스위트를 함께 돌릴 때 CPU 경합으로 30초를 넘겨 타임아웃 나던 것을
-    # 막으려고 넉넉히 잡는다.
+    # 로그아웃/탈퇴는 상담 화면으로 돌아간다. 상담 화면은 사전 구축 DB만
+    # 확인하며 질문 전에는 공식 서비스를 호출하거나 샘플을 자동 색인하지 않는다.
     def _app(self, view: str) -> AppTest:
         at = AppTest.from_file(_APP, default_timeout=90)
         at.session_state["view"] = view
@@ -327,10 +324,14 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         at.session_state["slots"] = {"income_bracket": "median_60", "disability": True}
         at.session_state["slot_ask_counts"] = {"region": 1}
         at.session_state["pending_prompt"] = "이어서 물어봐"
+        at.session_state["awaiting_followup"] = True
         at = at.run()
+        previous_id = at.session_state["conversation_id"]
 
         at = self._click(at, "로그아웃")
         self.assertFalse(at.exception)
+        self.assertNotEqual(at.session_state["conversation_id"], previous_id)
+        self.assertFalse(at.session_state["awaiting_followup"])
         self.assertEqual(at.session_state["messages"], [])
         self.assertEqual(at.session_state["slots"], {})
         self.assertEqual(at.session_state["slot_ask_counts"], {})

@@ -25,12 +25,15 @@ Inference API로 그대로 불러서 N5/N9/N13 프롬프트가 통하는지 테�
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 import json
 import os
 import re
 import threading
 import time
-from typing import Protocol
+from typing import Iterator, Protocol
 
 from ..timing import TIMER
 
@@ -237,6 +240,14 @@ def loads_json_object(raw: object) -> dict:
     return data
 
 
+@dataclass
+class _RecordingStats:
+    call_count: int = 0
+    success_count: int = 0
+    failures: list[str] = field(default_factory=list)
+    durations: list[float] = field(default_factory=list)
+
+
 class RecordingLLMClient:
     """다른 LLM 클라이언트를 감싸 호출 성공/실패를 기록하는 래퍼.
 
@@ -250,34 +261,46 @@ class RecordingLLMClient:
     처리됐다"는 사실을 드러낸다(docs/PROJECT_COMPLIANCE.md - 한계를 숨기지
     않는다).
 
-    주의: 인스턴스 하나를 그래프 전체가 공유하므로 기록도 공유된다. 요청
-    단위로 보려면 ``reset()``을 호출한 뒤 그래프를 돌려야 한다. Streamlit
-    처럼 여러 사용자가 같은 그래프 객체를 공유하는 환경에서는 동시 요청의
-    기록이 섞일 수 있다(현재 구조의 한계 - 세션별 그래프가 필요하면 별도
-    작업).
+    그래프 전체는 이 인스턴스 하나를 공유하지만 ``request_scope()``마다
+    독립된 기록을 둔다. scope 밖의 직접 호출은 기존처럼 기본 기록에 쌓인다.
     """
 
     def __init__(self, inner: LLMClient):
         self.inner = inner
         # 진단 메시지에 모델명을 남기려고 안쪽 클라이언트의 model을 그대로 노출.
         self.model = getattr(inner, "model", None)
-        self.call_count = 0
-        self.success_count = 0
-        self.failures: list[str] = []
-        self.durations: list[float] = []
+        self._default_stats = _RecordingStats()
+        self._request_stats: ContextVar[_RecordingStats | None] = ContextVar(
+            "recording_llm_request_stats", default=None
+        )
         # N5가 청크별 추출을 동시에 돌리기 시작하면서 이 카운터들이 여러
         # 스레드에서 갱신된다. 잠그지 않으면 호출 수가 실제보다 적게 세진다.
         self._lock = threading.Lock()
 
+    def _current_stats(self) -> _RecordingStats:
+        return self._request_stats.get() or self._default_stats
+
+    @contextmanager
+    def request_scope(self) -> Iterator[None]:
+        """현재 요청에만 귀속되는 빈 기록을 만들고 종료 시 이전 기록을 복원한다."""
+
+        token = self._request_stats.set(_RecordingStats())
+        try:
+            yield
+        finally:
+            self._request_stats.reset(token)
+
     def reset(self) -> None:
-        self.call_count = 0
-        self.success_count = 0
-        self.failures = []
-        self.durations = []
+        if self._request_stats.get() is not None:
+            self._request_stats.set(_RecordingStats())
+            return
+        with self._lock:
+            self._default_stats = _RecordingStats()
 
     def complete(self, prompt: str, *, system: str | None = None) -> str:
         with self._lock:
-            self.call_count += 1
+            stats = self._current_stats()
+            stats.call_count += 1
         started = time.perf_counter()
         try:
             result = self.inner.complete(prompt, system=system)
@@ -285,36 +308,43 @@ class RecordingLLMClient:
             message = str(exc)
             with self._lock:
                 # 같은 원인이 노드마다 반복되므로 중복은 한 번만 남긴다.
-                if message not in self.failures:
-                    self.failures.append(message)
+                if message not in stats.failures:
+                    stats.failures.append(message)
             raise
         finally:
             # 실패한 호출도 시간을 잰다. 타임아웃으로 느린 경우가 있어서
             # 성공한 것만 재면 "왜 느린지"를 놓친다.
             elapsed = time.perf_counter() - started
             with self._lock:
-                self.durations.append(elapsed)
+                stats.durations.append(elapsed)
             TIMER.record("llm_call", elapsed)
         with self._lock:
-            self.success_count += 1
+            stats.success_count += 1
         return result
 
     def summary(self) -> dict:
         """service 계층이 ChatResponse에 실어 보낼 요약."""
 
+        with self._lock:
+            stats = self._current_stats()
+            durations = list(stats.durations)
+            failures = list(stats.failures)
+            call_count = stats.call_count
+            success_count = stats.success_count
+        total_seconds = sum(durations)
         return {
             "enabled": True,
             "model": self.model,
-            "calls": self.call_count,
-            "successes": self.success_count,
-            "failures": len(self.failures),
-            "messages": list(self.failures),
+            "calls": call_count,
+            "successes": success_count,
+            "failures": len(failures),
+            "messages": failures,
             # 호출 하나가 얼마나 걸리는지. 추론형 모델은 내부 사고에 토큰을
             # 크게 써서 호출당 수십 초가 나오기도 한다 - 체감 지연의 주범
             # 인지 여기서 바로 보인다.
-            "total_seconds": sum(self.durations),
-            "slowest_seconds": max(self.durations) if self.durations else 0.0,
-            "avg_seconds": (sum(self.durations) / len(self.durations)) if self.durations else 0.0,
+            "total_seconds": total_seconds,
+            "slowest_seconds": max(durations) if durations else 0.0,
+            "avg_seconds": total_seconds / len(durations) if durations else 0.0,
         }
 
 

@@ -5,7 +5,8 @@ Issue #16 (N4~N6): slots로 지원제도 Top-N 후보를 검색해 subsidy_chunk
 
 입력: GraphState["slots"], GraphState["query_id"],
       GraphState["initial_user_input"](첫 질문 - 검색 질의에 함께 쓴다)
-출력: {"subsidy_chunks": list[RetrievedChunk]}  (LangGraph 노드 관례대로
+출력: {"subsidy_chunks": list[RetrievedChunk],
+      "subsidy_legal_basis_chunks": list[Chunk]}  (LangGraph 노드 관례대로
       전체 State가 아니라 갱신할 필드만 dict로 반환한다)
 
 사용하는 rag_design 모듈:
@@ -21,16 +22,21 @@ ChromaVectorStore는 graph.py 조립 시점에 한 번 생성해서 이 노드�
 
 from __future__ import annotations
 
-from rag_design.contracts import SourceType
+from dataclasses import replace
+from datetime import date
+
+from rag_design.contracts import Chunk, RetrievedChunk, SourceType
 from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
 
 from ..llm_gateway import redact_sensitive_text
+from ..policy_conditions import SupportConditionsIndex, filter_candidates
 from ..slot_schema import resolve_filter_slots
 from ..state import GraphState
 
 DEFAULT_TOP_K = 5
 MIN_TOP_K = 1
 MAX_TOP_K = 20
+SEMANTIC_CANDIDATE_LIMIT = 2_000
 # interests가 비어있을 때 쓰는 넓은 검색어. 결정사항 로그의 "interests 없음
 # 처리: 넓게 검색 후 안내문구만 첨부, 재질문 없음" 정책을 따른다.
 _FALLBACK_QUERY = "생활 지원 복지 서비스"
@@ -43,6 +49,47 @@ _MAX_QUESTION_CHARS = 200
 # 그대로 질의로 쓰면 의미 없는 벡터로 검색하게 되기 때문이다.
 # 형태만 보는 휴리스틱이라 완벽하지 않다 - 긴 인사말은 걸러지지 않는다.
 _MIN_QUESTION_CHARS = 6
+
+
+def _load_legal_basis_chunks(
+    store: ChromaVectorStore, selected: list[RetrievedChunk]
+) -> list[Chunk]:
+    """Load canonical legal-basis parts for selected policies only."""
+
+    source_ids: list[str] = []
+    seen_sources: set[str] = set()
+    for candidate in selected:
+        source_id = candidate.chunk.metadata["source_id"]
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("selected subsidy chunk must have a non-empty source_id")
+        if source_id not in seen_sources:
+            seen_sources.add(source_id)
+            source_ids.append(source_id)
+
+    legal_basis_chunks: list[Chunk] = []
+    seen_chunks: set[str] = set()
+    for source_id in source_ids:
+        matches = store.get_chunks_by_metadata(
+            SourceType.SUBSIDY,
+            metadata_equals={
+                "source_id": source_id,
+                "section_type": "legal_basis",
+            },
+        )
+        for chunk in sorted(
+            matches,
+            key=lambda item: (
+                item.ordinal,
+                item.metadata["chunk_part"],
+                item.chunk_id,
+            ),
+        ):
+            if chunk.chunk_id in seen_chunks:
+                continue
+            seen_chunks.add(chunk.chunk_id)
+            legal_basis_chunks.append(chunk)
+    return legal_basis_chunks
+
 
 def _build_query(slots: dict, question: str | None = None) -> str:
     """검색 질의를 만든다: 관심사 키워드 + 사용자의 원래 질문.
@@ -77,6 +124,7 @@ def search_policies(
     store: ChromaVectorStore,
     *,
     top_k: int | None = None,
+    support_conditions: SupportConditionsIndex | None = None,
 ) -> dict:
     """slots 기반으로 지원제도 후보를 검색해 subsidy_chunks를 채운다.
 
@@ -106,10 +154,13 @@ def search_policies(
     as_of = state.get("as_of")
     if as_of is None:
         raise ValueError("state['as_of'] is required to search policies")
+    if type(as_of) is not date:
+        raise ValueError("state['as_of'] must be a date")
 
+    filter_plan = resolve_filter_slots(slots, reference_date=as_of)
     query = _build_query(slots, state.get("initial_user_input"))
-    region_names = tuple(slots.get("region_names") or ())
-    filter_plan = resolve_filter_slots(slots)
+    region_condition = filter_plan["hard"].get("region")
+    region_names = tuple(region_condition.get("any_of", ())) if region_condition else ()
     age_condition = filter_plan["hard"].get("birth_date")
     age = age_condition.get("age") if age_condition else None
     search_filter = VectorSearchFilter(
@@ -123,7 +174,15 @@ def search_policies(
         SourceType.SUBSIDY,
         query,
         query_id=query_id,
-        top_k=resolved_top_k,
+        top_k=SEMANTIC_CANDIDATE_LIMIT,
         search_filter=search_filter,
     )
-    return {"subsidy_chunks": list(results)}
+    filtered = filter_candidates(results, support_conditions, filter_plan)
+    selected = [
+        replace(candidate, rank=rank)
+        for rank, candidate in enumerate(filtered[:resolved_top_k], start=1)
+    ]
+    return {
+        "subsidy_chunks": selected,
+        "subsidy_legal_basis_chunks": _load_legal_basis_chunks(store, selected),
+    }

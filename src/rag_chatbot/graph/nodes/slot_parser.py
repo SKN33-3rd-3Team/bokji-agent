@@ -98,12 +98,16 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
 
     user_input = state.get("user_input", "")
     existing_slots: SlotState = state.get("slots", {})
+    reference_date = state.get("as_of")
+    if reference_date is not None and type(reference_date) is not date:
+        raise ValueError("state['as_of'] must be a date")
 
     extracted = extract_slots(
         user_input,
         existing_slots,
         llm_client=llm_client,
         asked_slots=state.get("missing_slots"),
+        reference_date=reference_date,
     )
 
     # dict()는 얕은 복사라 리스트 필드는 입력 state와 같은 객체를 가리킨다.
@@ -138,7 +142,11 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
             merged[field] = []
 
     _apply_age_subject(merged, extracted.get("age_subject_signals") or {})
-    _apply_birth_date(merged, extracted.get("birth_date"))
+    _apply_birth_date(
+        merged,
+        extracted.get("birth_date"),
+        reference_date=reference_date,
+    )
 
     region_raw = extracted.get("region_raw")
     if region_raw is not None:
@@ -205,7 +213,12 @@ def _apply_age_subject(merged: SlotState, signals: dict[str, bool]) -> None:
     merged["age_subject"] = AgeSubject.SELF.value
 
 
-def _apply_birth_date(merged: SlotState, extracted_birth_date: str | None) -> None:
+def _apply_birth_date(
+    merged: SlotState,
+    extracted_birth_date: str | None,
+    *,
+    reference_date: date | None = None,
+) -> None:
     """생년월일을 저장하고 만 나이·연 나이를 파생 값으로 다시 계산한다.
 
     ``age``는 사용자가 말한 숫자가 아니라 항상 이 함수가 만든 파생 값이다.
@@ -217,14 +230,15 @@ def _apply_birth_date(merged: SlotState, extracted_birth_date: str | None) -> No
     기준이기 때문이다. 어느 쪽을 쓸지는 제도 문서의 ``age_basis``를 보고
     N9가 정하며, 이 노드는 두 값을 모두 준비만 한다.
 
-    기준일은 매 턴 다시 계산한다. 대화가 연말을 넘기면 생일이 지나 만 나이가
-    바뀌는데, 첫 턴에 계산한 값을 그대로 들고 있으면 틀린 나이로 판정한다.
+    그래프에서는 ``state['as_of']``를 기준일로 써 N4/N7과 일치시킨다.
+    그래프 밖에서 이 함수를 직접 부르는 기존 경로만 시스템 날짜를 쓴다.
     """
 
     if extracted_birth_date is not None:
         merged["birth_date"] = extracted_birth_date
 
-    birth_date = parse_birth_date(merged.get("birth_date"))
+    reference_date = reference_date or date.today()
+    birth_date = parse_birth_date(merged.get("birth_date"), reference_date)
     if birth_date is None:
         # 생년월일이 없으면 파생 값도 남기지 않는다. 예전 턴에 계산해 둔
         # 나이만 남아 있으면 근거 없는 나이로 판정이 진행된다.
@@ -233,7 +247,6 @@ def _apply_birth_date(merged: SlotState, extracted_birth_date: str | None) -> No
         merged["age_ref_date"] = None
         return
 
-    reference_date = date.today()
     age, age_year_based = calculate_ages(birth_date, reference_date)
     merged["age"] = age
     merged["age_year_based"] = age_year_based

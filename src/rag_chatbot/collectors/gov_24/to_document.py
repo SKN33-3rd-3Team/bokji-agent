@@ -141,6 +141,7 @@ _DEPENDENT_AGE_CONTEXT_PATTERN = re.compile(
     r"(?:자녀|아동|영유아).{0,20}(?:부모|보호자|가구|아버지|어머니)|"
     r"(?:부모|보호자|가구|아버지|어머니).{0,20}(?:자녀|아동|영유아)"
 )
+_JA_FIELD_PATTERN = re.compile(r"JA\d{4}")
 _MAX_PLAUSIBLE_AGE = 120
 
 
@@ -196,6 +197,21 @@ def _coerce_age(value: object) -> int | None:
     return age if 0 <= age <= _MAX_PLAUSIBLE_AGE else None
 
 
+def _has_active_support_condition(item: dict) -> bool:
+    """연령 외 JA 플래그도 지원조건 수집 성공으로 인식한다."""
+
+    return any(
+        _JA_FIELD_PATTERN.fullmatch(key)
+        and (
+            _coerce_age(value) is not None
+            if key in {"JA0110", "JA0111"}
+            else value == "Y"
+        )
+        for key, value in item.items()
+        if isinstance(key, str)
+    )
+
+
 def _extract_text_age_bounds(item: dict) -> tuple[int | None, int | None] | None:
     """지원대상/선정기준의 명시적인 ``N세`` 조건만 보수적으로 추출한다.
 
@@ -206,7 +222,11 @@ def _extract_text_age_bounds(item: dict) -> tuple[int | None, int | None] | None
     text = "\n".join(
         str(item.get(field) or "") for field in ("지원대상", "선정기준")
     )
-    segments = [part.strip() for part in re.split(r"[\n;]|(?:\s*[○●▪■□▶※]\s*)", text) if part.strip()]
+    segments = [
+        part.strip()
+        for part in re.split(r"[\n;]|(?:\s*[○●▪■□▶※]\s*)", text)
+        if part.strip()
+    ]
     candidates: set[tuple[int | None, int | None]] = set()
 
     for segment in segments:
@@ -323,7 +343,7 @@ def build_field_statuses(
     else:
         statuses["legal_basis"] = FieldStatus.MISSING_SOURCE.value
 
-    has_conditions = bool(item.get("JA0110")) or bool(item.get("JA0111"))
+    has_conditions = _has_active_support_condition(item)
     statuses["support_conditions"] = _field_status(has_conditions, service_id, conditions_failed_ids)
 
     return statuses
@@ -533,7 +553,9 @@ def run() -> None:
                 f"서로 다른 서비스ID의 동일 본문 {duplicate_count}건을 "
                 "metadata.duplicate_content_of_source_ids로 표시했고, 삭제하지 않고 그대로 보존한다"
             ),
-            "parse_warnings_log": OUT_PARSE_WARNINGS,
+            "parse_warnings_log": Path(OUT_PARSE_WARNINGS)
+            .relative_to(PROJECT_ROOT)
+            .as_posix(),
             "rights_reviewed": True,
             "sensitive_data_reviewed": True,
         },

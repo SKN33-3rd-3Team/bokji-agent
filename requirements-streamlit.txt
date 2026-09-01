@@ -1,0 +1,4 @@
+-r requirements-graph.txt
+-r requirements-embedding.txt
+-r requirements-auth.txt
+streamlit==1.62.0

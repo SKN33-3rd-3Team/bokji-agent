@@ -27,7 +27,7 @@
     "region_extraction": "소관기관명 텍스트에서 시도/시군구를 정규식으로 추출(region_utils.py). 명시적으로 확인한 중앙기관은 national/['전국'], 시도/시군구는 regional과 계층형 region_names로 기록한다. 확정할 수 없으면 unknown/[]",
     "missing_vs_failed": "상세조회/지원조건조회 API 호출이 실패한 서비스ID는 실패 목록(gov24_*_failed_ids.json)으로 별도 기록하고, 해당 문서의 metadata.field_status와 parse_warnings에 '조회 실패로 누락'임을 명시해 원천 결측(missing_source)과 구분한다",
     "duplicate_policy": "서로 다른 서비스ID의 동일 본문 24건을 metadata.duplicate_content_of_source_ids로 표시했고, 삭제하지 않고 그대로 보존한다",
-    "parse_warnings_log": "C:\\SKN_AI\\bokji-agent\\data\\processed\\subsidy_parse_warnings.json",
+    "parse_warnings_log": "data/processed/subsidy_parse_warnings.json",
     "rights_reviewed": true,
     "sensitive_data_reviewed": true
   }

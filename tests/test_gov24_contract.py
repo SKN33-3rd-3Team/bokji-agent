@@ -75,6 +75,35 @@ class RegionContractTests(unittest.TestCase):
             },
         )
 
+    def test_manifest_records_repo_relative_posix_warnings_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            merged = root / "data" / "raw" / "gov24_merged.json"
+            merged.parent.mkdir(parents=True)
+            merged.write_text("[]", encoding="utf-8")
+            processed = root / "data" / "processed"
+            sample = root / "data" / "samples" / "sample.jsonl"
+            manifest_path = processed / "subsidy_manifest.json"
+            with patch.multiple(
+                to_document,
+                PROJECT_ROOT=root,
+                MERGED_PATH=str(merged),
+                DETAIL_FAILED_PATH=str(root / "missing_detail.json"),
+                CONDITIONS_FAILED_PATH=str(root / "missing_conditions.json"),
+                OUT_JSONL=str(processed / "documents.jsonl"),
+                OUT_MANIFEST=str(manifest_path),
+                OUT_PARSE_WARNINGS=str(processed / "subsidy_parse_warnings.json"),
+                SAMPLE_OUT=str(sample),
+                SIGUNGU_CODE_CSV=None,
+            ):
+                to_document.run()
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["document_card"]["parse_warnings_log"],
+                "data/processed/subsidy_parse_warnings.json",
+            )
+
 
 class UrlAndSecretSafetyTests(unittest.TestCase):
     @staticmethod
@@ -163,13 +192,21 @@ class UrlAndSecretSafetyTests(unittest.TestCase):
         self.assertIn("[REDACTED]", rendered)
 
 
-class Gov24CollectionShapeTests(unittest.TestCase):
-    def test_single_service_request_uses_odcloud_condition_filter(self) -> None:
+class SupportConditionsRequestTests(unittest.TestCase):
+    @staticmethod
+    def _payload(service_id: str = "service-1") -> dict:
+        return {
+            "matchCount": 1,
+            "currentCount": 1,
+            "data": [{"서비스ID": service_id}],
+        }
+
+    def test_support_conditions_uses_official_exact_condition_parameter(self) -> None:
         response = Mock()
-        response.raise_for_status.return_value = None
-        response.json.return_value = {"data": [{"서비스ID": "service-1"}]}
+        response.json.return_value = self._payload()
+
         with (
-            patch.object(gov24, "GOV24_SERVICE_KEY", "secret"),
+            patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
             patch.object(gov24.requests, "get", return_value=response) as get_mock,
         ):
             service_id, row, error = gov24._fetch_one(
@@ -182,6 +219,328 @@ class Gov24CollectionShapeTests(unittest.TestCase):
         params = get_mock.call_args.kwargs["params"]
         self.assertEqual(params["cond[서비스ID::EQ]"], "service-1")
         self.assertNotIn("servId", params)
+
+    def test_service_detail_uses_exact_condition_and_validates_response_id(self) -> None:
+        response = Mock()
+        response.json.return_value = self._payload()
+
+        with (
+            patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+            patch.object(gov24.requests, "get", return_value=response) as get_mock,
+        ):
+            service_id, row, error = gov24._fetch_one(
+                "detail", gov24.DETAIL_URL, "service-1"
+            )
+
+        self.assertEqual(
+            (service_id, row, error),
+            ("service-1", {"서비스ID": "service-1"}, None),
+        )
+        params = get_mock.call_args.kwargs["params"]
+        self.assertEqual(params["cond[서비스ID::EQ]"], "service-1")
+        self.assertNotIn("servId", params)
+
+        response.json.return_value = self._payload("wrong-service")
+        with (
+            patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+            patch.object(gov24, "MAX_RETRIES", 1),
+            patch.object(gov24.requests, "get", return_value=response),
+            patch.object(gov24, "log"),
+        ):
+            _, mismatched, mismatch_error = gov24._fetch_one(
+                "detail", gov24.DETAIL_URL, "service-1"
+            )
+        self.assertIsNone(mismatched)
+        self.assertIn("exact one-row response contract mismatch", mismatch_error)
+
+    def test_invalid_conditions_payload_is_never_successful(self) -> None:
+        valid_row = {"서비스ID": "service-1"}
+        invalid_payloads = (
+            [],
+            {"data": [valid_row]},
+            {"matchCount": True, "currentCount": 1, "data": [valid_row]},
+            {"matchCount": 0, "currentCount": 1, "data": [valid_row]},
+            {"matchCount": 1, "currentCount": 0, "data": [valid_row]},
+            {"matchCount": 1, "currentCount": 1, "data": []},
+            {
+                "matchCount": 2,
+                "currentCount": 2,
+                "data": [valid_row, valid_row],
+            },
+            {"matchCount": 1, "currentCount": 1, "data": [{}]},
+            self._payload("wrong-service"),
+        )
+
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = Mock()
+                response.json.return_value = payload
+                with (
+                    patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                    patch.object(gov24, "MAX_RETRIES", 1),
+                    patch.object(gov24.requests, "get", return_value=response),
+                    patch.object(gov24, "log"),
+                ):
+                    service_id, data, error = gov24._fetch_one(
+                        "conditions", gov24.CONDITIONS_URL, "service-1"
+                    )
+
+                self.assertEqual(service_id, "service-1")
+                self.assertIsNone(data)
+                self.assertIn("exact one-row response contract mismatch", error)
+
+    def test_invalid_conditions_response_preserves_existing_snapshot(self) -> None:
+        response = Mock()
+        response.json.return_value = self._payload("wrong-service")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "conditions.json"
+            existing = [{"서비스ID": "existing", "marker": "old"}]
+            gov24.save(existing, str(out_path))
+            with (
+                patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                patch.object(gov24, "MAX_RETRIES", 1),
+                patch.object(gov24, "MAX_WORKERS", 1),
+                patch.object(gov24.requests, "get", return_value=response),
+                patch.object(gov24, "log"),
+            ):
+                with self.assertRaises(gov24.Gov24RequestError):
+                    gov24.fetch_many(
+                        "conditions",
+                        gov24.CONDITIONS_URL,
+                        ["service-1"],
+                        str(out_path),
+                        preserve_existing=False,
+                    )
+
+            failed_path = Path(temp_dir) / "conditions_failed_ids.json"
+            self.assertEqual(
+                json.loads(out_path.read_text(encoding="utf-8")), existing
+            )
+            self.assertEqual(
+                json.loads(failed_path.read_text(encoding="utf-8")), ["service-1"]
+            )
+
+    def test_retry_rejects_duplicate_existing_ids_and_preserves_snapshot(self) -> None:
+        duplicate = [
+            {"서비스ID": "service-1", "marker": "old-a"},
+            {"서비스ID": "service-1", "marker": "old-b"},
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "conditions.json"
+            gov24.save(duplicate, str(out_path))
+            with (
+                patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+            ):
+                with self.assertRaises(gov24.Gov24RequestError):
+                    gov24.fetch_many(
+                        "conditions",
+                        gov24.CONDITIONS_URL,
+                        ["service-1"],
+                        str(out_path),
+                    )
+
+            self.assertEqual(
+                json.loads(out_path.read_text(encoding="utf-8")), duplicate
+            )
+
+    def test_retry_preserves_existing_flat_rows_and_promotes_flat_result(self) -> None:
+        existing = {"서비스ID": "existing", "marker": "old"}
+        fresh = {"서비스ID": "service-1", "marker": "fresh"}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "conditions.json"
+            failed_path = Path(temp_dir) / "conditions_failed_ids.json"
+            gov24.save([existing], str(out_path))
+            gov24.save(["service-1"], str(failed_path))
+            with (
+                patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                patch.object(gov24, "MAX_WORKERS", 1),
+                patch.object(
+                    gov24,
+                    "_fetch_one",
+                    return_value=("service-1", fresh, None),
+                ),
+                patch.object(gov24, "log"),
+            ):
+                result = gov24.fetch_many(
+                    "conditions",
+                    gov24.CONDITIONS_URL,
+                    ["service-1"],
+                    str(out_path),
+                )
+
+            self.assertEqual(result, [existing, fresh])
+            self.assertEqual(
+                json.loads(out_path.read_text(encoding="utf-8")), [existing, fresh]
+            )
+
+    def test_partial_retry_retries_full_attempt_set_before_atomic_promote(self) -> None:
+        existing = {"서비스ID": "base", "marker": "old"}
+        rows = {
+            "a": {"서비스ID": "a", "marker": "new-a"},
+            "b": {"서비스ID": "b", "marker": "new-b"},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "conditions.json"
+            failed_path = Path(temp_dir) / "conditions_failed_ids.json"
+            gov24.save([existing], str(out_path))
+            gov24.save(["a", "b"], str(failed_path))
+            original_bytes = out_path.read_bytes()
+
+            def partial_failure(kind, url, service_id):
+                if service_id == "a":
+                    return service_id, rows[service_id], None
+                return service_id, None, "failed"
+
+            with (
+                patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                patch.object(gov24, "MAX_WORKERS", 1),
+                patch.object(gov24, "_fetch_one", side_effect=partial_failure),
+                patch.object(gov24, "log"),
+            ):
+                with self.assertRaises(gov24.Gov24RequestError):
+                    gov24.fetch_many(
+                        "conditions",
+                        gov24.CONDITIONS_URL,
+                        ["a", "b"],
+                        str(out_path),
+                    )
+
+            self.assertEqual(out_path.read_bytes(), original_bytes)
+            self.assertEqual(
+                json.loads(failed_path.read_text(encoding="utf-8")), ["a", "b"]
+            )
+            self.assertFalse(Path(f"{out_path}.partial").exists())
+
+            def complete_retry(kind, url, service_id):
+                return service_id, rows[service_id], None
+
+            with (
+                patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                patch.object(gov24, "MAX_WORKERS", 1),
+                patch.object(gov24, "_fetch_one", side_effect=complete_retry),
+                patch.object(gov24, "log"),
+            ):
+                result = gov24.fetch_many(
+                    "conditions",
+                    gov24.CONDITIONS_URL,
+                    ["a", "b"],
+                    str(out_path),
+                )
+
+            self.assertEqual(result, [existing, rows["a"], rows["b"]])
+            self.assertEqual(
+                json.loads(out_path.read_text(encoding="utf-8")), result
+            )
+            self.assertEqual(
+                json.loads(failed_path.read_text(encoding="utf-8")), []
+            )
+
+
+class AtomicCheckpointTests(unittest.TestCase):
+    def test_failed_replace_preserves_old_checkpoint_and_removes_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "checkpoint.json"
+            out_path.write_text('[{"old": true}]', encoding="utf-8")
+
+            with patch.object(gov24.os, "replace", side_effect=OSError("stop")):
+                with self.assertRaises(OSError):
+                    gov24.save([{"new": True}], str(out_path))
+
+            self.assertEqual(
+                json.loads(out_path.read_text(encoding="utf-8")), [{"old": True}]
+            )
+            self.assertEqual(list(Path(temp_dir).glob(".checkpoint.json.*.tmp")), [])
+
+
+class Gov24CollectionShapeTests(unittest.TestCase):
+    @staticmethod
+    def _response(payload: dict) -> Mock:
+        response = Mock()
+        response.json.return_value = payload
+        return response
+
+    def test_full_pagination_promotes_only_complete_flat_snapshot(self) -> None:
+        rows = [{"서비스ID": "a"}, {"서비스ID": "b"}]
+        responses = [
+            self._response({"totalCount": 2, "data": [rows[0]]}),
+            self._response({"totalCount": 2, "data": [rows[1]]}),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = Path(temp_dir) / "conditions.json"
+            gov24.save([{"서비스ID": "old"}], str(out_path))
+            with (
+                patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                patch.object(
+                    gov24.requests, "get", side_effect=responses
+                ) as get_mock,
+                patch.object(gov24, "log"),
+            ):
+                result = gov24.fetch_dataset_all(
+                    "conditions",
+                    gov24.CONDITIONS_URL,
+                    str(out_path),
+                    expected_service_ids=["a", "b"],
+                    per_page=1,
+                )
+
+            self.assertEqual(result, rows)
+            self.assertEqual(json.loads(out_path.read_text(encoding="utf-8")), rows)
+            self.assertFalse(Path(f"{out_path}.partial").exists())
+            self.assertEqual(
+                [call.kwargs["params"]["page"] for call in get_mock.call_args_list],
+                [1, 2],
+            )
+
+    def test_full_pagination_contract_errors_preserve_existing_snapshot(self) -> None:
+        cases = (
+            (
+                "malformed-id",
+                {"totalCount": 2, "data": [{"서비스ID": " a"}, {"서비스ID": "b"}]},
+            ),
+            (
+                "duplicate-id",
+                {"totalCount": 2, "data": [{"서비스ID": "a"}, {"서비스ID": "a"}]},
+            ),
+            (
+                "total-count",
+                {"totalCount": 1, "data": [{"서비스ID": "a"}]},
+            ),
+            (
+                "service-list-set",
+                {"totalCount": 2, "data": [{"서비스ID": "a"}, {"서비스ID": "c"}]},
+            ),
+        )
+
+        for name, payload in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                out_path = Path(temp_dir) / "conditions.json"
+                existing = [{"서비스ID": "old"}]
+                gov24.save(existing, str(out_path))
+                with (
+                    patch.object(gov24, "GOV24_SERVICE_KEY", "test-key"),
+                    patch.object(
+                        gov24.requests,
+                        "get",
+                        return_value=self._response(payload),
+                    ),
+                    patch.object(gov24, "log"),
+                ):
+                    with self.assertRaises(gov24.Gov24RequestError):
+                        gov24.fetch_dataset_all(
+                            "conditions",
+                            gov24.CONDITIONS_URL,
+                            str(out_path),
+                            expected_service_ids=["a", "b"],
+                        )
+
+                self.assertEqual(
+                    json.loads(out_path.read_text(encoding="utf-8")), existing
+                )
 
     def test_merge_flattens_every_row_in_wrapped_response(self) -> None:
         wrapped = [{"data": [{"서비스ID": "a"}, {"서비스ID": "b"}]}]
@@ -226,7 +585,31 @@ class AgeMetadataExtractionTests(unittest.TestCase):
             {"지원대상": "6-11세 자녀-아버지"},
         ):
             with self.subTest(item=item):
-                self.assertEqual(to_document.extract_age_metadata(item), (None, None, None))
+                self.assertEqual(
+                    to_document.extract_age_metadata(item),
+                    (None, None, None),
+                )
+
+    def test_non_age_ja_flag_marks_support_conditions_present(self) -> None:
+        statuses = to_document.build_field_statuses(
+            {"JA0201": "Y"}, "service-1", set(), set()
+        )
+
+        self.assertEqual(statuses["support_conditions"], "present")
+
+    def test_zero_age_is_a_present_support_condition(self) -> None:
+        statuses = to_document.build_field_statuses(
+            {"JA0110": 0}, "service-1", set(), set()
+        )
+
+        self.assertEqual(statuses["support_conditions"], "present")
+
+    def test_invalid_ja_tokens_are_not_treated_as_present(self) -> None:
+        statuses = to_document.build_field_statuses(
+            {"JA0110": "Y", "JA0201": "N"}, "service-1", set(), set()
+        )
+
+        self.assertEqual(statuses["support_conditions"], "missing_source")
 
 
 class PackageEntrypointTests(unittest.TestCase):

@@ -31,11 +31,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from rag_design.contracts import Chunk
+
 from .law_source_resolver import (
     LawSourceResolver,
     resolve_required_law_sources,
 )
-from ..state import ClaimDraft, GraphState, RetrievedChunk
+from ..state import ClaimDraft, GraphState, RequiredLawSource, RetrievedChunk
 
 CLAIM_TYPES = ("eligibility", "amount", "duplicate")
 
@@ -70,18 +72,47 @@ def _group_chunks_by_policy(
     return grouped
 
 
-def _find_legal_basis_text(policy_chunks: list[RetrievedChunk]) -> str | None:
-    for chunk in policy_chunks:
-        if chunk.chunk.metadata.get("section_type") == "legal_basis":
-            # chunk_document()는 검색 품질을 위해 텍스트 앞에
-            # "{제목}\n지역: {지역}\n{섹션제목}\n\n"를 붙인다 (rag_design/
-            # chunking.py의 _prefix()). 원본 근거법령 문자열만 필요하니
-            # 그 접두어를 떼어낸다 - 접두어와 본문 사이는 항상 빈 줄(\n\n)로
-            # 구분되고, 접두어 자체엔 \n\n이 안 나온다는 전제로 첫 \n\n
-            # 기준으로 자른다.
-            _, _, raw_content = chunk.chunk.text.partition("\n\n")
-            return raw_content or chunk.chunk.text
-    return None
+def _legal_basis_chunks(
+    state: GraphState, subsidy_chunks: list[RetrievedChunk]
+) -> list[Chunk]:
+    if "subsidy_legal_basis_chunks" in state:
+        chunks = state.get("subsidy_legal_basis_chunks") or []
+        if any(
+            not isinstance(chunk, Chunk)
+            or chunk.metadata.get("section_type") != "legal_basis"
+            for chunk in chunks
+        ):
+            raise ValueError("subsidy_legal_basis_chunks must contain legal_basis Chunks")
+        return list(chunks)
+    return [
+        retrieved.chunk
+        for retrieved in subsidy_chunks
+        if retrieved.chunk.metadata.get("section_type") == "legal_basis"
+    ]
+
+
+def _legal_basis_content(chunk: Chunk) -> str:
+    # chunk_document() prefixes every part with document context and separates
+    # it from the raw section part with the first blank line.
+    _, _, raw_content = chunk.text.partition("\n\n")
+    return raw_content or chunk.text
+
+
+def _resolve_legal_basis_chunks(
+    chunks: list[Chunk], resolver: LawSourceResolver
+) -> list[RequiredLawSource]:
+    resolved: list[RequiredLawSource] = []
+    seen: set[tuple[str, str]] = set()
+    for chunk in chunks:
+        for source in resolve_required_law_sources(
+            _legal_basis_content(chunk), resolver
+        ):
+            pair = (source["law_type"], source["source_id"])
+            if pair in seen:
+                continue
+            seen.add(pair)
+            resolved.append(source)
+    return resolved
 
 
 def plan_claims(
@@ -97,15 +128,17 @@ def plan_claims(
 
     subsidy_chunks = state.get("subsidy_chunks") or []
     chunks_by_policy = _group_chunks_by_policy(subsidy_chunks)
+    legal_basis_by_policy: dict[str, list[Chunk]] = {}
+    for chunk in _legal_basis_chunks(state, subsidy_chunks):
+        legal_basis_by_policy.setdefault(chunk.metadata["source_id"], []).append(chunk)
 
     # 정책별로 "근거법령" 청크를 미리 찾아서 required_law_sources를 계산해둔다
     # (매 claim마다 다시 계산하지 않게).
-    required_law_sources_by_policy: dict[str, list] = {}
+    required_law_sources_by_policy: dict[str, list[RequiredLawSource]] = {}
     if law_resolver is not None:
-        for policy_id, policy_chunks in chunks_by_policy.items():
-            legal_basis_text = _find_legal_basis_text(policy_chunks)
-            required_law_sources_by_policy[policy_id] = resolve_required_law_sources(
-                legal_basis_text, law_resolver
+        for policy_id in chunks_by_policy:
+            required_law_sources_by_policy[policy_id] = _resolve_legal_basis_chunks(
+                legal_basis_by_policy.get(policy_id, []), law_resolver
             )
 
     # 청크별 claim 추출은 서로 완전히 독립이라 순서대로 기다릴 이유가 없다.

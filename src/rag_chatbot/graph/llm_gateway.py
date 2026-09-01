@@ -35,6 +35,7 @@ Baseline 이전 비범위 항목이다.
 from __future__ import annotations
 
 import re
+from datetime import date
 from enum import Enum
 from typing import Mapping, Sequence, TypedDict
 
@@ -329,6 +330,8 @@ def extract_slots(
     existing_slots: Mapping[str, object],
     llm_client: LLMClient | None = None,
     asked_slots: Sequence[str] | None = None,
+    *,
+    reference_date: date | None = None,
 ) -> ExtractedSlots:
     """자유 텍스트에서 슬롯 후보를 추출한다 (규칙 + 선택적 LLM).
 
@@ -350,7 +353,9 @@ def extract_slots(
     없이는 알 수 없어서 LLM 프롬프트에 함께 넣는다.
     """
 
-    rule_based = _extract_slots_by_rules(user_input, asked_slots)
+    rule_based = _extract_slots_by_rules(
+        user_input, asked_slots, reference_date=reference_date
+    )
     if llm_client is None:
         return rule_based
 
@@ -367,7 +372,12 @@ def extract_slots(
         # 것이 LLM을 붙인 이유이기 때문이다.
         return rule_based
 
-    llm_values = _extract_slots_via_llm(user_input, asked_slots, llm_client)
+    llm_values = _extract_slots_via_llm(
+        user_input,
+        asked_slots,
+        llm_client,
+        reference_date=reference_date,
+    )
     if not llm_values:
         # LLM 호출/파싱 실패, 또는 계약을 통과한 값이 하나도 없음. 규칙
         # 결과를 그대로 쓴다(그래프가 죽지 않는 것이 우선).
@@ -508,7 +518,11 @@ def _enum_values_text_household() -> str:
 
 
 def _extract_slots_via_llm(
-    user_input: str, asked_slots: Sequence[str] | None, llm_client: LLMClient
+    user_input: str,
+    asked_slots: Sequence[str] | None,
+    llm_client: LLMClient,
+    *,
+    reference_date: date | None = None,
 ) -> dict:
     """LLM으로 슬롯을 뽑는다. 실패하면 빈 dict(= 아무것도 못 뽑음)."""
 
@@ -523,10 +537,12 @@ def _extract_slots_via_llm(
     except (LLMCallError, ValueError, TypeError, AttributeError):
         # 규칙 기반 결과로 폴백한다(N5 claim_extractor와 같은 관례).
         return {}
-    return _validated_llm_slots(data)
+    return _validated_llm_slots(data, reference_date=reference_date)
 
 
-def _validated_llm_slots(data: Mapping[str, object]) -> dict:
+def _validated_llm_slots(
+    data: Mapping[str, object], *, reference_date: date | None = None
+) -> dict:
     """LLM이 준 값 중 계약을 통과한 것만 남긴다 (fail-closed).
 
     계약에 없는 값을 그대로 저장하면 N2 게이트가 "채워졌음"으로 읽고
@@ -540,7 +556,7 @@ def _validated_llm_slots(data: Mapping[str, object]) -> dict:
     if isinstance(birth_date, str):
         # 실제 존재하는 날짜인지, 미래·비현실적 나이가 아닌지는 규칙 경로와
         # 같은 함수로 판정한다.
-        parsed = parse_birth_date(birth_date.strip())
+        parsed = parse_birth_date(birth_date.strip(), reference_date)
         if parsed is not None:
             validated["birth_date"] = parsed.isoformat()
 
@@ -672,7 +688,10 @@ _DONT_KNOW_APPLICABLE_SLOTS = (
 
 
 def _extract_slots_by_rules(
-    user_input: str, asked_slots: Sequence[str] | None = None
+    user_input: str,
+    asked_slots: Sequence[str] | None = None,
+    *,
+    reference_date: date | None = None,
 ) -> ExtractedSlots:
     """규칙(정규식/키워드)만으로 슬롯을 뽑는다.
 
@@ -706,7 +725,7 @@ def _extract_slots_by_rules(
     interests = _extract_interests(redacted)
 
     extracted: ExtractedSlots = {
-        "birth_date": _extract_birth_date(redacted),
+        "birth_date": _extract_birth_date(redacted, reference_date=reference_date),
         "age_subject_signals": _extract_age_subject_signals(redacted),
         "age_self_reported": int(age_match.group(1)) if age_match else None,
         "region_raw": region_match.group(0) if region_match else None,
@@ -858,7 +877,9 @@ def _match_all_rules(text: str, rules: _RuleTable) -> list[str]:
     ]
 
 
-def _extract_birth_date(text: str) -> str | None:
+def _extract_birth_date(
+    text: str, *, reference_date: date | None = None
+) -> str | None:
     """생년월일을 ISO 문자열로 뽑는다. 실제 존재하는 날짜만 통과시킨다.
 
     미래 날짜와 비현실적인 나이는 여기서 버린다. 오타 하나가 그대로 만
@@ -872,7 +893,9 @@ def _extract_birth_date(text: str) -> str | None:
     year, month, day = (int(group) for group in match.groups())
     # 실제 존재하는 날짜인지, 미래·비현실적 나이가 아닌지는 slot_schema가
     # 한 곳에서 판정한다(N2 게이트도 같은 함수를 쓴다).
-    parsed = parse_birth_date(f"{year:04d}-{month:02d}-{day:02d}")
+    parsed = parse_birth_date(
+        f"{year:04d}-{month:02d}-{day:02d}", reference_date
+    )
     return parsed.isoformat() if parsed is not None else None
 
 

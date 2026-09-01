@@ -47,6 +47,26 @@ class ChunkingAndPolicyTests(unittest.TestCase):
             )
         )
 
+    def test_subsidy_age_contract_is_propagated_to_every_chunk(self) -> None:
+        document = replace(
+            self.subsidy,
+            metadata={
+                **self.subsidy.metadata,
+                "age_start": 3,
+                "age_end": 5,
+                "age_basis": "international_age",
+                "age_source": "support_conditions_api",
+            },
+        )
+
+        for chunk in chunk_document(document):
+            self.assertEqual(chunk.metadata["age_start"], 3)
+            self.assertEqual(chunk.metadata["age_end"], 5)
+            self.assertEqual(chunk.metadata["age_basis"], "international_age")
+            self.assertEqual(
+                chunk.metadata["age_source"], "support_conditions_api"
+            )
+
     def test_chunk_ids_are_deterministic_and_unique(self) -> None:
         first = chunk_document(self.subsidy)
         second = chunk_document(self.subsidy)

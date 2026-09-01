@@ -153,17 +153,23 @@ class SentenceTransformerKoreanProvider:
             raise EmbeddingProviderError("embedding texts must be non-empty strings")
         try:
             model = self._load()
-            if self.workers > 1 and self._pool is None:
-                self._pool = model.start_multi_process_pool(
-                    [self.device] * self.workers
+            if self.workers == 1:
+                values = model.encode(
+                    list(texts),
+                    normalize_embeddings=True,
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
                 )
-            values = model.encode(
-                list(texts),
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-                pool=self._pool,
-            )
+            else:
+                if self._pool is None:
+                    self._pool = model.start_multi_process_pool(
+                        [self.device] * self.workers
+                    )
+                values = model.encode_multi_process(
+                    list(texts),
+                    self._pool,
+                    normalize_embeddings=True,
+                )
         except EmbeddingProviderError:
             raise
         except Exception as exc:
@@ -172,6 +178,12 @@ class SentenceTransformerKoreanProvider:
         if any(len(vector) != self.dimension for vector in result):
             raise EmbeddingProviderError("embedding provider returned an invalid dimension")
         return result
+
+    def close(self) -> None:
+        if self._pool is None:
+            return
+        pool, self._pool = self._pool, None
+        self._load().stop_multi_process_pool(pool)
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         """Encode passages with the asymmetric prefix required by E5 models."""

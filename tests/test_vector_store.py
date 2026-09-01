@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rag_design.chunking import chunk_document
+from rag_design.chunking import ChunkingConfig, chunk_document
 from rag_design.contracts import Document, SourceType, compute_content_hash
 from rag_design.embeddings import (
     EmbeddingProviderError,
@@ -25,6 +25,7 @@ from rag_design.vector_store import (
     VectorSearchFilter,
     VectorStoreConfig,
 )
+from scripts import reindex_korean
 
 
 try:
@@ -97,6 +98,79 @@ class EmbeddingProviderTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "workers"):
                 SentenceTransformerKoreanProvider(workers=value)
 
+    def test_korean_provider_serial_encode_does_not_use_pool_api(self) -> None:
+        model = unittest.mock.Mock()
+        model.encode.return_value.tolist.return_value = [[1.0, 0.0], [0.0, 1.0]]
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=1)
+        provider._model = model
+
+        self.assertEqual(
+            provider.embed_documents(["첫째", "둘째"]),
+            [[1.0, 0.0], [0.0, 1.0]],
+        )
+        model.encode.assert_called_once_with(
+            ["passage: 첫째", "passage: 둘째"],
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        model.start_multi_process_pool.assert_not_called()
+        model.encode_multi_process.assert_not_called()
+
+    def test_korean_provider_parallel_encode_reuses_and_closes_pool_once(self) -> None:
+        model = unittest.mock.Mock()
+        pool = object()
+        model.start_multi_process_pool.return_value = pool
+        model.encode_multi_process.return_value.tolist.return_value = [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=2)
+        provider._model = model
+
+        result = provider.embed_documents(["첫째", "둘째"])
+        provider.embed_documents(["셋째"])
+        provider.close()
+        provider.close()
+
+        self.assertEqual(result, [[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(
+            provider.provider_id,
+            SentenceTransformerKoreanProvider(dimension=2, workers=1).provider_id,
+        )
+        model.start_multi_process_pool.assert_called_once_with(["cpu", "cpu"])
+        self.assertEqual(model.encode_multi_process.call_count, 2)
+        model.encode_multi_process.assert_any_call(
+            ["passage: 셋째"], pool, normalize_embeddings=True
+        )
+        model.stop_multi_process_pool.assert_called_once_with(pool)
+
+    def test_korean_provider_parallel_error_pool_can_be_closed_once(self) -> None:
+        model = unittest.mock.Mock()
+        pool = object()
+        model.start_multi_process_pool.return_value = pool
+        model.encode_multi_process.side_effect = RuntimeError("injected failure")
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=2)
+        provider._model = model
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "inference failed"):
+            provider.embed_documents(["실패"])
+        provider.close()
+        provider.close()
+
+        model.stop_multi_process_pool.assert_called_once_with(pool)
+
+    def test_korean_provider_parallel_rejects_invalid_dimension(self) -> None:
+        model = unittest.mock.Mock()
+        model.start_multi_process_pool.return_value = object()
+        model.encode_multi_process.return_value.tolist.return_value = [[1.0]]
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=2)
+        provider._model = model
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "invalid dimension"):
+            provider.embed_documents(["차원 오류"])
+        provider.close()
+
     def test_vector_region_filter_requires_canonical_names(self) -> None:
         with self.assertRaisesRegex(ValueError, "region names"):
             VectorSearchFilter(region_names=("1100000000",))
@@ -123,6 +197,49 @@ class EmbeddingProviderTests(unittest.TestCase):
             ]
         )
         self.assertEqual(args.region_name, ["서울특별시 강남구"])
+
+
+class ReindexEmbeddingLifecycleTests(unittest.TestCase):
+    def _run_reindex(
+        self, sync_side_effect=None, target="subsidy"
+    ) -> unittest.mock.Mock:
+        provider = unittest.mock.Mock(spec=SentenceTransformerKoreanProvider)
+        store = unittest.mock.Mock()
+        store.sync_snapshot.side_effect = sync_side_effect
+        store.sync_snapshot.return_value.total_count = 0
+        store.sync_snapshot.return_value.collection_name = "test"
+        source_type = SourceType.SUBSIDY if target == "subsidy" else SourceType.LAW
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "documents.jsonl"
+            source_path.touch()
+            with (
+                patch.dict(
+                    reindex_korean._SOURCES,
+                    {target: (source_type, source_path)},
+                ),
+                patch.object(reindex_korean, "_load_documents", return_value=[]),
+                patch.object(reindex_korean, "_build_provider", return_value=provider),
+                patch.object(reindex_korean, "ChromaVectorStore", return_value=store),
+            ):
+                if sync_side_effect is None:
+                    self.assertTrue(
+                        reindex_korean._reindex(
+                            target, "snapshot", "cpu", ChunkingConfig(), 2
+                        )
+                    )
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "sync failed"):
+                        reindex_korean._reindex(
+                            target, "snapshot", "cpu", ChunkingConfig(), 2
+                        )
+        return provider
+
+    def test_reindex_closes_parallel_provider_between_targets(self) -> None:
+        self._run_reindex(target="subsidy").close.assert_called_once_with()
+        self._run_reindex(target="law").close.assert_called_once_with()
+
+    def test_reindex_closes_parallel_provider_after_error(self) -> None:
+        self._run_reindex(RuntimeError("sync failed")).close.assert_called_once_with()
 
 
 @unittest.skipUnless(CHROMA_AVAILABLE, "chromadb is not installed")
@@ -295,6 +412,45 @@ class ChromaVectorStoreTests(unittest.TestCase):
                 )
                 self.assertEqual(chunk.citation_locator, "기본정보")
 
+    def test_exact_metadata_lookup_reads_every_page_without_query_embedding(self) -> None:
+        provider = CountingHashEmbeddingProvider()
+        store = ChromaVectorStore(provider, self.config)
+        synced = store.sync_snapshot(
+            SourceType.LAW,
+            self.law_chunks,
+            snapshot_id="legal-exact-lookup-001",
+        )
+        store._READ_RECORDS_BATCH_SIZE = 1
+
+        with patch.object(
+            provider,
+            "embed_query",
+            side_effect=AssertionError("exact lookup must not embed a query"),
+        ):
+            all_legal = store.get_chunks_by_metadata(
+                SourceType.LAW,
+                metadata_equals={"content_level": "metadata_only"},
+                expected_collection_fingerprint=synced.collection_fingerprint,
+            )
+            exact = store.get_chunks_by_metadata(
+                SourceType.LAW,
+                metadata_equals={"law_name": self.law.metadata["law_name"]},
+            )
+            missing = store.get_chunks_by_metadata(
+                SourceType.LAW,
+                metadata_equals={"law_name": "존재하지 않는 법령"},
+            )
+
+        self.assertEqual(
+            [chunk.chunk_id for chunk in all_legal],
+            sorted(chunk.chunk_id for chunk in self.law_chunks),
+        )
+        self.assertEqual(exact, chunk_document(self.law))
+        self.assertEqual(missing, ())
+
+        with self.assertRaisesRegex(ValueError, "metadata_equals"):
+            store.get_chunks_by_metadata(SourceType.LAW, metadata_equals={})
+
     def test_vector_rejects_noncanonical_legal_metadata_content(self) -> None:
         provider = CountingHashEmbeddingProvider()
         store = ChromaVectorStore(provider, self.config)
@@ -443,33 +599,111 @@ class ChromaVectorStoreTests(unittest.TestCase):
         with self.assertRaises(CollectionNotFoundError):
             korean_dimension_store.collection_fingerprint(SourceType.LAW)
 
-    def test_age_filter_rejects_explicit_mismatch_and_keeps_match(self) -> None:
-        chunks = tuple(
+    def test_age_filter_rejects_mismatch_and_honors_missing_policy(self) -> None:
+        aged_chunks = tuple(
             replace(
                 chunk,
-                metadata={**chunk.metadata, "age_start": 65, "age_end": 120},
+                metadata={
+                    **chunk.metadata,
+                    "age_start": 65,
+                    "age_end": 120,
+                    "age_basis": "international_age",
+                    "age_source": "support_conditions_api",
+                },
             )
             for chunk in self.subsidy_chunks
         )
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
-        store.sync_snapshot(SourceType.SUBSIDY, chunks, snapshot_id="age-filter")
+        store.sync_snapshot(SourceType.SUBSIDY, aged_chunks, snapshot_id="age-filter")
 
         rejected = store.search(
             SourceType.SUBSIDY,
             "유아학비",
             query_id="too-young",
-            top_k=len(chunks),
+            top_k=len(aged_chunks),
             search_filter=VectorSearchFilter(age=40),
         )
         accepted = store.search(
             SourceType.SUBSIDY,
             "유아학비",
             query_id="old-enough",
-            top_k=len(chunks),
+            top_k=len(aged_chunks),
             search_filter=VectorSearchFilter(age=70),
         )
         self.assertEqual(rejected, ())
-        self.assertEqual(len(accepted), len(chunks))
+        self.assertEqual(len(accepted), len(aged_chunks))
+
+        store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="age-missing",
+        )
+        kept = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="missing-kept",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(age=70),
+        )
+        dropped = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="missing-dropped",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(age=70, allow_missing_age=False),
+        )
+        self.assertEqual(len(kept), len(self.subsidy_chunks))
+        self.assertEqual(dropped, ())
+
+    def test_provider_registries_coexist_and_matching_legacy_migrates(self) -> None:
+        legacy_store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        source = SourceType.SUBSIDY
+        legacy_name = legacy_store._legacy_registry_name(source)
+        legacy_store._client.get_or_create_collection(
+            name=legacy_name,
+            metadata=legacy_store._registry_metadata(source),
+            embedding_function=None,
+        )
+        self.assertEqual(legacy_store._get_registry(source).name, legacy_name)
+
+        legacy_sync = legacy_store.sync_snapshot(
+            source, self.subsidy_chunks, snapshot_id="legacy-hash-64"
+        )
+        migrated_name = legacy_store._registry_name(source)
+        self.assertEqual(legacy_store._get_registry(source).name, migrated_name)
+        self.assertEqual(
+            legacy_store._client.get_collection(
+                name=legacy_name, embedding_function=None
+            ).name,
+            legacy_name,
+        )
+
+        qualified_store = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
+        qualified_sync = qualified_store.sync_snapshot(
+            source, self.subsidy_chunks, snapshot_id="qualified-hash-32"
+        )
+        qualified_name = qualified_store._registry_name(source)
+        self.assertNotEqual(qualified_name, legacy_name)
+        self.assertEqual(qualified_store._get_registry(source).name, qualified_name)
+        self.assertEqual(
+            qualified_store.collection_fingerprint(source),
+            qualified_sync.collection_fingerprint,
+        )
+        self.assertEqual(
+            legacy_store.collection_fingerprint(source),
+            legacy_sync.collection_fingerprint,
+        )
+
+    def test_korean_registry_names_match_deployed_fingerprints(self) -> None:
+        store = ChromaVectorStore(SentenceTransformerKoreanProvider(), self.config)
+        self.assertEqual(
+            store._registry_name(SourceType.SUBSIDY),
+            "test_rag_subsidy_registry_f5423cb7327c4dcf",
+        )
+        self.assertEqual(
+            store._registry_name(SourceType.LAW),
+            "test_rag_law_registry_57f61b87c3f6cc78",
+        )
 
     def test_chunking_version_mismatch_is_rejected(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)

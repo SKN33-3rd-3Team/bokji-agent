@@ -25,19 +25,40 @@ from rag_chatbot.collectors.law.filter_index import filter_target  # noqa: E402
 
 
 class LawIndexFilterTests(unittest.TestCase):
-    def test_deduplicates_only_by_target_source_id(self) -> None:
+    def test_preserves_revisions_and_removes_only_exact_version_duplicates(self) -> None:
         records = [
-            {"법령명한글": "복지 기본법", "법령ID": "100", "법령일련번호": "1"},
-            {"법령명한글": "복지 기본법", "법령ID": "200", "법령일련번호": "2"},
-            {"법령명한글": "복지 개정법", "법령ID": "100", "법령일련번호": "3"},
+            {
+                "법령명한글": "복지 기본법",
+                "법령ID": "100",
+                "법령일련번호": "1",
+                "시행일자": "20250101",
+            },
+            {
+                "법령명한글": "복지 개정법",
+                "법령ID": "100",
+                "법령일련번호": "2",
+                "시행일자": "20260101",
+            },
+            {
+                "법령명한글": "이름만 다른 완전 중복",
+                "법령ID": "100",
+                "법령일련번호": "2",
+                "시행일자": "20260101",
+            },
+            {
+                "법령명한글": "종료일이 다른 개정",
+                "법령ID": "100",
+                "법령일련번호": "2",
+                "시행일자": "20260101",
+                "effective_to": "20261231",
+            },
         ]
 
         filtered = filter_target(records, "law")
 
-        self.assertEqual([item["법령ID"] for item in filtered], ["100", "200"])
         self.assertEqual(
             [item["법령명한글"] for item in filtered],
-            ["복지 기본법", "복지 기본법"],
+            ["복지 기본법", "복지 개정법", "종료일이 다른 개정"],
         )
 
     def test_missing_ids_are_not_deduplicated_by_name(self) -> None:

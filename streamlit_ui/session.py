@@ -1,8 +1,11 @@
-"""세션 상태 초기화 + 로그인 사용자 헬퍼."""
+"""Streamlit 상담 세션과 로그인 사용자 상태를 관리한다."""
 
 from __future__ import annotations
 
 import re
+import uuid
+from collections.abc import MutableMapping
+from typing import Any
 
 import streamlit as st
 
@@ -20,15 +23,27 @@ def escape_md(text: object) -> str:
     return _MD_SPECIAL_RE.sub(r"\\\1", str(text or ""))
 
 
+def new_conversation(
+    state: MutableMapping[str, Any], *, clear_messages: bool
+) -> None:
+    """새 LangGraph 세션을 만들고 이전 상담의 상태를 비운다."""
+
+    state["conversation_id"] = str(uuid.uuid4())
+    state["awaiting_followup"] = False
+    state["pending_prompt"] = None
+    # 공식 서비스가 소유하지 않는 이전 UI 계약의 민감 슬롯도 남기지 않는다.
+    state["slots"] = {}
+    state["slot_ask_counts"] = {}
+    if clear_messages:
+        state["messages"] = []
+
+
 def init_session() -> None:
-    st.session_state.setdefault("messages", [])       # [{role, kind, ...}]
-    st.session_state.setdefault("slots", {})
-    st.session_state.setdefault("slot_ask_counts", {})
-    st.session_state.setdefault("debug", False)
+    st.session_state.setdefault("messages", [])
     st.session_state.setdefault("pending_prompt", None)
-    # 샘플 색인 완료 toast 를 세션당 한 번만 띄우기 위한 플래그
-    st.session_state.setdefault("ingest_toast_shown", False)
-    # 화면 전환: chat | login | signup | mypage
+    st.session_state.setdefault("awaiting_followup", False)
+    if "conversation_id" not in st.session_state:
+        new_conversation(st.session_state, clear_messages=False)
     st.session_state.setdefault("view", "chat")
     # 로그인 사용자: None 또는 auth_user_dict() 결과.
     # display_name·interests 는 로그인 시 복호화된 값이다(원문 저장 아님).
@@ -68,10 +83,7 @@ def clear_conversation_state() -> None:
     심는 기본값과 같은 형태로 되돌린다.
     """
 
-    st.session_state["messages"] = []
-    st.session_state["slots"] = {}
-    st.session_state["slot_ask_counts"] = {}
-    st.session_state["pending_prompt"] = None
+    new_conversation(st.session_state, clear_messages=True)
 
 
 def logout() -> None:

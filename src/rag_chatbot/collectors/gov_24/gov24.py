@@ -5,19 +5,18 @@
     2. serviceDetail (상세조회) — 1에서 모은 서비스ID마다 상세정보를 하나씩 조회한다.
     3. supportConditions (지원조건조회) — 마찬가지로 서비스ID마다 JA코드 조건을 조회한다.
 
-2, 3번 API도 목록형 응답이다. 전체 수집은 ``page``/``perPage``로 순회해
-호출량을 줄이고, 실패 ID 재시도처럼 단건 조회가 필요할 때만
+2, 3번 API도 목록형 응답이다. 전체 수집은 매번 1페이지부터
+``page``/``perPage``로 순회하고, 완전성 검증 후에만 기존 snapshot을
+교체한다. 단건 재시도는 두 endpoint 모두
 ``cond[서비스ID::EQ]`` 필터를 사용한다.
 
 재시도·재실행 정책:
     - 요청 하나가 실패하면(RequestException) 지수 백오프로 최대
       MAX_RETRIES번까지 같은 요청을 재시도한 뒤에도 실패해야 최종 실패로
       기록한다.
-    - 이 스크립트를 다시 실행하면(예: detail을 다시 돌리는 경우), 이전에
-      이미 성공한 서비스ID는 out_path에서 그대로 재사용하고 재호출하지
-      않는다. 이전에 실패했던 서비스ID만 다시 시도한다. 서비스ID를 key로
-      병합하기 때문에 몇 번을 재실행해도 같은 서비스ID가 중복 레코드로
-      쌓이지 않는다.
+    - 전체 detail/conditions 재실행은 기존 성공분을 재사용하지
+      않는다. 새 ``.partial``에 전체를 받은 뒤 검증이 성공하면
+      최종 파일을 원자적으로 교체한다.
 
 사용법:
     python -m rag_chatbot.collectors.gov_24.gov24 list
@@ -27,9 +26,8 @@
     python -m rag_chatbot.collectors.gov_24.gov24 all
     python -m rag_chatbot.collectors.gov_24.gov24 detail 50
 
-주의: serviceDetail/supportConditions에 ``servId``를 보내면 필터로 인식되지
-않고 첫 페이지가 반복 반환된다. 단건 필터는 공공데이터포털 표준 조건식인
-``cond[서비스ID::EQ]``를 사용한다.
+``serviceDetail``과 ``supportConditions`` 단건 조회는 공식 ODcloud
+``cond[서비스ID::EQ]=<서비스ID>``를 사용한다.
 """
 
 import concurrent.futures
@@ -38,7 +36,9 @@ import os
 import random
 import re
 import sys
+import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import quote, quote_plus, unquote
 
@@ -116,10 +116,31 @@ def _require_key() -> None:
         )
 
 
-def save(items: list[dict], out_path: str) -> None:
+def save(items: object, out_path: str) -> None:
+    """JSON을 같은 디렉터리의 임시 파일에 쓴 뒤 원자적으로 교체한다."""
+
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    serialized = json.dumps(items, ensure_ascii=False, indent=2)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(serialized)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def load(path: str) -> list[dict]:
@@ -196,18 +217,13 @@ def _fetch_one(kind: str, url: str, service_id: str) -> tuple[str, dict | None, 
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             payload = response.json()
-            rows = payload.get("data") if isinstance(payload, dict) else None
-            if not isinstance(rows, list) or len(rows) != 1:
-                return (
-                    service_id,
-                    None,
-                    f"unexpected response row count: {len(rows) if isinstance(rows, list) else 'invalid'}",
+            row = _exact_payload_row(payload, service_id)
+            if row is None:
+                raise Gov24RequestError(
+                    f"{kind} exact one-row response contract mismatch"
                 )
-            row = rows[0]
-            if not isinstance(row, dict) or row.get("서비스ID") != service_id:
-                return service_id, None, "response service ID does not match request"
             return service_id, row, None
-        except requests.exceptions.RequestException as e:
+        except (requests.exceptions.RequestException, Gov24RequestError) as e:
             last_err = _safe_request_error(e)
             log(
                 f"[{kind}] 오류 발생(시도 {attempt}/{MAX_RETRIES}) "
@@ -219,18 +235,68 @@ def _fetch_one(kind: str, url: str, service_id: str) -> tuple[str, dict | None, 
     return service_id, None, last_err
 
 
-def _service_id_of(item: dict) -> str | None:
-    """serviceDetail/supportConditions 원본 응답에서 서비스ID를 찾는다.
+def _service_id_of(row: object) -> str | None:
+    if not isinstance(row, dict):
+        return None
+    service_id = row.get("서비스ID")
+    if (
+        not isinstance(service_id, str)
+        or not service_id
+        or service_id != service_id.strip()
+    ):
+        return None
+    return service_id
 
-    실제 API 응답은 {"data": [{...}]} 형태로 감싸져 있을 수 있어서
-    (merge_gov24.unwrap()과 동일한 가정), 감싸져 있으면 벗겨서 찾는다.
-    """
-    inner = item.get("data")
-    if isinstance(inner, list) and inner:
-        inner = inner[0]
-    if isinstance(inner, dict) and inner.get("서비스ID"):
-        return inner.get("서비스ID")
-    return item.get("서비스ID")
+
+def _exact_payload_row(payload: object, requested_id: str) -> dict | None:
+    """exact 응답을 검증하고 canonical flat row를 반환한다."""
+
+    if not isinstance(payload, dict):
+        return None
+    for count_name in ("matchCount", "currentCount"):
+        count = payload.get(count_name)
+        if isinstance(count, bool) or not isinstance(count, int) or count != 1:
+            return None
+    data = payload.get("data")
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        return None
+    row = data[0]
+    if _service_id_of(row) != requested_id:
+        return None
+    return dict(row)
+
+
+def _canonical_stored_row(item: object) -> dict | None:
+    """flat row와 기존 exact wrapper를 canonical flat row로 읽는다."""
+
+    service_id = _service_id_of(item)
+    if service_id is not None:
+        return dict(item)
+    if not isinstance(item, dict):
+        return None
+    data = item.get("data")
+    if not isinstance(data, list) or len(data) != 1:
+        return None
+    row_id = _service_id_of(data[0])
+    if row_id is None:
+        return None
+    return _exact_payload_row(item, row_id)
+
+
+def _validate_service_ids(values: Sequence[object], *, label: str) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or value in seen
+        ):
+            raise Gov24RequestError(f"{label} contains an invalid or duplicate service ID")
+        seen.add(value)
+        result.append(value)
+    return tuple(result)
 
 
 def fetch_dataset_all(
@@ -238,19 +304,21 @@ def fetch_dataset_all(
     url: str,
     out_path: str,
     *,
+    expected_service_ids: Sequence[str],
     per_page: int = DATASET_PAGE_SIZE,
 ) -> list[dict]:
-    """목록형 detail/conditions API를 페이지로 전부 수집해 평탄화한다.
-
-    예전 구현은 서비스ID마다 ``servId``를 보냈지만 서버가 그 파라미터를
-    무시해 같은 첫 페이지를 반복 반환했다. 페이지 수집은 전체 데이터 기준
-    수십 회 호출이면 끝나고, 응답의 ``data`` 배열을 즉시 개별 레코드로
-    평탄화하므로 병합 계층에 wrapper가 전달되지 않는다.
-    """
+    """1페이지부터 새 partial에 수집하고 완전할 때만 promote한다."""
 
     _require_key()
     if per_page < 1:
         raise ValueError("per_page must be positive")
+    expected_ids = _validate_service_ids(
+        expected_service_ids, label="serviceList"
+    )
+    expected_set = set(expected_ids)
+    output_path = Path(out_path)
+    partial_path = Path(f"{out_path}.partial")
+    partial_path.unlink(missing_ok=True)
 
     rows_by_id: dict[str, dict] = {}
     page = 1
@@ -261,7 +329,7 @@ def fetch_dataset_all(
             "page": page,
             "perPage": per_page,
         }
-        last_error: requests.exceptions.RequestException | None = None
+        last_error: BaseException | None = None
         payload: dict | None = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -273,8 +341,7 @@ def fetch_dataset_all(
                 payload = candidate
                 break
             except (requests.exceptions.RequestException, ValueError) as exc:
-                if isinstance(exc, requests.exceptions.RequestException):
-                    last_error = exc
+                last_error = exc
                 safe_error = _safe_request_error(exc)
                 log(
                     f"[{kind}] {page}페이지 오류(시도 {attempt}/{MAX_RETRIES}) "
@@ -283,36 +350,52 @@ def fetch_dataset_all(
                 if attempt < MAX_RETRIES:
                     time.sleep(BACKOFF_BASE_SEC * (2 ** (attempt - 1)))
         if payload is None:
-            raise Gov24RequestError(_safe_request_error(last_error or "invalid response"))
+            raise Gov24RequestError(
+                _safe_request_error(last_error or ValueError("invalid response"))
+            )
 
         page_rows = payload.get("data")
         if not isinstance(page_rows, list):
             raise Gov24RequestError(f"{kind} response data must be a list")
+        raw_total = payload.get("totalCount")
+        if isinstance(raw_total, bool) or not isinstance(raw_total, int) or raw_total < 0:
+            raise Gov24RequestError(f"{kind} response totalCount is invalid")
         if total_count is None:
-            raw_total = payload.get("totalCount")
-            if not isinstance(raw_total, int) or raw_total < 0:
-                raise Gov24RequestError(f"{kind} response totalCount is invalid")
             total_count = raw_total
-        if not page_rows:
-            break
+            if total_count != len(expected_set):
+                raise Gov24RequestError(
+                    f"{kind} totalCount does not match serviceList"
+                )
+        elif raw_total != total_count:
+            raise Gov24RequestError(f"{kind} totalCount changed between pages")
+        if not page_rows and len(rows_by_id) < total_count:
+            raise Gov24RequestError(f"{kind} ended before totalCount was collected")
 
         for row in page_rows:
-            if not isinstance(row, dict):
-                continue
-            service_id = row.get("서비스ID")
-            if isinstance(service_id, str) and service_id:
-                rows_by_id[service_id] = row
-        save(list(rows_by_id.values()), out_path)
+            service_id = _service_id_of(row)
+            if service_id is None or service_id in rows_by_id:
+                raise Gov24RequestError(
+                    f"{kind} contains an invalid or duplicate service ID"
+                )
+            rows_by_id[service_id] = dict(row)
+        if len(rows_by_id) > total_count:
+            raise Gov24RequestError(f"{kind} collected more rows than totalCount")
+        save(list(rows_by_id.values()), str(partial_path))
         log(
             f"[{kind}] {page}페이지: {len(page_rows)}건 "
             f"(고유 {len(rows_by_id)}/{total_count}건)"
         )
         page += 1
 
-    failed_path = Path(out_path.replace(".json", "_failed_ids.json"))
-    failed_path.write_text("[]", encoding="utf-8")
+    if total_count is None or len(rows_by_id) != total_count:
+        raise Gov24RequestError(f"{kind} row count does not match totalCount")
+    if set(rows_by_id) != expected_set:
+        raise Gov24RequestError(f"{kind} service IDs do not match serviceList")
+
+    os.replace(partial_path, output_path)
+    failed_path = out_path.replace(".json", "_failed_ids.json")
+    save([], failed_path)
     result = list(rows_by_id.values())
-    save(result, out_path)
     return result
 
 
@@ -322,33 +405,50 @@ def fetch_many(
     service_ids: list[str],
     out_path: str,
     *,
-    resume: bool = True,
+    preserve_existing: bool = True,
 ) -> list[dict]:
-    """service_ids를 MAX_WORKERS개씩 동시에 호출하면서 결과를 모은다.
+    """service_ids를 단건 exact 조회하고 flat row snapshot으로 저장한다.
 
-    진행 상황을 실시간으로 출력하고, CHECKPOINT_EVERY건마다 중간 저장한다.
+    체크포인트는 ``.partial``에만 쓰고 모든 요청이 성공해야
+    최종 snapshot을 교체한다.
 
-    resume=True(기본값)이면 out_path에 이미 저장된 성공 결과를 재사용하고,
-    실패 목록 파일(``{out_path 이름}_failed_ids.json``)에 있던 서비스ID만
-    다시 시도한다. 결과는 항상 서비스ID를 key로 병합하므로, 몇 번을
-    재실행해도 같은 서비스ID가 중복 레코드로 쌓이지 않는다.
+    ``preserve_existing=True``는 실패 ID 전용 재시도 경로에서만
+    사용한다. 전체 페이지 수집을 이어받는 옵션이 아니다.
     """
     _require_key()
 
     failed_path = out_path.replace(".json", "_failed_ids.json")
+    requested_ids = _validate_service_ids(service_ids, label=kind)
 
     existing_by_id: dict[str, dict] = {}
-    ids_to_fetch = list(service_ids)
-    if resume and Path(out_path).exists():
-        for item in load(out_path):
-            sid = _service_id_of(item)
-            if sid:
-                existing_by_id[sid] = item
-        previously_failed = set(load(failed_path)) if Path(failed_path).exists() else set()
+    ids_to_fetch = list(requested_ids)
+    if preserve_existing and Path(out_path).exists():
+        existing = load(out_path)
+        if not isinstance(existing, list):
+            raise Gov24RequestError(f"{kind} existing snapshot must be a list")
+        for item in existing:
+            row = _canonical_stored_row(item)
+            sid = _service_id_of(row)
+            if row is None or sid is None or sid in existing_by_id:
+                raise Gov24RequestError(
+                    f"{kind} existing snapshot has an invalid or duplicate service ID"
+                )
+            existing_by_id[sid] = row
+        previously_failed = (
+            set(
+                _validate_service_ids(
+                    load(failed_path), label=f"{kind} failed_ids"
+                )
+            )
+            if Path(failed_path).exists()
+            else set()
+        )
         ids_to_fetch = [
-            sid for sid in service_ids if sid not in existing_by_id or sid in previously_failed
+            sid
+            for sid in requested_ids
+            if sid not in existing_by_id or sid in previously_failed
         ]
-        skipped = len(service_ids) - len(ids_to_fetch)
+        skipped = len(requested_ids) - len(ids_to_fetch)
         if skipped:
             log(f"[{kind}] 이미 성공한 {skipped}건은 재호출하지 않고 재사용합니다.")
 
@@ -356,19 +456,18 @@ def fetch_many(
         log(f"[{kind}] 재호출할 서비스ID가 없습니다. 기존 {len(existing_by_id)}건을 그대로 사용합니다.")
         return list(existing_by_id.values())
 
-    new_results: list[dict] = []
+    new_results: dict[str, dict] = {}
     failed_ids: list[str] = []
     total = len(ids_to_fetch)
     done = 0
     start = time.time()
+    partial_path = Path(f"{out_path}.partial")
+    partial_path.unlink(missing_ok=True)
 
     def _flush() -> dict[str, dict]:
         merged = dict(existing_by_id)
-        for item in new_results:
-            sid = _service_id_of(item)
-            if sid:
-                merged[sid] = item  # 서비스ID로 병합 -> 재실행해도 중복 불가능
-        save(list(merged.values()), out_path)
+        merged.update(new_results)
+        save(list(merged.values()), str(partial_path))
         return merged
 
     log(f"[{kind}] 시작: 총 {total}건(재사용 {len(existing_by_id)}건 제외), 동시 요청 {MAX_WORKERS}개")
@@ -384,7 +483,12 @@ def fetch_many(
                 failed_ids.append(service_id)
                 log(f"[{kind}] {service_id} 실패({MAX_RETRIES}회 시도 후): {err}")
             else:
-                new_results.append(data)
+                returned_id = _service_id_of(data)
+                if returned_id != service_id or data is None:
+                    failed_ids.append(service_id)
+                    log(f"[{kind}] 응답 식별자 계약 불일치로 실패 처리했습니다.")
+                else:
+                    new_results[service_id] = data
 
             if done % PROGRESS_EVERY == 0 or done == total:
                 elapsed = time.time() - start
@@ -399,22 +503,30 @@ def fetch_many(
 
             if done % CHECKPOINT_EVERY == 0:
                 merged = _flush()
-                log(f"[{kind}] 체크포인트 저장 (누적 {len(merged)}건) -> {out_path}")
+                log(
+                    f"[{kind}] partial 체크포인트 "
+                    f"(누적 {len(merged)}건) -> {partial_path}"
+                )
 
     merged = _flush()
+    if failed_ids:
+        save(ids_to_fetch, failed_path)
+        partial_path.unlink(missing_ok=True)
+        raise Gov24RequestError(
+            f"{kind} failed for {len(failed_ids)} service IDs; snapshot was preserved"
+        )
+
+    expected_result_ids = set(existing_by_id) | set(ids_to_fetch)
+    if set(merged) != expected_result_ids:
+        partial_path.unlink(missing_ok=True)
+        raise Gov24RequestError(f"{kind} result IDs do not match requested IDs")
+
+    os.replace(partial_path, out_path)
+    save([], failed_path)
     log(
         f"[{kind}] 최종 저장 완료: {out_path} "
-        f"(전체 {len(merged)}건, 이번 실행 성공 {len(new_results)}건, 실패 {len(failed_ids)}건)"
+        f"(전체 {len(merged)}건, 이번 실행 성공 {len(new_results)}건)"
     )
-
-    if failed_ids:
-        Path(failed_path).write_text(
-            json.dumps(failed_ids, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        log(f"[{kind}] 실패한 서비스ID {len(failed_ids)}건 저장: {failed_path}")
-    elif Path(failed_path).exists():
-        # 이번 실행에서 전부 성공했다면 이전 실패 목록은 더 이상 유효하지 않으므로 비운다.
-        Path(failed_path).write_text("[]", encoding="utf-8")
 
     return list(merged.values())
 
@@ -426,7 +538,12 @@ def fetch_many(
 
 def _service_ids_from_list_file() -> list[str]:
     items = load(LIST_OUT)
-    return [item["서비스ID"] for item in items if item.get("서비스ID")]
+    if not isinstance(items, list):
+        raise Gov24RequestError("serviceList snapshot must be a list")
+    service_ids = [_service_id_of(item) for item in items]
+    if any(service_id is None for service_id in service_ids):
+        raise Gov24RequestError("serviceList contains an invalid service ID")
+    return list(_validate_service_ids(service_ids, label="serviceList"))
 
 
 def run_list() -> None:
@@ -438,9 +555,14 @@ def run_detail(limit: int | None = None) -> None:
     if limit:
         ids = ids[:limit]
         log(f"[detail] 테스트 모드: 앞에서 {limit}건만 조회")
-        fetch_many("detail", DETAIL_URL, ids, DETAIL_OUT, resume=False)
+        fetch_many("detail", DETAIL_URL, ids, DETAIL_OUT, preserve_existing=False)
         return
-    fetch_dataset_all("detail", DETAIL_URL, DETAIL_OUT)
+    fetch_dataset_all(
+        "detail",
+        DETAIL_URL,
+        DETAIL_OUT,
+        expected_service_ids=ids,
+    )
 
 
 def run_conditions(limit: int | None = None) -> None:
@@ -448,9 +570,20 @@ def run_conditions(limit: int | None = None) -> None:
     if limit:
         ids = ids[:limit]
         log(f"[conditions] 테스트 모드: 앞에서 {limit}건만 조회")
-        fetch_many("conditions", CONDITIONS_URL, ids, CONDITIONS_OUT, resume=False)
+        fetch_many(
+            "conditions",
+            CONDITIONS_URL,
+            ids,
+            CONDITIONS_OUT,
+            preserve_existing=False,
+        )
         return
-    fetch_dataset_all("conditions", CONDITIONS_URL, CONDITIONS_OUT)
+    fetch_dataset_all(
+        "conditions",
+        CONDITIONS_URL,
+        CONDITIONS_OUT,
+        expected_service_ids=ids,
+    )
 
 
 def _load_failed_ids(out_path: str) -> list[str]:

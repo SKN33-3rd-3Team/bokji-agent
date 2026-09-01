@@ -12,9 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal, TypedDict
 
-from rag_design.contracts import Citation, RetrievedChunk
-from rag_design.contracts import Citation, RetrievedChunk
-from rag_design.contracts import RetrievedChunk
+from rag_design.contracts import Chunk, Citation, EvidenceStatus, RetrievedChunk
 from rag_design.policy import AbstentionDecision
 
 
@@ -28,9 +26,6 @@ EvidenceGateVerdict = Literal[
 # N7/N8 evidence binding에서 ClaimDraft.policy_id는 안정적인 subsidy 원천 ID인
 # Chunk.metadata["source_id"]다. N7은 이 원천 ID와 Chunk.doc_id의 canonical
 # 일관성도 검증한다.
-from rag_design.contracts import EvidenceStatus, RetrievedChunk
-
-
 class SlotState(TypedDict, total=False):
     # 나이는 사용자가 말한 숫자를 그대로 쓰지 않는다. N1(slot_parser)이
     # birth_date에서 파생해 채우는 값만 판정에 쓴다(Issue #21 리뷰 피드백:
@@ -77,9 +72,9 @@ class ClaimDraft(TypedDict, total=False):
     # law_check_required=True인 claim에만 채워짐 (N7 리뷰 피드백, Issue #16).
     # required_aspects: 정확히 뭘 법령으로 확인해야 하는지 (예: "나이 자격요건").
     # required_law_sources: 확인해야 할 법령 문서 {law_type, source_id} 목록.
-    # 정책 원문의 "근거법령" 섹션에서 언급된 법령명을, 유나님이 수집한 법령
-    # 데이터(law_documents.jsonl)와 이름으로 매칭해서 채운다. 매칭 안 되는
-    # 이름은 그냥 빠진다 (N8이 더 정밀하게 찾을 수도 있음).
+    # 정책 원문의 "근거법령" 섹션에서 언급된 법령명을 active LAW vector
+    # collection의 canonical law_name과 exact 매칭해서 채운다. 매칭 안 되는
+    # 이름은 그냥 빠지고, 한 이름이 여러 identity면 fail-closed 한다.
     required_aspects: list[str]
     required_law_sources: list[RequiredLawSource]
     # N7이 "근거 부족"으로 이 claim을 N6에 다시 보낼 때 1씩 늘어남
@@ -176,6 +171,9 @@ class GraphState(TypedDict, total=False):
     needs_input: bool
     followup_question: str | None
     subsidy_chunks: list[RetrievedChunk]
+    # N4 semantic 후보의 rank/score/provenance를 건드리지 않고 N5에 넘기는
+    # canonical exact legal_basis parts. source_id/ordinal/chunk_part 순서로 보존한다.
+    subsidy_legal_basis_chunks: list[Chunk]
     law_chunks: list[RetrievedChunk]
     claim_plan: list[ClaimDraft]
     eligibility_verdicts: list[EligibilityVerdict]

@@ -9,12 +9,12 @@ N1(추출)·N2(게이트)·N3(재질문)가 같은 어휘를 쓰게 하려고 �
 중요한 구분이 하나 있다.
 
 - **하드 게이트(수집)**: 값이 없으면 N3가 사용자에게 되묻는 슬롯.
-- **하드 필터(검색)**: N4가 vector ``where``에 직접 넣는 슬롯.
+- **하드 필터(검색)**: N4가 vector 또는 raw sidecar 조건으로 쓰는 슬롯.
 
-이 둘은 같지 않다. 참고자료에서 A등급(하드 필터 허용)은 ``주소지``와
-``신청 주체`` 둘뿐이고, 소득·취업상태는 C등급(필터 금지)이다. 그래서 아래
-``FILTERABLE_SLOTS``에 들어간 슬롯만 검색 필터로 쓸 수 있고, 나머지는
-수집만 하고 N9 자격 판정과 답변 체크리스트에서만 사용한다.
+이 둘은 같지 않다. 참고자료는 소득·취업상태를 C등급(필터 금지)으로
+분류하지만, 현재 N4는 공식 raw 지원조건의 exact code만 쓰고 결측·미매핑을
+범주별 fail-open하는 조건으로 연결한다. 아래 ``FILTERABLE_SLOTS``가 이
+보수적 검색 조건에 실제로 쓰는 슬롯 목록이다.
 """
 
 from __future__ import annotations
@@ -140,8 +140,8 @@ SOFT_SLOTS: tuple[str, ...] = (
     "children_count",
 )
 
-# N4가 vector ``where``에 하드 필터로 넣는 슬롯. 하드 게이트로 수집한
-# 소득·취업상태를 검색까지 연결한 결과다(팀 결정).
+# N4가 구조화 검색 조건으로 쓰는 슬롯. 지역·연령은 vector store에, 소득·
+# 취업상태는 정부24 raw 지원조건 sidecar 후처리에 연결한다(팀 결정).
 #
 # 참고자료 ``RAG설계_조건부_요소``는 소득·취업상태를 C등급(필터 금지)으로
 # 두고 있다. 그 경고의 실체는 "필터를 걸면 정답이 조용히 사라진다"이므로,
@@ -151,8 +151,8 @@ SOFT_SLOTS: tuple[str, ...] = (
 # 1. 값이 ``UNKNOWN`` 센티넬이면 그 슬롯은 아예 필터로 만들지 않는다.
 # 2. 문서 쪽 기준이 없는 제도는 필터에서 탈락시키지 않는다(문서 fail-open).
 #    소득 기준이 없는 제도는 "소득 무관"이지 "불일치"가 아니다.
-# 3. 소득 구간은 등가 비교가 아니라 상한 비교로 만든다. 중위소득 60%인
-#    사용자는 "100% 이하" 제도에도 해당한다.
+# 3. 소득 구간은 raw JA 구간과 경계가 겹치는지를 비교할 수 있게 순서값으로
+#    만든다. 같은 범주의 복수 active code는 OR로 처리한다.
 HARD_FILTER_SLOTS: frozenset[str] = frozenset(
     {REGION_SLOT, "birth_date", "income_bracket", "employment_status"}
 )
@@ -160,7 +160,7 @@ HARD_FILTER_SLOTS: frozenset[str] = frozenset(
 SOFT_FILTER_SLOTS: frozenset[str] = frozenset({"gender", "disability_status"})
 FILTERABLE_SLOTS: frozenset[str] = HARD_FILTER_SLOTS | SOFT_FILTER_SLOTS
 
-# 소득 구간을 상한 비교에 쓰기 위한 순서. 값이 클수록 소득이 높다.
+# 소득 구간 경계 overlap 비교에 쓰는 순서. 값이 클수록 소득이 높다.
 INCOME_BRACKET_ORDER: dict[str, int] = {
     IncomeBracket.UNDER_30.value: 0,
     IncomeBracket.PCT_30_50.value: 1,
@@ -189,8 +189,8 @@ MAX_SLOT_ASKS = 2
 SKIP_NOT_CONFIRMED = "not_confirmed"
 SKIP_SUBJECT_NOT_SELF = "age_subject_not_self"
 
-# 사람 나이로 받아들일 수 있는 상한. 오타(1090년생)를 걸러낸다.
-MAX_PLAUSIBLE_AGE = 130
+# 사람 나이로 받아들일 수 있는 상한. 수집·검색 계약과 같은 120으로 맞춘다.
+MAX_PLAUSIBLE_AGE = 120
 
 
 class FilterPlan(TypedDict):
@@ -267,17 +267,19 @@ def parse_birth_date(value: str | None, reference_date: date | None = None) -> d
     today = reference_date or date.today()
     if parsed > today:
         return None
-    if today.year - parsed.year > MAX_PLAUSIBLE_AGE:
+    if calculate_ages(parsed, today)[0] > MAX_PLAUSIBLE_AGE:
         return None
     return parsed
 
 
-def resolve_filter_slots(slots: Mapping[str, object]) -> FilterPlan:
+def resolve_filter_slots(
+    slots: Mapping[str, object], *, reference_date: date | None = None
+) -> FilterPlan:
     """확정된 슬롯을 N4가 쓸 필터 계획으로 바꾼다.
 
     이 함수가 "하드 게이트로 모은 값"과 "검색에 실제로 거는 조건" 사이의
-    유일한 통로다. N4가 ``slots``를 직접 읽어 ``where``를 만들면 아래
-    안전장치를 우회하게 되므로, 필터는 반드시 여기를 거쳐 만든다.
+    유일한 통로다. N4가 ``slots``를 직접 읽어 vector/sidecar 조건을 만들면
+    아래 안전장치를 우회하게 되므로, 필터는 반드시 여기를 거쳐 만든다.
 
     안전장치 세 가지:
 
@@ -285,9 +287,9 @@ def resolve_filter_slots(slots: Mapping[str, object]) -> FilterPlan:
        "해당하지 않는다"가 아니다.
     2. ``allow_missing``으로 문서 쪽 기준이 없는 제도를 살려 둔다. 소득
        기준이 적혀 있지 않은 제도는 소득 무관이지 불일치가 아니다.
-    3. 소득은 등가 비교가 아니라 상한 비교(``max_bracket_rank``)로 넘긴다.
-       중위소득 60%인 사용자는 "100% 이하" 제도에도 해당하므로, 구간을
-       그대로 일치시키면 자격이 있는 제도가 통째로 사라진다.
+    3. 기존 FilterPlan 키 ``max_bracket_rank``는 호환을 위해 유지한다. N4
+       sidecar는 이 값을 사용자 구간의 순서값으로 읽어 JA 구간 경계와 겹쳐
+       비교하며, 문자열 등가 비교는 하지 않는다.
 
     나이는 ``birth_date`` 자체가 아니라 거기서 파생한 만 나이·연 나이를
     넘긴다. 제도 문서의 ``age_basis``에 따라 어느 쪽을 쓸지 N4/N9가 고르며,
@@ -300,7 +302,9 @@ def resolve_filter_slots(slots: Mapping[str, object]) -> FilterPlan:
     skipped_reasons: dict[str, str] = {}
 
     for field in sorted(FILTERABLE_SLOTS):
-        condition, reason = _build_condition(field, slots)
+        condition, reason = _build_condition(
+            field, slots, reference_date=reference_date
+        )
         target = hard if field in HARD_FILTER_SLOTS else soft
         if condition is None:
             skipped.append(field)
@@ -317,7 +321,10 @@ def resolve_filter_slots(slots: Mapping[str, object]) -> FilterPlan:
 
 
 def _build_condition(
-    field: str, slots: Mapping[str, object]
+    field: str,
+    slots: Mapping[str, object],
+    *,
+    reference_date: date | None = None,
 ) -> tuple[dict[str, object] | None, str | None]:
     """슬롯 하나를 필터 조건으로 바꾼다. 걸 수 없으면 ``(None, 이유)``."""
 
@@ -330,7 +337,7 @@ def _build_condition(
         return {"any_of": list(names), "allow_missing": False}, None
 
     if field == "birth_date":
-        return _build_age_condition(slots)
+        return _build_age_condition(slots, reference_date=reference_date)
 
     value = slots.get(field)
     if not is_valid_slot_value(field, value) or value == UNKNOWN:
@@ -348,6 +355,8 @@ def _build_condition(
 
 def _build_age_condition(
     slots: Mapping[str, object],
+    *,
+    reference_date: date | None = None,
 ) -> tuple[dict[str, object] | None, str | None]:
     """연령 조건을 만든다. 주체가 본인으로 확정될 때만 만든다.
 
@@ -367,7 +376,7 @@ def _build_age_condition(
     # 파생값(age)만 보고 조건을 만들면, 생년월일이 깨진 상태에서 예전 턴에
     # 계산해 둔 나이로 필터가 걸린다. 게이트와 같은 판정 함수로 근거부터
     # 확인한다.
-    if parse_birth_date(slots.get("birth_date")) is None:
+    if parse_birth_date(slots.get("birth_date"), reference_date) is None:
         return None, SKIP_NOT_CONFIRMED
     age = slots.get("age")
     year_age = slots.get("age_year_based")

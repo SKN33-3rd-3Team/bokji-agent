@@ -368,6 +368,84 @@ class ParseSlotsNodeTests(unittest.TestCase):
         # 직전에 물어본 슬롯이 프롬프트 맥락으로 전달됐는지도 확인한다.
         self.assertIn("birth_date", client.calls[0]["prompt"])
 
+    def test_age_uses_the_graph_as_of_across_the_year_boundary(self) -> None:
+        state = {
+            "user_input": "",
+            "slots": {"birth_date": "2000-01-01"},
+        }
+
+        before_midnight = parse_slots({**state, "as_of": date(2025, 12, 31)})[
+            "slots"
+        ]
+        after_midnight = parse_slots({**state, "as_of": date(2026, 1, 1)})[
+            "slots"
+        ]
+
+        self.assertEqual(before_midnight["age"], 25)
+        self.assertEqual(before_midnight["age_ref_date"], "2025-12-31")
+        self.assertEqual(after_midnight["age"], 26)
+        self.assertEqual(after_midnight["age_ref_date"], "2026-01-01")
+
+    def test_graph_as_of_is_shared_by_parser_gate_and_filter(self) -> None:
+        reference_date = date(2026, 1, 1)
+        profile_without_age = {
+            key: value
+            for key, value in _FILTER_READY_SLOTS.items()
+            if key not in {"birth_date", "age", "age_year_based"}
+        }
+        slots = parse_slots(
+            {
+                "user_input": "1905년 1월 2일생입니다",
+                "slots": profile_without_age,
+                "as_of": reference_date,
+            }
+        )["slots"]
+        state = {"slots": slots, "as_of": reference_date}
+
+        self.assertNotIn("birth_date", check_slot_completeness(state)["missing_slots"])
+        self.assertIn(
+            "birth_date",
+            resolve_filter_slots(slots, reference_date=reference_date)["hard"],
+        )
+
+        future_slots = parse_slots(
+            {
+                "user_input": "2026년 1월 2일생입니다",
+                "slots": profile_without_age,
+                "as_of": reference_date,
+            }
+        )["slots"]
+        future_state = {"slots": future_slots, "as_of": reference_date}
+        self.assertIn(
+            "birth_date", check_slot_completeness(future_state)["missing_slots"]
+        )
+        self.assertNotIn(
+            "birth_date",
+            resolve_filter_slots(future_slots, reference_date=reference_date)["hard"],
+        )
+
+    def test_llm_birth_date_validation_uses_the_graph_as_of(self) -> None:
+        reference_date = date(2026, 1, 1)
+        client = FakeLLMClient(json.dumps({"birth_date": "1905-01-02"}))
+
+        slots = parse_slots(
+            {
+                "user_input": "생년월일을 답했습니다",
+                "slots": {},
+                "missing_slots": ["birth_date"],
+                "as_of": reference_date,
+            },
+            llm_client=client,
+        )["slots"]
+
+        self.assertEqual(slots["birth_date"], "1905-01-02")
+        self.assertEqual(slots["age"], 120)
+        self.assertEqual(slots["age_ref_date"], "2026-01-01")
+
+    def test_invalid_graph_as_of_does_not_silently_fall_back_to_today(self) -> None:
+        with self.assertRaisesRegex(ValueError, "state\\['as_of'\\] must be a date"):
+            parse_slots({"user_input": "", "slots": {}, "as_of": "2026-01-01"})
+
     def test_first_question_is_preserved_for_the_search_query(self) -> None:
         # user_input은 되묻기에 답할 때마다 덮어써진다. N4 검색에 쓸 원래
         # 질문을 첫 턴에 한 번만 보존하고, 이후 턴에는 건드리지 않는다.
@@ -898,9 +976,9 @@ class FilterPlanTests(unittest.TestCase):
             sorted(plan["skipped"]), ["employment_status", "income_bracket"]
         )
 
-    def test_income_is_an_upper_bound_not_an_exact_match(self) -> None:
-        # 중위소득 60%인 사용자는 "100% 이하" 제도에도 해당한다. 구간을 그대로
-        # 일치시키면 자격이 있는 제도가 통째로 사라진다 - 회귀 테스트.
+    def test_income_preserves_ordered_interval_rank(self) -> None:
+        # 문자열 equals 대신 순서값을 넘겨 N4가 raw JA 구간 경계 overlap을
+        # 적용할 수 있게 한다.
         plan = resolve_filter_slots({**_FILTER_READY_SLOTS, "income_bracket": "pct_50_75"})
         condition = plan["hard"]["income_bracket"]
         self.assertNotIn("equals", condition)
@@ -1067,6 +1145,14 @@ class BirthDateValidationParityTests(unittest.TestCase):
         self.assertIsNone(parse_birth_date("not-a-date"))
         self.assertIsNone(parse_birth_date(""))
         self.assertIsNotNone(parse_birth_date("1990-03-15"))
+
+    def test_birth_date_upper_bound_matches_vector_filter_contract(self) -> None:
+        reference_date = date(2026, 1, 1)
+
+        self.assertEqual(
+            parse_birth_date("1905-01-02", reference_date), date(1905, 1, 2)
+        )
+        self.assertIsNone(parse_birth_date("1905-01-01", reference_date))
 
     def test_gate_and_filter_agree_on_what_counts_as_a_birth_date(self) -> None:
         # 게이트는 "값이 있다"로 통과시키고 필터는 "날짜가 아니다"로 건너뛰면,

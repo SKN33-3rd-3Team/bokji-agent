@@ -183,13 +183,22 @@ def _reindex(
     print(f"      [{name}] 이 단계가 가장 오래 걸립니다 (CPU면 수십 분).")
 
     started = time.monotonic()
-    store = _open_store(device, workers)
-    result = store.sync_snapshot(
-        source_type,
-        tuple(chunks),
-        snapshot_id=snapshot_id,
-        secret_values=_secret_values(),
+    provider = _build_provider(device, workers)
+    store = ChromaVectorStore(
+        provider,
+        VectorStoreConfig(
+            persist_directory=_VECTOR_DB, collection_prefix=_COLLECTION_PREFIX
+        ),
     )
+    try:
+        result = store.sync_snapshot(
+            source_type,
+            tuple(chunks),
+            snapshot_id=snapshot_id,
+            secret_values=_secret_values(),
+        )
+    finally:
+        provider.close()
     elapsed = time.monotonic() - started
 
     print(

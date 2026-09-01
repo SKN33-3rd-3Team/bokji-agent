@@ -18,6 +18,9 @@ from rag_chatbot.graph.nodes import (
     route_evidence_gate,
     search_targeted_laws,
 )
+from rag_chatbot.graph.nodes.claim_plan import plan_claims
+from rag_chatbot.graph.nodes.law_source_resolver import VectorStoreLawSourceResolver
+from rag_chatbot.graph.nodes.policy_search import search_policies
 from rag_design.chunking import (
     ChunkingConfig,
     chunk_document,
@@ -1033,6 +1036,219 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
 
         self.assertEqual(calls, sources)
         self.assertEqual(evaluate_evidence(state)["evidence_gate_verdict"], "pass")
+
+    def test_t15_n5_exact_name_resolution_flows_into_n8_pair_search(self) -> None:
+        law_name = self.law_document.metadata["law_name"]
+        policy_document = replace(
+            self.subsidy_document,
+            sections=(
+                self.subsidy_document.sections[0],
+                Section(
+                    heading_path=("근거법령",),
+                    content=f"{law_name}(제1조)",
+                    metadata={"section_type": "legal_basis"},
+                ),
+            ),
+        )
+        policy_chunks = chunk_document(policy_document)
+        policy_evidence = self._retrieved(policy_chunks[0])
+        legal_basis = self._retrieved(policy_chunks[1], rank=2)
+
+        class ExactLawStore:
+            def __init__(self) -> None:
+                self.exact_calls: list[tuple[SourceType, dict]] = []
+
+            def search(
+                self, source_type, query, *, query_id, top_k, search_filter
+            ):
+                self.assert_subsidy_search(source_type)
+                return (policy_evidence,)
+
+            @staticmethod
+            def assert_subsidy_search(source_type) -> None:
+                if source_type is not SourceType.SUBSIDY:
+                    raise AssertionError("N4 semantic search must use SUBSIDY")
+
+            def get_chunks_by_metadata(
+                self, source_type, *, metadata_equals, **kwargs
+            ):
+                self.exact_calls.append((source_type, dict(metadata_equals)))
+                if (
+                    source_type is SourceType.SUBSIDY
+                    and metadata_equals
+                    == {
+                        "source_id": policy_evidence.chunk.metadata["source_id"],
+                        "section_type": "legal_basis",
+                    }
+                ):
+                    return (legal_basis.chunk,)
+                if (
+                    source_type is SourceType.LAW
+                    and metadata_equals == {"law_name": law_name}
+                ):
+                    return (self_law_chunk,)
+                return ()
+
+        class LawClaimExtractor:
+            def extract(self, *, policy_id: str, text: str) -> list[dict]:
+                return [
+                    {
+                        "claim_type": "eligibility",
+                        "law_check_required": True,
+                        "reasons": [text],
+                        "required_aspects": [LEGAL_METADATA_ASPECT],
+                    }
+                ]
+
+        self_law_chunk = self.law.chunk
+        store = ExactLawStore()
+        n4_update = search_policies(
+            {
+                "query_id": self.query_id,
+                "as_of": date.fromisoformat(self.as_of),
+                "slots": {"region_names": []},
+            },
+            store,
+            top_k=1,
+        )
+        self.assertNotEqual(
+            n4_update["subsidy_chunks"][0].chunk.metadata.get("section_type"),
+            "legal_basis",
+        )
+        self.assertEqual(n4_update["subsidy_legal_basis_chunks"], [legal_basis.chunk])
+
+        resolver = VectorStoreLawSourceResolver(store)
+        claim = plan_claims(
+            n4_update,
+            LawClaimExtractor(),
+            resolver,
+        )["claim_plan"][0]
+        claim["doc_check_required"] = False
+        claim["status"] = EvidenceStatus.SUPPORTED.value
+        claim["evidence_chunk_ids"] = [policy_evidence.chunk.chunk_id]
+        state = {
+            "query_id": self.query_id,
+            "as_of": self.as_of,
+            "safety_blocked": False,
+            "claim_plan": [claim],
+            **n4_update,
+            "law_chunks": [],
+        }
+        state.update(evaluate_evidence(state))
+        self.assertEqual(state["evidence_gate_verdict"], "insufficient_law")
+        self.assertEqual(state["law_retry_count"], 1)
+        self.assertEqual(state["missing_law_claim_ids"], [claim["claim_id"]])
+
+        calls = []
+
+        def search(source, query, **kwargs):
+            calls.append(dict(kwargs["search_filter"].metadata_equals))
+            return (self.law,)
+
+        state.update(search_targeted_laws(state, search=search))
+
+        self.assertEqual(
+            store.exact_calls,
+            [
+                (
+                    SourceType.SUBSIDY,
+                    {
+                        "source_id": policy_evidence.chunk.metadata["source_id"],
+                        "section_type": "legal_basis",
+                    },
+                ),
+                (SourceType.LAW, {"law_name": law_name}),
+            ],
+        )
+        self.assertEqual(calls, [claim["required_law_sources"][0]])
+        self.assertEqual(evaluate_evidence(state)["evidence_gate_verdict"], "pass")
+
+    def test_t15_exact_legal_basis_miss_fails_closed_without_n8_search(self) -> None:
+        class NoLegalBasisStore:
+            def __init__(self) -> None:
+                self.exact_calls: list[tuple[SourceType, dict]] = []
+
+            def search(
+                self, source_type, query, *, query_id, top_k, search_filter
+            ):
+                if source_type is not SourceType.SUBSIDY:
+                    raise AssertionError("N4 semantic search must use SUBSIDY")
+                return (self_subsidy,)
+
+            def get_chunks_by_metadata(
+                self, source_type, *, metadata_equals, **kwargs
+            ):
+                self.exact_calls.append((source_type, dict(metadata_equals)))
+                return ()
+
+        class LawClaimExtractor:
+            def extract(self, *, policy_id: str, text: str) -> list[dict]:
+                return [
+                    {
+                        "claim_type": "eligibility",
+                        "law_check_required": True,
+                        "reasons": [text],
+                        "required_aspects": [LEGAL_METADATA_ASPECT],
+                    }
+                ]
+
+        self_subsidy = self.subsidy
+        store = NoLegalBasisStore()
+        n4_update = search_policies(
+            {
+                "query_id": self.query_id,
+                "as_of": date.fromisoformat(self.as_of),
+                "slots": {"region_names": []},
+            },
+            store,
+            top_k=1,
+        )
+        self.assertEqual(n4_update["subsidy_legal_basis_chunks"], [])
+
+        claim = plan_claims(
+            n4_update,
+            LawClaimExtractor(),
+            VectorStoreLawSourceResolver(store),
+        )["claim_plan"][0]
+        self.assertEqual(claim["required_law_sources"], [])
+        claim["doc_check_required"] = False
+        claim["status"] = EvidenceStatus.SUPPORTED.value
+        claim["evidence_chunk_ids"] = [self.subsidy.chunk.chunk_id]
+        state = {
+            "query_id": self.query_id,
+            "as_of": self.as_of,
+            "safety_blocked": False,
+            "claim_plan": [claim],
+            **n4_update,
+            "law_chunks": [],
+        }
+        state.update(evaluate_evidence(state))
+
+        self.assertEqual(state["evidence_gate_verdict"], "fail")
+        self.assertEqual(state["law_retry_count"], 0)
+        self.assertEqual(state["missing_law_claim_ids"], [])
+        self.assertEqual(
+            store.exact_calls,
+            [
+                (
+                    SourceType.SUBSIDY,
+                    {
+                        "source_id": self.subsidy.chunk.metadata["source_id"],
+                        "section_type": "legal_basis",
+                    },
+                )
+            ],
+        )
+
+        n8_calls = []
+
+        def search(*args, **kwargs):
+            n8_calls.append((args, kwargs))
+            return ()
+
+        with self.assertRaises(ValueError):
+            search_targeted_laws(state, search=search)
+        self.assertEqual(n8_calls, [])
 
     def test_t15a_n8_rejects_invalid_targets_before_search(self) -> None:
         base = self._n8_state()

@@ -192,6 +192,7 @@ class ChromaVectorStore:
         self.config = config or VectorStoreConfig()
         self.config.persist_directory.mkdir(parents=True, exist_ok=True)
         chromadb, settings_type = _load_chroma()
+        self._not_found_error = chromadb.errors.NotFoundError
         try:
             self._client = chromadb.PersistentClient(
                 path=str(self.config.persist_directory),
@@ -204,15 +205,8 @@ class ChromaVectorStore:
         return f"{self.config.collection_prefix}_{source_type.value}_registry"
 
     def _registry_name(self, source_type: SourceType) -> str:
-        """Provider별 active generation pointer 이름을 반환한다.
-
-        generation은 fingerprint를 포함하지만 예전 registry는 source_type별로
-        하나뿐이라 hash와 korean 색인을 같은 DB에 둘 수 없었다. provider와
-        dimension을 포함한 base fingerprint로 registry도 분리한다.
-        """
-
-        suffix = self._base_fingerprint(source_type)[:16]
-        return f"{self._legacy_registry_name(source_type)}_{suffix}"
+        config_id = self._base_fingerprint(source_type)[:16]
+        return f"{self._legacy_registry_name(source_type)}_{config_id}"
 
     def _generation_name(
         self, source_type: SourceType, snapshot_digest: str
@@ -292,20 +286,55 @@ class ChromaVectorStore:
                 "active-generation registry does not match the active configuration"
             )
 
-    def _get_or_create_registry(self, source_type: SourceType) -> Any:
-        metadata = self._registry_metadata(source_type)
-        # 기존 DB의 provider가 현재 설정과 같으면 legacy pointer를 새 provider별
-        # registry로 복사한다. 기존 컬렉션은 지우지 않아 롤백도 가능하다.
+    def _open_registry(self, name: str, source_type: SourceType) -> Any | None:
         try:
-            legacy = self._client.get_collection(
-                name=self._legacy_registry_name(source_type), embedding_function=None
+            registry = self._client.get_collection(
+                name=name, embedding_function=None
             )
-            self._validate_registry(legacy, source_type)
+        except self._not_found_error:
+            return None
+        except Exception as exc:
+            raise VectorStoreError(
+                "failed to open the active-generation registry"
+            ) from exc
+        self._validate_registry(registry, source_type)
+        return registry
+
+    def _get_registry(self, source_type: SourceType) -> Any:
+        registry = self._open_registry(self._registry_name(source_type), source_type)
+        if registry is not None:
+            return registry
+
+        # Pre-fingerprint registries remain readable only when their complete
+        # metadata matches this provider/configuration. A legacy registry for a
+        # different provider is unrelated, not a fallback candidate.
+        try:
+            registry = self._open_registry(
+                self._legacy_registry_name(source_type), source_type
+            )
+        except CollectionFingerprintMismatch:
+            registry = None
+        if registry is not None:
+            return registry
+        raise CollectionNotFoundError(
+            f"collection for {source_type.value!r} does not exist"
+        )
+
+    def _get_or_create_registry(self, source_type: SourceType) -> Any:
+        registry = self._open_registry(self._registry_name(source_type), source_type)
+        if registry is not None:
+            return registry
+
+        metadata = self._registry_metadata(source_type)
+        try:
+            legacy = self._open_registry(
+                self._legacy_registry_name(source_type), source_type
+            )
+        except CollectionFingerprintMismatch:
+            legacy = None
+        if legacy is not None:
             metadata = dict(legacy.metadata or metadata)
-        except Exception:
-            # 다른 provider의 legacy registry이거나 아예 없는 경우에는 빈
-            # provider별 registry를 만든다.
-            metadata = self._registry_metadata(source_type)
+
         try:
             registry = self._client.get_or_create_collection(
                 name=self._registry_name(source_type),
@@ -316,39 +345,6 @@ class ChromaVectorStore:
             raise VectorStoreError(
                 "failed to create or open the active-generation registry"
             ) from exc
-        self._validate_registry(registry, source_type)
-        return registry
-
-    def _get_registry(self, source_type: SourceType) -> Any:
-        try:
-            registry = self._client.get_collection(
-                name=self._registry_name(source_type), embedding_function=None
-            )
-        except Exception:
-            # 읽기 경로는 아직 migration되지 않은 같은-provider legacy DB도
-            # 그대로 열 수 있어야 한다. 다른 provider의 legacy pointer는 현재
-            # provider에 색인이 없다는 뜻이지 현재 설정이 손상됐다는 뜻이
-            # 아니므로 CollectionNotFoundError로 처리한다.
-            try:
-                registry = self._client.get_collection(
-                    name=self._legacy_registry_name(source_type),
-                    embedding_function=None,
-                )
-            except Exception as exc:
-                raise CollectionNotFoundError(
-                    f"collection for {source_type.value!r} does not exist"
-                ) from exc
-            legacy_metadata = registry.metadata or {}
-            if (
-                legacy_metadata.get("rag_embedding_provider")
-                != self.embedding_provider.provider_id
-                or legacy_metadata.get("rag_embedding_dimension")
-                != self.embedding_provider.dimension
-            ):
-                raise CollectionNotFoundError(
-                    f"collection for {source_type.value!r} does not exist "
-                    "for the active embedding provider"
-                )
         self._validate_registry(registry, source_type)
         return registry
 
@@ -791,17 +787,23 @@ class ChromaVectorStore:
     _MAX_QUERY_N_RESULTS = 2000
 
     def _read_records(
-        self, collection: Any
+        self,
+        collection: Any,
+        *,
+        where: Mapping[str, Any] | None = None,
     ) -> dict[str, tuple[str, Mapping[str, Any]]]:
         records: dict[str, tuple[str, Mapping[str, Any]]] = {}
         offset = 0
         while True:
             try:
-                result = collection.get(
-                    include=["metadatas", "documents"],
-                    limit=self._READ_RECORDS_BATCH_SIZE,
-                    offset=offset,
-                )
+                kwargs: dict[str, Any] = {
+                    "include": ["metadatas", "documents"],
+                    "limit": self._READ_RECORDS_BATCH_SIZE,
+                    "offset": offset,
+                }
+                if where is not None:
+                    kwargs["where"] = where
+                result = collection.get(**kwargs)
             except Exception as exc:
                 raise VectorStoreError("failed to read a Chroma generation") from exc
             ids = list(result.get("ids") or [])
@@ -1239,6 +1241,40 @@ class ChromaVectorStore:
             if actual != expected:
                 return False
         return True
+
+    def get_chunks_by_metadata(
+        self,
+        source_type: SourceType,
+        *,
+        metadata_equals: Mapping[str, str | int | float | bool],
+        expected_collection_fingerprint: str | None = None,
+    ) -> tuple[Chunk, ...]:
+        """Return every chunk matching exact scalar metadata, without ranking."""
+
+        if not metadata_equals:
+            raise ValueError("metadata_equals must be non-empty")
+        search_filter = VectorSearchFilter(metadata_equals=metadata_equals)
+        collection = self._get_collection(source_type)
+        self._validate_collection(
+            collection,
+            source_type,
+            expected_fingerprint=expected_collection_fingerprint,
+        )
+        records = self._read_records(
+            collection, where=self._query_where(search_filter)
+        )
+        chunks: list[Chunk] = []
+        for record_id in sorted(records):
+            document, metadata = records[record_id]
+            chunk = self._decode_chunk(record_id, document, metadata)
+            if not self._matches_filter(
+                chunk, metadata, source_type, search_filter
+            ):
+                raise CorruptVectorRecordError(
+                    "exact metadata record differs from its serialized Chunk"
+                )
+            chunks.append(chunk)
+        return tuple(chunks)
 
     def search(
         self,

@@ -37,6 +37,7 @@ import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Sequence
 
 from ...llm import LLMCallError, LLMClient, loads_json_object
@@ -174,7 +175,11 @@ class LLMClaimExtractor:
                 pass
 
         with ThreadPoolExecutor(max_workers=_prefetch_workers()) as pool:
-            list(pool.map(_one, pending))
+            futures = [
+                pool.submit(copy_context().run, _one, item) for item in pending
+            ]
+            for future in futures:
+                future.result()
 
     def extract(self, *, policy_id: str, text: str) -> list[dict]:
         if not text.strip():
