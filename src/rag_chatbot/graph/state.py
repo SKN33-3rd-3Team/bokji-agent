@@ -153,6 +153,9 @@ abstained: 검증된 근거가 아예 없어 답변 자체를 노출하지 않�
 
 class GraphState(TypedDict, total=False):
     query_id: str
+    # N4가 반환할 정책 후보 수. 프론트엔드의 "정책 후보 수" 설정을 첫 요청에
+    # 받아 체크포인터에 보존한다. 값 검증은 run_graph/search_policies가 맡는다.
+    policy_top_k: int
     user_input: str
     # 이번 턴 발화(user_input)는 되묻기에 답할 때마다 덮어써진다
     # ("서울, 2000-03-26, 여성..."). 그래서 N4 검색에 쓸 **원래 질문**을

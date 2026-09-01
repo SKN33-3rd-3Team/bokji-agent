@@ -28,6 +28,8 @@ from ..llm_gateway import redact_sensitive_text
 from ..state import GraphState
 
 DEFAULT_TOP_K = 5
+MIN_TOP_K = 1
+MAX_TOP_K = 20
 # interests가 비어있을 때 쓰는 넓은 검색어. 결정사항 로그의 "interests 없음
 # 처리: 넓게 검색 후 안내문구만 첨부, 재질문 없음" 정책을 따른다.
 _FALLBACK_QUERY = "생활 지원 복지 서비스"
@@ -40,7 +42,6 @@ _MAX_QUESTION_CHARS = 200
 # 그대로 질의로 쓰면 의미 없는 벡터로 검색하게 되기 때문이다.
 # 형태만 보는 휴리스틱이라 완벽하지 않다 - 긴 인사말은 걸러지지 않는다.
 _MIN_QUESTION_CHARS = 6
-
 
 def _build_query(slots: dict, question: str | None = None) -> str:
     """검색 질의를 만든다: 관심사 키워드 + 사용자의 원래 질문.
@@ -74,7 +75,7 @@ def search_policies(
     state: GraphState,
     store: ChromaVectorStore,
     *,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int | None = None,
 ) -> dict:
     """slots 기반으로 지원제도 후보를 검색해 subsidy_chunks를 채운다.
 
@@ -89,6 +90,15 @@ def search_policies(
     """
 
     slots = state.get("slots") or {}
+    # 테스트나 내부 호출에서 명시한 인자가 가장 우선이고, 서비스 경로에서는
+    # 첫 요청에 저장한 GraphState 값을 쓴다. 둘 다 없으면 기존 기본값 5다.
+    resolved_top_k = (
+        top_k if top_k is not None else state.get("policy_top_k", DEFAULT_TOP_K)
+    )
+    if isinstance(resolved_top_k, bool) or not isinstance(resolved_top_k, int):
+        raise ValueError("policy top_k must be an integer")
+    if not MIN_TOP_K <= resolved_top_k <= MAX_TOP_K:
+        raise ValueError(f"policy top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
     query_id = state.get("query_id")
     if not query_id:
         raise ValueError("state['query_id'] is required to search policies")
@@ -104,7 +114,7 @@ def search_policies(
         SourceType.SUBSIDY,
         query,
         query_id=query_id,
-        top_k=top_k,
+        top_k=resolved_top_k,
         search_filter=search_filter,
     )
     return {"subsidy_chunks": list(results)}

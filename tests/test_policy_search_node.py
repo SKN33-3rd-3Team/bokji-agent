@@ -136,5 +136,38 @@ class BuildQueryTests(unittest.TestCase):
         self.assertLessEqual(len(query), 220)
 
 
+class ConfigurableTopKTests(unittest.TestCase):
+    class _Store:
+        def __init__(self) -> None:
+            self.top_k = None
+
+        def search(self, source_type, query, *, query_id, top_k, search_filter):
+            self.top_k = top_k
+            return ()
+
+    def _state(self, top_k=7):
+        return {
+            "query_id": "q-top-k",
+            "as_of": date(2026, 1, 1),
+            "slots": {"region_names": []},
+            "policy_top_k": top_k,
+        }
+
+    def test_uses_top_k_from_graph_state(self) -> None:
+        store = self._Store()
+        search_policies(self._state(7), store)
+        self.assertEqual(store.top_k, 7)
+
+    def test_explicit_node_argument_overrides_state(self) -> None:
+        store = self._Store()
+        search_policies(self._state(7), store, top_k=3)
+        self.assertEqual(store.top_k, 3)
+
+    def test_rejects_out_of_range_top_k(self) -> None:
+        for value in (0, 21, True, "5"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                search_policies(self._state(value), self._Store())
+
+
 if __name__ == "__main__":
     unittest.main()

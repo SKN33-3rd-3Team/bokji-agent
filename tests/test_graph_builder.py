@@ -156,6 +156,32 @@ def test_run_graph_interrupts_when_hard_gate_slots_are_missing() -> None:
     assert "region" in result.get("missing_slots", [])
 
 
+def test_run_graph_preserves_configurable_policy_top_k() -> None:
+    graph = build_graph(_store("top_k_state_test"))
+
+    result = run_graph(
+        graph, user_input="", session_id="session-top-k-a", top_k=9
+    )
+
+    assert result["policy_top_k"] == 9
+
+
+def test_run_graph_rejects_invalid_policy_top_k() -> None:
+    graph = build_graph(_store("invalid_top_k_test"))
+
+    for value in (0, 21, True, "5"):
+        try:
+            run_graph(
+                graph,
+                user_input="",
+                session_id=f"session-invalid-top-k-{value}",
+                top_k=value,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid top_k was accepted: {value!r}")
+
+
 def test_run_graph_sessions_are_isolated() -> None:
     # 서로 다른 session_id는 서로 다른 checkpointer thread_id를 쓰므로,
     # 한 세션의 진행 상태가 다른 세션에 보이면 안 된다.

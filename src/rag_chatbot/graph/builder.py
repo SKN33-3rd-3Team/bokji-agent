@@ -53,7 +53,7 @@ from .nodes.eligibility_verdict import determine_eligibility
 from .nodes.evidence_gate import evaluate_evidence, route_evidence_gate
 from .nodes.final_verification import route_final_verification, verify_final_answer
 from .nodes.general_law_reference_search import search_general_law_references
-from .nodes.policy_search import search_policies
+from .nodes.policy_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, search_policies
 from .nodes.request_missing_slots import request_missing_slot_input
 from .nodes.result_assembly import assemble_result
 from .nodes.slot_completeness_gate import (
@@ -255,6 +255,7 @@ def run_graph(
     user_input: str,
     session_id: str,
     slots: dict | None = None,
+    top_k: int = DEFAULT_TOP_K,
     as_of=None,
     safety_blocked: bool = False,
 ) -> dict:
@@ -268,6 +269,8 @@ def run_graph(
     slots: 이미 알고 있는 슬롯이 있으면(예: 이전 채널에서 수집한 프로필)
     초기값으로 미리 채워 넣는다. 생략하면 빈 SlotState로 시작해 N1이
     user_input만으로 채운다.
+    top_k: N4 정책 검색에서 반환할 후보 수. 프론트엔드의 "정책 후보 수"
+    설정값을 전달하며 1~20 범위만 허용한다.
     safety_blocked: N7(evidence_gate.evaluate_evidence)이 요구하는 안전
     신호. 아직 이 값을 실제로 계산하는 안전 필터 노드가 없어(N1~N3는 슬롯
     파싱/게이트일 뿐 안전성 검사가 아니다), 기본값 False는 "안전하다고
@@ -281,8 +284,14 @@ def run_graph(
     """
     from datetime import date as _date
 
+    if isinstance(top_k, bool) or not isinstance(top_k, int):
+        raise ValueError("top_k must be an integer")
+    if not MIN_TOP_K <= top_k <= MAX_TOP_K:
+        raise ValueError(f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
+
     initial_state: GraphState = {
         "query_id": session_id,
+        "policy_top_k": top_k,
         "as_of": as_of or _date.today(),
         "user_input": user_input,
         "slots": dict(slots) if slots else {},

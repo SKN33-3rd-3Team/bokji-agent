@@ -809,14 +809,23 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
     }
 
 
-def ask(user_input: str, session_id: str) -> ChatResponse:
+def ask(user_input: str, session_id: str, *, top_k: int = 5) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
-    질문을 입력했을 때 호출한다."""
+    질문을 입력했을 때 호출한다.
 
-    graph = get_graph()
-    store = get_store()
+    ``top_k``는 화면의 "정책 후보 수" 설정값이다. 기본값은 기존과 같은 5이고,
+    그래프가 1~20 범위를 검증한다. 후속 답변에서는 첫 요청의 값이 LangGraph
+    체크포인터에 보존되므로 다시 전달하지 않는다.
+    """
+
     _reset_llm_recorder()
-    result = run_graph(graph, user_input=user_input, session_id=session_id)
+    TIMER.reset()
+    with TIMER.measure("request_total"):
+        graph = get_graph()
+        store = get_store()
+        result = run_graph(
+            graph, user_input=user_input, session_id=session_id, top_k=top_k
+        )
     return _to_chat_response(result, session_id=session_id, store=store)
 
 
