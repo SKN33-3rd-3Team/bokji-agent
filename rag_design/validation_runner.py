@@ -58,12 +58,39 @@ def load_questions(path: Path) -> list[dict]:
 
 
 def _request_latency_ms(response: Mapping, elapsed_ms: int) -> int:
-    phases = (response.get("timing") or {}).get("phases") or {}
-    measured = phases.get("request_total")
+    timing = response.get("timing")
+    if not isinstance(timing, Mapping):
+        return elapsed_ms
+
+    phases = timing.get("phases") or {}
+    measured = None
+
+    if isinstance(phases, Mapping):
+        measured = phases.get("request_total")
+    elif isinstance(phases, list):
+        for phase in phases:
+            if not isinstance(phase, Mapping):
+                continue
+
+            if "request_total" in phase:
+                measured = phase.get("request_total")
+                break
+
+            phase_name = phase.get("name") or phase.get("phase")
+            if phase_name == "request_total":
+                measured = (
+                    phase.get("duration")
+                    or phase.get("duration_s")
+                    or phase.get("elapsed")
+                    or phase.get("elapsed_s")
+                    or phase.get("seconds")
+                )
+                break
+
     if isinstance(measured, (int, float)) and measured >= 0:
         return round(measured * 1000)
-    return elapsed_ms
 
+    return elapsed_ms
 
 def run_questions(
     questions: Sequence[Mapping],
