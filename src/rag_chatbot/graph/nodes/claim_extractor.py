@@ -32,7 +32,12 @@ LLMClaimExtractor: llm_client가 있을 때, 청크 텍스트에서 claim 후보
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Sequence
 
 from ...llm import LLMCallError, LLMClient, loads_json_object
 
@@ -93,16 +98,102 @@ class RuleBasedClaimExtractor:
         ]
 
 
+def _prefetch_workers() -> int:
+    """동시에 보낼 LLM 요청 수.
+
+    올릴수록 빨라지지만(청크 5개면 5로 두어야 한 번에 끝난다) provider가
+    429(요청 한도 초과)를 낼 수 있고, 그러면 실패한 청크가 규칙 기반으로
+    폴백해 품질이 떨어진다. provider별 한도를 모르니 기본값은 보수적으로
+    두고 ``LLM_PREFETCH_WORKERS``로 조절할 수 있게 한다.
+    """
+
+    try:
+        value = int(os.environ.get("LLM_PREFETCH_WORKERS") or 4)
+    except ValueError:
+        return 4
+    return max(1, min(value, 16))
+# 캐시 상한. 한 프로세스가 오래 살아도 메모리가 무한정 늘지 않게 한다.
+_CACHE_MAX_ENTRIES = 512
+
+
 class LLMClaimExtractor:
-    """LLM으로 claim 후보를 뽑고, 실패하면 규칙 기반으로 폴백하는 구현체."""
+    """LLM으로 claim 후보를 뽑고, 실패하면 규칙 기반으로 폴백하는 구현체.
+
+    같은 청크를 두 번 뽑지 않는다(캐시)
+    --------------------------------
+    claim 추출 결과는 **정책 원문에만** 의존한다 - 사용자 슬롯이나 대화
+    맥락과 무관하다. 그래서 같은 청크는 언제 물어도 같은 답이 나오고,
+    두 번째부터는 부를 이유가 없다.
+
+    캐시가 없을 때 실측(2026-08-31): N5가 청크 5개에 대해 매 턴 LLM을
+    5번 불러 292초가 걸렸다. 되묻기로 대화가 길어지면 같은 정책을 계속
+    다시 뽑는다. 캐시는 프로세스 안에서만 유지된다(재시작하면 사라짐).
+
+    한계(숨기지 않음): 프로세스 전역이 아니라 인스턴스별 캐시이므로,
+    그래프를 다시 조립하면 비워진다. 여러 사용자가 한 프로세스를 공유하는
+    환경에서도 정책 원문 기준이라 섞여도 안전하다(사용자 정보가 키에 들어가지
+    않는다).
+    """
 
     def __init__(self, llm_client: LLMClient):
         self.llm_client = llm_client
         self._fallback = RuleBasedClaimExtractor()
+        self._cache: dict[tuple[str, str], list[dict]] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _cache_key(policy_id: str, text: str) -> tuple[str, str]:
+        # 원문을 통째로 키에 넣으면 메모리를 크게 쓴다. 해시로 줄인다.
+        return policy_id, hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def prefetch(self, items: Sequence[tuple[str, str]]) -> None:
+        """여러 (policy_id, text)를 미리, 동시에 뽑아 캐시에 채운다.
+
+        청크마다의 추출은 서로 완전히 독립이라 순서대로 기다릴 이유가 없다.
+        5개를 순차로 부르면 5배 기다리지만 동시에 부르면 가장 느린 하나만
+        기다리면 된다.
+
+        여기서 예외를 밖으로 내보내지 않는다 - prefetch는 최적화일 뿐이고,
+        실패하면 ``extract()``가 평소대로 직접 호출해 폴백까지 처리한다.
+        """
+
+        pending = [
+            (policy_id, text)
+            for policy_id, text in items
+            if text.strip() and self._cache_key(policy_id, text) not in self._cache
+        ]
+        if len(pending) <= 1:
+            # 하나뿐이면 스레드를 띄우는 비용이 이득보다 크다.
+            return
+
+        def _one(item: tuple[str, str]) -> None:
+            policy_id, text = item
+            try:
+                self.extract(policy_id=policy_id, text=text)
+            except Exception:  # noqa: BLE001 - prefetch 실패는 조용히 넘긴다
+                pass
+
+        with ThreadPoolExecutor(max_workers=_prefetch_workers()) as pool:
+            list(pool.map(_one, pending))
 
     def extract(self, *, policy_id: str, text: str) -> list[dict]:
         if not text.strip():
             return []
+
+        key = self._cache_key(policy_id, text)
+        with self._lock:
+            cached = self._cache.get(key)
+        if cached is not None:
+            # 호출자가 리스트를 바꿔도 캐시가 오염되지 않게 복사해서 준다.
+            return [dict(claim) for claim in cached]
+
+        result = self._extract_uncached(policy_id=policy_id, text=text)
+        with self._lock:
+            if len(self._cache) < _CACHE_MAX_ENTRIES:
+                self._cache[key] = [dict(claim) for claim in result]
+        return result
+
+    def _extract_uncached(self, *, policy_id: str, text: str) -> list[dict]:
         prompt = (
             f"[정책 ID: {policy_id}]\n[정책 원문]\n{text}\n\n"
             "위 원문에서 자격(eligibility)/지원금액(amount)/중복수급(duplicate) "

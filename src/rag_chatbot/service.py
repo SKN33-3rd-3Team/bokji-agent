@@ -173,6 +173,7 @@ from rag_design.vector_store import (
 
 from .graph import build_graph, resume_graph, run_graph
 from .llm import HuggingFaceInferenceClient, RecordingLLMClient
+from .timing import TIMER, node_title
 
 # 레포 루트의 .env에서 HF_TOKEN/LLM_MODEL_NAME 등을 읽는다(이미 셸에 직접
 # 설정돼 있으면 그 값이 우선한다 - load_dotenv 기본값 override=False).
@@ -267,11 +268,33 @@ def build_llm_client() -> RecordingLLMClient | None:
         or os.environ.get("LLM_HF_MODEL")
         or _DEFAULT_HF_MODEL
     )
+    # 토큰 예산과 "생각 끄기"를 환경변수로 조절할 수 있게 한다.
+    #
+    # 왜: 추론형 모델(Qwen3.5 계열)은 답을 쓰기 전에 내부 사고에 토큰을 크게
+    # 써서 호출 하나가 수십 초씩 걸린다(실측: N1 한 번에 50초). 기본
+    # max_new_tokens=8192는 그 사고 길이를 감당하려고 올려둔 값이라,
+    # 비추론형 모델을 쓰면 훨씬 낮춰도 되고 그만큼 빨라진다.
+    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+
+    # LLM_DISABLE_THINKING=1이면 provider에 "사고 과정을 끄라"고 요청한다.
+    # Qwen3 계열 chat template이 지원한다고 알려진 파라미터인데, 이
+    # HuggingFace Inference Providers 라우팅 경로에서 실제로 먹히는지는
+    # 검증하지 못했다(샌드박스에서 huggingface.co에 접속할 수 없음).
+    # 안 먹히면 조용히 무시되거나 에러가 나므로, 켠 뒤 체감 속도와
+    # llm_status의 평균 호출 시간을 비교해서 판단할 것.
+    extra_body = None
+    if os.environ.get("LLM_DISABLE_THINKING") == "1":
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+
     # RecordingLLMClient로 감싼다. 노드들은 LLM 호출이 실패해도 규칙 기반으로
     # 조용히 폴백하기 때문에, 감싸지 않으면 "LLM이 한 번도 안 돌았는데 결과는
     # 멀쩡히 나오는" 상태를 아무도 모른다. 여기 모인 실패 사유를
     # ChatResponse["llm_status"]로 화면까지 올린다.
-    return RecordingLLMClient(HuggingFaceInferenceClient(model=model))
+    return RecordingLLMClient(
+        HuggingFaceInferenceClient(
+            model=model, max_new_tokens=max_new_tokens, extra_body=extra_body
+        )
+    )
 
 
 # 그래프/store/llm_client는 만드는 비용이 크다(vectorDB 연결, LLM 클라이언트
@@ -285,11 +308,18 @@ def get_graph() -> Any:
     """조립된 그래프를 반환한다(프로세스당 한 번만 조립)."""
 
     if "graph" not in _runtime_cache:
-        store = connect_store()
-        llm_client = build_llm_client()
+        # 이 세 단계를 따로 재는 이유: "첫 실행이 느리다"의 범인이
+        # vectorDB 인덱스 로딩인지 그래프 조립인지 구분되지 않으면
+        # 엉뚱한 데를 최적화하게 된다.
+        with TIMER.measure("startup:vectordb_connect"):
+            store = connect_store()
+        with TIMER.measure("startup:llm_client"):
+            llm_client = build_llm_client()
+        with TIMER.measure("startup:graph_build"):
+            graph = build_graph(store, llm_client=llm_client)
         _runtime_cache["store"] = store
         _runtime_cache["llm_client"] = llm_client
-        _runtime_cache["graph"] = build_graph(store, llm_client=llm_client)
+        _runtime_cache["graph"] = graph
     return _runtime_cache["graph"]
 
 
@@ -360,6 +390,10 @@ class ChatResponse(TypedDict, total=False):
     # 사용자는 AI가 판단한 줄 안다. {"enabled", "model", "calls", "successes",
     # "failures", "messages"} 형태.
     llm_status: dict
+    # 이번 요청의 단계별 소요 시간과 실제로 지나간 노드 경로.
+    # {"phases": [{name, count, total_s, avg_s, share}...],
+    #  "node_path": [{node, title, seconds}...]}
+    timing: dict
 
 
 # --- 정책 상세 섹션 재검색 (목적/지원대상/선정기준/지원내용/신청방법/신청기한/근거법령) ---
@@ -654,6 +688,90 @@ def _reset_llm_recorder() -> None:
         client.reset()
 
 
+def _timing_report() -> dict:
+    """이번 요청에서 어디에 시간이 들었는지.
+
+    ``node_path``는 그래프가 실제로 지나간 노드 순서다 - 조건부 분기가
+    있어서 어떤 경로로 갔는지는 실행해봐야만 안다.
+    """
+
+    return {
+        "phases": TIMER.summary(),
+        "node_path": [
+            {"node": name, "title": node_title(name), "seconds": seconds}
+            for name, seconds in TIMER.path()
+        ],
+    }
+
+
+def _markdown_cell(value: object) -> str:
+    """Markdown 표 셀을 깨뜨리는 구분자와 줄바꿈을 이스케이프한다."""
+
+    if value is None:
+        return "-"
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+
+
+def _build_output_markdown(policies: list[PolicyView]) -> str:
+    """최종 정책 목록을 렌더링 가능한 Markdown 표로 만든다."""
+
+    header = (
+        "| 순위 | 정책명 | 자격 확인 | 지원금 | 중복수급 | 출처 |\n"
+        "|---:|---|---|---|---|---|"
+    )
+    if not policies:
+        return header + "\n| - | 확인된 정책 없음 | - | - | - | - |"
+
+    rows: list[str] = []
+    for policy in policies:
+        source_url = (policy.get("detail") or {}).get("source_url")
+        source = f"[원문]({source_url})" if source_url else "-"
+        rows.append(
+            "| "
+            + " | ".join(
+                _markdown_cell(value)
+                for value in (
+                    policy.get("rank"),
+                    policy.get("title"),
+                    policy.get("eligibility_status"),
+                    policy.get("amount_label"),
+                    policy.get("duplicate_status"),
+                    source,
+                )
+            )
+            + " |"
+        )
+    return header + "\n" + "\n".join(rows)
+
+
+def _build_output_text(
+    policies: list[PolicyView], final_answer: str | None = None
+) -> str:
+    """최종 답변과 정책 비교 결과를 일반 문자열로 만든다."""
+
+    sections: list[str] = []
+    if isinstance(final_answer, str) and final_answer.strip():
+        sections.append(final_answer.strip())
+
+    if policies:
+        lines = ["정책 비교"]
+        for policy in policies:
+            detail = policy.get("detail") or {}
+            source_url = detail.get("source_url") or "출처 없음"
+            lines.append(
+                f"[{policy.get('rank', '-')}] {policy.get('title') or policy.get('policy_id')}"
+                f" | 자격: {policy.get('eligibility_status', '미확인')}"
+                f" | 지원금: {policy.get('amount_label', '지원금액 확인 필요')}"
+                f" | 중복수급: {policy.get('duplicate_status', '미확인')}"
+                f" | 출처: {source_url}"
+            )
+        sections.append("\n".join(lines))
+    elif not sections:
+        sections.append("확인된 정책이 없습니다.")
+
+    return "\n\n".join(sections)
+
+
 def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatResponse:
     if "__interrupt__" in result:
         interrupt_payload = result["__interrupt__"]
@@ -666,6 +784,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
             "session_id": session_id,
             "missing_slots": result.get("missing_slots", []),
             "llm_status": _llm_status(),
+            "timing": _timing_report(),
         }
 
     policies_raw = (result.get("assembled_result") or {}).get("policies", {})
@@ -686,6 +805,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "final_citations": result.get("final_citations", []),
         "policies": policy_views,
         "llm_status": _llm_status(),
+        "timing": _timing_report(),
     }
 
 
@@ -706,10 +826,12 @@ def answer_followup(session_id: str, user_input: str) -> ChatResponse:
     같은 ``session_id``로만 호출할 수 있다 - 체크포인터에 해당 세션의 이전
     진행 상태가 없으면 LangGraph가 에러를 낸다."""
 
-    graph = get_graph()
-    store = get_store()
     _reset_llm_recorder()
-    result = resume_graph(graph, session_id=session_id, user_input=user_input)
+    TIMER.reset()
+    with TIMER.measure("request_total"):
+        graph = get_graph()
+        store = get_store()
+        result = resume_graph(graph, session_id=session_id, user_input=user_input)
     return _to_chat_response(result, session_id=session_id, store=store)
 
 

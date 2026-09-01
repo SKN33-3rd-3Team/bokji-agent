@@ -354,12 +354,58 @@ def extract_slots(
     if llm_client is None:
         return rule_based
 
+    if _rules_answered_everything(rule_based, asked_slots):
+        # 규칙이 이미 물어본 항목을 전부 채웠으면 LLM을 부르지 않는다.
+        #
+        # 되묻기에 대한 답("서울, 2000-03-26, 여성, 모름, 비장애인, 무직")은
+        # 규칙만으로 다 잡히는 경우가 많은데, 그런 턴에도 LLM을 부르면 아무것도
+        # 더 얻지 못하면서 호출 시간만 그대로 든다. 실측에서 N1 한 번이
+        # 50초였다(추론형 모델 호출 1회). 얻는 것 없는 50초다.
+        #
+        # 첫 자유 발화 턴(asked_slots가 비어 있음)에는 건너뛰지 않는다.
+        # "혼자 사는데 월세가 부담돼요"처럼 규칙이 못 읽는 문장을 이해하는
+        # 것이 LLM을 붙인 이유이기 때문이다.
+        return rule_based
+
     llm_values = _extract_slots_via_llm(user_input, asked_slots, llm_client)
     if not llm_values:
         # LLM 호출/파싱 실패, 또는 계약을 통과한 값이 하나도 없음. 규칙
         # 결과를 그대로 쓴다(그래프가 죽지 않는 것이 우선).
         return rule_based
     return _merge_rule_and_llm_slots(rule_based, llm_values)
+
+
+# 되묻기 슬롯 이름 -> 규칙 추출 결과에서 확인할 키.
+# region만 이름이 다르다(슬롯은 region, 추출 결과는 region_raw).
+_ASKED_SLOT_RESULT_KEYS = {
+    REGION_SLOT: "region_raw",
+    "birth_date": "birth_date",
+    "gender": "gender",
+    "income_bracket": "income_bracket",
+    "disability_status": "disability_status",
+    "employment_status": "employment_status",
+}
+
+
+def _rules_answered_everything(
+    rule_based: ExtractedSlots, asked_slots: Sequence[str] | None
+) -> bool:
+    """되묻은 항목을 규칙이 전부 채웠는지.
+
+    비어 있는 ``asked_slots``에는 False를 돌려준다 - 무엇을 물었는지 모르면
+    "다 채웠다"고 말할 근거가 없다.
+    """
+
+    if not asked_slots:
+        return False
+    for slot in asked_slots:
+        key = _ASKED_SLOT_RESULT_KEYS.get(slot)
+        if key is None:
+            # 모르는 슬롯이면 LLM에게 맡긴다(보수적).
+            return False
+        if rule_based.get(key) is None:
+            return False
+    return True
 
 
 SLOT_EXTRACTION_SYSTEM_PROMPT = (

@@ -28,7 +28,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 from typing import Protocol
+
+from ..timing import TIMER
 
 
 class LLMClient(Protocol):
@@ -260,23 +264,39 @@ class RecordingLLMClient:
         self.call_count = 0
         self.success_count = 0
         self.failures: list[str] = []
+        self.durations: list[float] = []
+        # N5가 청크별 추출을 동시에 돌리기 시작하면서 이 카운터들이 여러
+        # 스레드에서 갱신된다. 잠그지 않으면 호출 수가 실제보다 적게 세진다.
+        self._lock = threading.Lock()
 
     def reset(self) -> None:
         self.call_count = 0
         self.success_count = 0
         self.failures = []
+        self.durations = []
 
     def complete(self, prompt: str, *, system: str | None = None) -> str:
-        self.call_count += 1
+        with self._lock:
+            self.call_count += 1
+        started = time.perf_counter()
         try:
             result = self.inner.complete(prompt, system=system)
         except LLMCallError as exc:
             message = str(exc)
-            # 같은 원인이 노드마다 반복되므로 중복은 한 번만 남긴다.
-            if message not in self.failures:
-                self.failures.append(message)
+            with self._lock:
+                # 같은 원인이 노드마다 반복되므로 중복은 한 번만 남긴다.
+                if message not in self.failures:
+                    self.failures.append(message)
             raise
-        self.success_count += 1
+        finally:
+            # 실패한 호출도 시간을 잰다. 타임아웃으로 느린 경우가 있어서
+            # 성공한 것만 재면 "왜 느린지"를 놓친다.
+            elapsed = time.perf_counter() - started
+            with self._lock:
+                self.durations.append(elapsed)
+            TIMER.record("llm_call", elapsed)
+        with self._lock:
+            self.success_count += 1
         return result
 
     def summary(self) -> dict:
@@ -289,6 +309,12 @@ class RecordingLLMClient:
             "successes": self.success_count,
             "failures": len(self.failures),
             "messages": list(self.failures),
+            # 호출 하나가 얼마나 걸리는지. 추론형 모델은 내부 사고에 토큰을
+            # 크게 써서 호출당 수십 초가 나오기도 한다 - 체감 지연의 주범
+            # 인지 여기서 바로 보인다.
+            "total_seconds": sum(self.durations),
+            "slowest_seconds": max(self.durations) if self.durations else 0.0,
+            "avg_seconds": (sum(self.durations) / len(self.durations)) if self.durations else 0.0,
         }
 
 

@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.rag_chatbot.service import ask, answer_followup
+from src.rag_chatbot.timing import node_title
 
 _QUIT_COMMANDS = {"/quit", "/exit"}
 _DIVIDER = "=" * 60
@@ -95,20 +96,63 @@ def _print_llm_status(response: dict) -> None:
             print(f"      - {message}")
         print("      원인을 자세히 보려면: python scripts/check_llm_connection.py")
     elif calls:
-        print(f"\n[LLM] 정상 - 모델={model} / 호출 {calls}회 전부 성공")
+        total = status.get("total_seconds") or 0.0
+        avg = status.get("avg_seconds") or 0.0
+        slowest = status.get("slowest_seconds") or 0.0
+        print(
+            f"\n[LLM] 정상 - 모델={model} / 호출 {calls}회 전부 성공"
+            f" / 합계 {total:.1f}초 (평균 {avg:.1f}초, 최대 {slowest:.1f}초)"
+        )
+        if avg > 5:
+            print("      호출당 평균이 5초를 넘습니다. 추론형 모델이면 내부 사고에")
+            print("      토큰을 크게 쓰는 것이 원인일 수 있습니다 - LLM_MODEL_NAME을")
+            print("      비추론형으로 바꾸거나 max_new_tokens를 줄여보세요.")
     else:
         print(f"\n[LLM] 모델={model} 준비됨(이번 턴에는 호출 없음)")
+
+
+def _print_timing(response: dict) -> None:
+    """어디에 시간이 들었는지와 그래프가 실제로 지나간 노드 경로.
+
+    "처음 실행이 왜 오래 걸리나"를 추측으로 진단하지 않기 위한 것이다.
+    후보가 여럿이라(vectorDB 인덱스 로딩, LLM 호출, 노드별 재검색) 숫자를
+    봐야 어디를 고칠지 정할 수 있다.
+    """
+
+    timing = response.get("timing")
+    if not timing:
+        return
+
+    path = timing.get("node_path") or []
+    if path:
+        print(f"\n[노드 실행 경로] {len(path)}개 (조건부 분기라 매번 다를 수 있음)")
+        for order, step in enumerate(path, 1):
+            print(f"  {order:2}. {step['title']}  ({step['seconds']:.2f}초)")
+
+    phases = timing.get("phases") or []
+    if phases:
+        print("\n[시간이 든 곳] 오래 걸린 순")
+        for row in phases[:8]:
+            name = row["name"]
+            if name.startswith("node:"):
+                name = node_title(name[len("node:") :])
+            print(
+                f"  {row['total_s']:7.2f}초  {row['count']:>3}회  "
+                f"평균 {row['avg_s']:6.2f}초   {name}"
+            )
+        print("  (노드 시간 안에 LLM 호출 시간이 포함돼 있어 합계는 100%가 아닙니다)")
 
 
 def _print_response(response: dict) -> None:
     print(f"\n{_DIVIDER}")
     print("[ChatResponse 원본(JSON, detail 생략)]")
-    slim = {k: v for k, v in response.items() if k not in ("policies", "llm_status")}
+    slim = {k: v for k, v in response.items() if k not in ("policies", "llm_status", "timing")}
     if "policies" in response:
         slim["policies"] = [{k: v for k, v in p.items() if k != "detail"} for p in response["policies"]]
     print(json.dumps(slim, ensure_ascii=False, indent=2, default=str))
 
     _print_llm_status(response)
+    _print_timing(response)
 
     if response["status"] == "needs_input":
         print(f"\n[N3 질문] {response['question']}")

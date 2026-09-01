@@ -229,15 +229,42 @@ class LlmGatewayLlmSlotExtractionTests(unittest.TestCase):
         result = llm_gateway.extract_slots("어디 사는지 물으셨죠", {}, llm_client=client)
         self.assertEqual(result["region_raw"], "부산")
 
-    def test_explicit_dont_know_can_be_recorded_as_the_unknown_sentinel(self) -> None:
-        # "모름"이 어느 슬롯에 대한 답인지는 직전에 물어본 항목을 알아야
-        # 판단할 수 있어서, asked_slots를 프롬프트에 함께 넣는다.
-        client = FakeLLMClient(json.dumps({"income_bracket": "unknown"}))
+    def test_llm_is_not_called_when_rules_already_answered_everything(self) -> None:
+        """규칙이 물어본 항목을 다 채웠으면 LLM을 부르지 않는다.
+
+        되묻기 답변은 규칙만으로 다 잡히는 경우가 많은데, 그런 턴에도 LLM을
+        부르면 아무것도 더 얻지 못하면서 호출 시간만 그대로 든다.
+        실측에서 N1 한 번이 50초였다(추론형 모델 호출 1회).
+        """
+
+        client = FakeLLMClient(json.dumps({"gender": "male"}))
         result = llm_gateway.extract_slots(
             "그건 잘 모르겠어요", {}, llm_client=client, asked_slots=["income_bracket"]
         )
+        # 규칙이 "모름"을 센티넬로 확정했으므로 LLM은 부르지 않는다.
         self.assertEqual(result["income_bracket"], "unknown")
+        self.assertEqual(client.calls, [])
+
+    def test_llm_is_still_called_when_rules_fell_short(self) -> None:
+        # 규칙이 못 채운 항목이 남아 있으면 LLM에게 맡긴다. 이때 직전에
+        # 물어본 항목이 프롬프트에 들어가야 "모름"이 어느 슬롯에 대한
+        # 답인지 LLM이 판단할 수 있다.
+        client = FakeLLMClient(json.dumps({"income_bracket": "unknown"}))
+        # "글쎄"는 규칙의 '모름' 표현 목록에 있어서 규칙이 처리해버린다.
+        # 규칙이 아무것도 못 잡는 발화를 써야 LLM 경로를 검증할 수 있다.
+        result = llm_gateway.extract_slots(
+            "네 그렇습니다", {}, llm_client=client, asked_slots=["income_bracket"]
+        )
+        self.assertEqual(len(client.calls), 1)
         self.assertIn("income_bracket", client.calls[0]["prompt"])
+        self.assertEqual(result["income_bracket"], "unknown")
+
+    def test_first_free_form_turn_always_asks_the_llm(self) -> None:
+        # 되묻기 맥락이 없는 첫 발화는 규칙이 뭘 잡았든 LLM에게 물어본다.
+        # 규칙이 못 읽는 문장을 이해하는 것이 LLM을 붙인 이유다.
+        client = FakeLLMClient("{}")
+        llm_gateway.extract_slots("혼자 사는데 월세가 부담돼요", {}, llm_client=client)
+        self.assertEqual(len(client.calls), 1)
 
     def test_prompt_never_carries_email_phone_or_resident_id(self) -> None:
         # 외부 LLM provider로 나가는 텍스트에 PII가 실리면 안 된다.

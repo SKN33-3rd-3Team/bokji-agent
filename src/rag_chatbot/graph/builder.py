@@ -63,6 +63,7 @@ from .nodes.slot_completeness_gate import (
 )
 from .nodes.slot_parser import parse_slots
 from .nodes.targeted_law_search import search_targeted_laws
+from ..timing import timed_node
 from .state import GraphState
 
 _SlotGateRoute = Literal["sufficient", "general_law", "request_input"]
@@ -164,32 +165,25 @@ def build_graph(
     graph: StateGraph = StateGraph(GraphState)
 
     # --- N1~N3: 슬롯 파싱 / 적합성 체크 / 추가 정보 요청 -------------------
-    graph.add_node("slot_parser", functools.partial(parse_slots, llm_client=llm_client))
-    graph.add_node("slot_completeness_gate", check_slot_completeness)
-    graph.add_node("general_law_reference_search", search_general_law_references)
-    graph.add_node("request_missing_slots", _await_missing_slot_input)
+    graph.add_node("slot_parser", timed_node("slot_parser", functools.partial(parse_slots, llm_client=llm_client)))
+    graph.add_node("slot_completeness_gate", timed_node("slot_completeness_gate", check_slot_completeness))
+    graph.add_node("general_law_reference_search", timed_node("general_law_reference_search", search_general_law_references))
+    graph.add_node("request_missing_slots", timed_node("request_missing_slots", _await_missing_slot_input))
 
     # --- N4~N14: 기존 정책 검색 ~ 최종 검증 --------------------------------
-    graph.add_node("policy_search", functools.partial(search_policies, store=store))
-    graph.add_node("claim_plan", functools.partial(plan_claims, extractor=extractor))
-    graph.add_node(
-        "document_verification", functools.partial(verify_official_documents, store=store)
+    graph.add_node("policy_search", timed_node("policy_search", functools.partial(search_policies, store=store)))
+    graph.add_node("claim_plan", timed_node("claim_plan", functools.partial(plan_claims, extractor=extractor)))
+    graph.add_node("document_verification", timed_node("document_verification", functools.partial(verify_official_documents, store=store))
     )
-    graph.add_node("evidence_gate", evaluate_evidence)
-    graph.add_node("targeted_law_search", functools.partial(search_targeted_laws, search=store.search))
-    graph.add_node(
-        "eligibility_verdict",
-        functools.partial(determine_eligibility, store=store, llm_client=llm_client),
-    )
-    graph.add_node(
-        "benefit_calculator",
-        functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client),
-    )
-    graph.add_node("duplicate_benefit", functools.partial(check_duplicate_benefit, store=store))
-    graph.add_node("result_assembly", functools.partial(assemble_result, store=store))
-    graph.add_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client))
-    graph.add_node("final_verification", verify_final_answer)
-    graph.add_node("abstain_insufficient_evidence", _abstain_insufficient_evidence)
+    graph.add_node("evidence_gate", timed_node("evidence_gate", evaluate_evidence))
+    graph.add_node("targeted_law_search", timed_node("targeted_law_search", functools.partial(search_targeted_laws, search=store.search)))
+    graph.add_node("eligibility_verdict", timed_node("eligibility_verdict", functools.partial(determine_eligibility, store=store, llm_client=llm_client),))
+    graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client),))
+    graph.add_node("duplicate_benefit", timed_node("duplicate_benefit", functools.partial(check_duplicate_benefit, store=store)))
+    graph.add_node("result_assembly", timed_node("result_assembly", functools.partial(assemble_result, store=store)))
+    graph.add_node("answer_generation", timed_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client)))
+    graph.add_node("final_verification", timed_node("final_verification", verify_final_answer))
+    graph.add_node("abstain_insufficient_evidence", timed_node("abstain_insufficient_evidence", _abstain_insufficient_evidence))
 
     graph.set_entry_point("slot_parser")  # E1
 
