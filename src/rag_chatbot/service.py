@@ -385,6 +385,11 @@ class ChatResponse(TypedDict, total=False):
     final_answer: str | None
     final_citations: list[dict]
     policies: list[PolicyView]
+    # 프론트엔드가 같은 결과를 JSON, 일반 문자열, Markdown 비교표 중 필요한
+    # 형식으로 바로 사용할 수 있게 한다. output_json은 직렬화 전 dict다.
+    output_json: dict
+    output_text: str
+    output_markdown: str
     # LLM이 이번 요청에서 실제로 돌았는지. 실패해도 노드들이 규칙 기반으로
     # 폴백해 결과는 정상적으로 나오기 때문에, 이 값을 화면에 표시하지 않으면
     # 사용자는 AI가 판단한 줄 안다. {"enabled", "model", "calls", "successes",
@@ -778,11 +783,28 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         # graph.invoke()는 리스트, graph.stream()은 튜플로 준다 - 둘 다 첫
         # 원소의 .value가 질문 문자열이다.
         question = interrupt_payload[0].value
+        missing_slots = result.get("missing_slots", [])
         return {
             "status": "needs_input",
             "question": question,
             "session_id": session_id,
-            "missing_slots": result.get("missing_slots", []),
+            "missing_slots": missing_slots,
+            "output_json": {
+                "status": "needs_input",
+                "session_id": session_id,
+                "question": question,
+                "missing_slots": missing_slots,
+            },
+            "output_text": (
+                f"추가 정보가 필요합니다.\n{question}\n"
+                f"부족한 정보: {', '.join(missing_slots) or '없음'}"
+            ),
+            "output_markdown": (
+                "| 상태 | 추가 질문 | 부족한 정보 |\n"
+                "|---|---|---|\n"
+                f"| 추가 정보 필요 | {_markdown_cell(question)} | "
+                f"{_markdown_cell(', '.join(missing_slots))} |"
+            ),
             "llm_status": _llm_status(),
             "timing": _timing_report(),
         }
@@ -797,13 +819,26 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         for i, (policy_id, entry) in enumerate(ranked)
     ]
 
-    return {
+    output_json = {
         "status": "answered",
         "session_id": session_id,
         "answer_status": result.get("answer_status"),
         "final_answer": result.get("final_answer"),
         "final_citations": result.get("final_citations", []),
         "policies": policy_views,
+    }
+    final_answer = result.get("final_answer")
+
+    return {
+        "status": "answered",
+        "session_id": session_id,
+        "answer_status": result.get("answer_status"),
+        "final_answer": final_answer,
+        "final_citations": result.get("final_citations", []),
+        "policies": policy_views,
+        "output_json": output_json,
+        "output_text": _build_output_text(policy_views, final_answer),
+        "output_markdown": _build_output_markdown(policy_views),
         "llm_status": _llm_status(),
         "timing": _timing_report(),
     }

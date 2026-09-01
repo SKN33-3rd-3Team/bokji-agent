@@ -17,6 +17,8 @@ from src.rag_chatbot.llm import (
     diagnose_hf_error,
 )
 from src.rag_chatbot.service import (
+    _build_output_markdown,
+    _build_output_text,
     _build_policy_view,
     _extract_title,
     _fetch_policy_detail,
@@ -180,6 +182,10 @@ def test_to_chat_response_needs_input_shape():
     assert response["question"] == "어느 지역에 거주하시나요?"
     assert response["missing_slots"] == ["region_names"]
     assert response["session_id"] == "s1"
+    assert response["output_json"]["question"] == "어느 지역에 거주하시나요?"
+    assert "추가 정보가 필요합니다" in response["output_text"]
+    assert "region_names" in response["output_text"]
+    assert "| 상태 | 추가 질문 | 부족한 정보 |" in response["output_markdown"]
 
 
 def test_to_chat_response_answered_shape_with_no_policies():
@@ -193,6 +199,50 @@ def test_to_chat_response_answered_shape_with_no_policies():
     assert response["status"] == "answered"
     assert response["answer_status"] == "abstained"
     assert response["policies"] == []
+    assert response["output_json"]["policies"] == []
+    assert response["output_text"] == "확인된 근거가 부족해 답변을 제공할 수 없습니다."
+    assert "확인된 정책 없음" in response["output_markdown"]
+
+
+def test_build_output_markdown_returns_policy_table_and_escapes_cells():
+    markdown = _build_output_markdown(
+        [
+            {
+                "rank": 1,
+                "title": "청년 | 주거 지원",
+                "eligibility_status": "미확인",
+                "amount_label": "월 최대 200,000원",
+                "duplicate_status": "확인 필요",
+                "detail": {"source_url": "https://gov.example/policy-1"},
+            }
+        ]
+    )
+
+    assert "| 순위 | 정책명 | 자격 확인 | 지원금 | 중복수급 | 출처 |" in markdown
+    assert "청년 \\| 주거 지원" in markdown
+    assert "[원문](https://gov.example/policy-1)" in markdown
+
+
+def test_build_output_text_returns_plain_policy_comparison():
+    text = _build_output_text(
+        [
+            {
+                "rank": 1,
+                "title": "청년 주거 지원",
+                "eligibility_status": "충족",
+                "amount_label": "월 200,000원",
+                "duplicate_status": "미확인",
+                "detail": {"source_url": "https://gov.example/policy-1"},
+            }
+        ],
+        "추천 결과입니다.",
+    )
+
+    assert text.startswith("추천 결과입니다.")
+    assert "정책 비교" in text
+    assert "[1] 청년 주거 지원" in text
+    assert "자격: 충족" in text
+    assert "https://gov.example/policy-1" in text
 
 
 # --- LLM 실패 표기 (2026-08-31 추가) ---------------------------------------

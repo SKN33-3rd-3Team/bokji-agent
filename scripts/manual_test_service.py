@@ -151,6 +151,13 @@ def _print_response(response: dict) -> None:
         slim["policies"] = [{k: v for k, v in p.items() if k != "detail"} for p in response["policies"]]
     print(json.dumps(slim, ensure_ascii=False, indent=2, default=str))
 
+    print("\n[반환 형식 1/3: JSON]")
+    print(json.dumps(response.get("output_json", {}), ensure_ascii=False, indent=2, default=str))
+    print("\n[반환 형식 2/3: 문자열]")
+    print(response.get("output_text", ""))
+    print("\n[반환 형식 3/3: Markdown 비교표]")
+    print(response.get("output_markdown", ""))
+
     _print_llm_status(response)
     _print_timing(response)
 
