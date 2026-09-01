@@ -1,0 +1,9 @@
+# 로그인/회원가입 기능 — 강한 암호 구현(권장).
+#   bcrypt        : 비밀번호 해싱 (보안 기획안 채택안)
+#   cryptography  : PII(이름·관심조건) Fernet 암호화
+#
+# 이 둘이 없어도 app.py 는 실행된다. 미설치 시 rag_chatbot.auth.crypto 가
+# 표준 라이브러리 대체 구현(PBKDF2 / HMAC 기반 인증 암호화)으로 자동 전환한다.
+# 운영 배포에서는 아래를 설치해 강한 구현을 쓰는 것을 권장한다.
+bcrypt>=4.0
+cryptography>=42.0

@@ -129,7 +129,12 @@ class SentenceTransformerKoreanProvider:
             raise EmbeddingProviderError(
                 f"failed to load embedding model {self.model_name!r}"
             ) from exc
-        actual_dimension = self._model.get_sentence_embedding_dimension()
+        # sentence-transformers 는 이 메서드를 get_embedding_dimension 으로
+        # 개명하는 중이다(구명은 FutureWarning). 새 이름이 있으면 그걸 쓴다.
+        _dim_getter = getattr(
+            self._model, "get_embedding_dimension", None
+        ) or self._model.get_sentence_embedding_dimension
+        actual_dimension = _dim_getter()
         if actual_dimension != self.dimension:
             self._model = None
             raise EmbeddingProviderError(

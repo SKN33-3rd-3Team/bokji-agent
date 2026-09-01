@@ -20,6 +20,7 @@ from ..constants import (
 from ..nav import goto
 from ..pipeline import run_pipeline
 from ..rendering import profile_summary, render_result
+from ..session import clear_conversation_state, escape_md, logout
 from ..vector_store import get_store
 
 # 임베딩 provider 는 korean(multilingual-e5) 고정. 최초 실행 시 모델을 내려받는다.
@@ -27,10 +28,7 @@ _EMBEDDING_CHOICE = "korean"
 
 
 def _reset_conversation() -> None:
-    st.session_state.messages = []
-    st.session_state.slots = {}
-    st.session_state.slot_ask_counts = {}
-    st.session_state.pending_prompt = None
+    clear_conversation_state()
 
 
 def _render_intro() -> None:
@@ -86,16 +84,26 @@ def _render_sidebar() -> dict:
             st.rerun()
 
         st.markdown(":material/account_circle: **계정**")
+        auth_user = st.session_state.get("auth_user")
+        if auth_user:
+            name = auth_user.get("display_name") or auth_user.get("username", "")
+            st.caption(f":material/check_circle: {escape_md(name)} 님으로 로그인됨")
         acc = st.container(horizontal=True)
-        if acc.button("로그인", icon=":material/login:", width="stretch",
-                      key="sb_login"):
-            goto("login")
-        if acc.button("회원가입", icon=":material/person_add:", width="stretch",
-                      key="sb_signup"):
-            goto("signup")
+        if not auth_user:
+            if acc.button("로그인", icon=":material/login:", width="stretch",
+                          key="sb_login"):
+                goto("login")
+            if acc.button("회원가입", icon=":material/person_add:", width="stretch",
+                          key="sb_signup"):
+                goto("signup")
         if st.button("마이페이지", icon=":material/person:", width="stretch",
                      key="sb_mypage"):
             goto("mypage")
+        if auth_user:
+            if st.button("로그아웃", icon=":material/logout:", width="stretch",
+                         key="sb_logout", type="secondary"):
+                logout()
+                st.rerun()
 
     return {
         "as_of": as_of,

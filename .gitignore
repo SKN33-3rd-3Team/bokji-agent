@@ -33,6 +33,11 @@ Desktop.ini
 !.env.example
 .streamlit/secrets.toml
 
+# 인증 DB / 개발용 암호화 키 (재생성 가능, PII 포함 가능 — 추적 금지)
+.runtime/auth.db
+.runtime/auth.db-*
+.runtime/auth_dev.key
+
 
 # 수집 원본/런타임 산출물 (재생성 가능 — 매니페스트/샘플만 추적)
 data/raw/*

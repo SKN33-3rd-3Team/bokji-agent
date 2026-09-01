@@ -1,0 +1,11 @@
+# 복지 에이전트 Streamlit 서비스(app.py) 실행에 필요한 전체 의존성.
+#
+#   pip install -r requirements.txt
+#   streamlit run app.py
+#
+# 세부 목적별로 나눈 requirements-*.txt 를 이 파일이 한데 모은다.
+streamlit>=1.57
+
+-r requirements-graph.txt      # langgraph, python-dotenv, huggingface_hub
+-r requirements-embedding.txt  # sentence-transformers (+ requirements-vector: chromadb)
+-r requirements-auth.txt       # bcrypt, cryptography (없어도 표준 라이브러리로 동작)
