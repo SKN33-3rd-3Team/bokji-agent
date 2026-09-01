@@ -6,6 +6,7 @@
 - ``crypto``      : bcrypt 해싱 + Fernet(AES) PII 암호화, 키 로딩
 - ``repository``  : SQLite ``users`` 테이블 스키마와 CRUD
 - ``service``     : sign_up / authenticate / change_password
+- ``lockout``     : 로그인 실패 횟수 제한(계정 임시 잠금) 설정
 - ``pii_logging`` : PII 로깅 금지 규칙 (``docs/PII_LOGGING.md``)
 
 키 · DB 경로
@@ -20,6 +21,7 @@
 from __future__ import annotations
 
 from .service import (
+    AccountLockedError,
     AuthError,
     AuthUser,
     InvalidCredentialsError,
@@ -35,6 +37,7 @@ from .service import (
 )
 
 __all__ = [
+    "AccountLockedError",
     "AuthError",
     "AuthUser",
     "InvalidCredentialsError",

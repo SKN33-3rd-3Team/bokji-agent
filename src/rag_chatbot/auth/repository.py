@@ -13,6 +13,8 @@
 - ``interests_enc``    : 관심 지원조건 JSON 배열, Fernet 암호문 (장애·보훈·
                          기초수급 등 민감 범주가 섞일 수 있어 암호화한다)
 - ``marketing_opt_in`` : 0/1
+- ``failed_login_count``: 연속 로그인 실패 횟수 (성공 시 0으로 초기화)
+- ``locked_until``     : 계정 잠금 해제 시각, ISO8601 UTC (없으면 NULL)
 """
 
 from __future__ import annotations
@@ -38,7 +40,9 @@ CREATE TABLE IF NOT EXISTS users (
     marketing_opt_in    INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
-    password_changed_at TEXT
+    password_changed_at TEXT,
+    failed_login_count  INTEGER NOT NULL DEFAULT 0,
+    locked_until        TEXT
 );
 """
 
@@ -47,6 +51,8 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("region", "region TEXT"),
     ("interests_enc", "interests_enc TEXT"),
     ("marketing_opt_in", "marketing_opt_in INTEGER NOT NULL DEFAULT 0"),
+    ("failed_login_count", "failed_login_count INTEGER NOT NULL DEFAULT 0"),
+    ("locked_until", "locked_until TEXT"),
 )
 
 # "이 컬럼은 건드리지 마라"(_UNSET)와 "NULL 로 지워라"(None)를 구분하는 센티넬.
@@ -135,11 +141,45 @@ def set_password_hash(
     conn.commit()
 
 
-def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
-    """회원 행을 통째로 삭제한다 (탈퇴 시 즉시 파기)."""
+def set_login_security(
+    conn: sqlite3.Connection,
+    user_id: int,
+    *,
+    failed_login_count: int,
+    locked_until: str | None,
+) -> None:
+    """연속 로그인 실패 횟수와 잠금 해제 시각을 갱신한다.
 
+    ``locked_until`` 은 ISO8601 UTC 문자열이거나 ``None``(잠금 없음)이다.
+    ``updated_at`` 은 건드리지 않는다(로그인 시도는 프로필 변경이 아니다).
+    """
+
+    conn.execute(
+        "UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?",
+        (int(failed_login_count), locked_until, user_id),
+    )
+    conn.commit()
+
+
+def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
+    """회원 행과 그 내용을 삭제한다 (탈퇴).
+
+    - ``PRAGMA secure_delete=ON`` : 삭제되는 페이지 내용(이메일·비밀번호 해시·
+      암호문)을 0으로 덮어쓴다. 기본값(OFF)이면 free page 에 바이트가 남는다.
+    - ``wal_checkpoint(TRUNCATE)`` : 변경을 메인 DB 로 flush 하고 ``-wal`` 파일을
+      잘라, WAL 에도 잔재가 남지 않게 한다.
+
+    파일 크기 축소(``VACUUM``)나 디스크 물리 소거까지는 하지 않는다.
+    """
+
+    conn.execute("PRAGMA secure_delete=ON")
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        # 다른 연결이 붙어 있거나 WAL 모드가 아니면 조용히 넘어간다.
+        pass
 
 
 def update_profile_fields(

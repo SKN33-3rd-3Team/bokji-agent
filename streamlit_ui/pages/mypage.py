@@ -210,7 +210,7 @@ def page_mypage() -> None:
         top.markdown("# :material/account_circle:")
         info = top.container()
         info.markdown(f"#### {escape_md(display_name)} 님")
-        info.caption(user.get("username", ""))
+        info.caption(escape_md(user.get("username", "")))
         top.badge("일반 회원", icon=":material/verified_user:", color="violet")
         st.caption(f"가입일 {joined or '-'}")
 

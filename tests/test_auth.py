@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from rag_chatbot.auth import (
+    AccountLockedError,
     AuthUser,
     InvalidCredentialsError,
     PasswordPolicyError,
@@ -21,6 +23,7 @@ from rag_chatbot.auth import (
     sign_up,
     update_profile,
 )
+from rag_chatbot.auth import repository as _repo
 from rag_chatbot.auth import crypto as _crypto
 from rag_chatbot.auth.crypto import (
     PiiTokenInvalid,
@@ -329,6 +332,123 @@ class ServiceTests(unittest.TestCase):
             authenticate("user@example.com", _GOOD_PW, db_path=self.db).display_name,
             "두번째",
         )
+
+    # -- 아이디(이메일) 검증 -----------------------------------------
+    def test_username_rejects_control_chars(self):
+        with self.assertRaises(Exception):
+            sign_up("a\nb@example.com", _GOOD_PW, "n", db_path=self.db)
+
+    def test_username_rejects_overlong(self):
+        huge = "a" * 250 + "@example.com"
+        with self.assertRaises(Exception):
+            sign_up(huge, _GOOD_PW, "n", db_path=self.db)
+
+    def test_username_rejects_non_email_shape(self):
+        for bad in ("notanemail", "a b@example.com", "a@@b.com", "a@bcom"):
+            with self.assertRaises(Exception):
+                sign_up(bad, _GOOD_PW, "n", db_path=self.db)
+
+    def test_username_trims_surrounding_whitespace(self):
+        sign_up("  spaced@example.com \n", _GOOD_PW, "n", db_path=self.db)
+        self.assertEqual(
+            authenticate("spaced@example.com", _GOOD_PW, db_path=self.db).username,
+            "spaced@example.com",
+        )
+
+    def test_delete_account_scrubs_row_bytes(self):
+        sign_up("scrubme@example.com", _GOOD_PW, "홍길동", db_path=self.db)
+        self.assertIn(b"scrubme@example.com", Path(self.db).read_bytes())
+        delete_account("scrubme@example.com", _GOOD_PW, db_path=self.db)
+        # secure_delete + wal_checkpoint(TRUNCATE) 후 메인 DB 파일에 흔적이 없다.
+        self.assertNotIn(b"scrubme@example.com", Path(self.db).read_bytes())
+
+
+class LoginLockoutTests(unittest.TestCase):
+    """로그인 5회 연속 실패 → 일정 시간 잠금, 성공 시 카운터 초기화."""
+
+    _LOCKOUT_ENV = (
+        "AUTH_MAX_LOGIN_ATTEMPTS",
+        "AUTH_LOCKOUT_MINUTES",
+        "AUTH_LOCKOUT_SECONDS",
+    )
+
+    def setUp(self):
+        os.environ["AUTH_ENC_KEY"] = generate_key()
+        for var in self._LOCKOUT_ENV:
+            os.environ.pop(var, None)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self._tmp.name) / "auth.db"
+        sign_up("u@example.com", _GOOD_PW, "홍길동", db_path=self.db)
+
+    def tearDown(self):
+        os.environ.pop("AUTH_ENC_KEY", None)
+        for var in self._LOCKOUT_ENV:
+            os.environ.pop(var, None)
+        self._tmp.cleanup()
+
+    def _wrong(self):
+        return authenticate("u@example.com", "Wrong123!", db_path=self.db)
+
+    def _ok(self):
+        return authenticate("u@example.com", _GOOD_PW, db_path=self.db)
+
+    def test_locks_after_five_failures(self):
+        for _ in range(4):
+            with self.assertRaises(InvalidCredentialsError):
+                self._wrong()
+        with self.assertRaises(AccountLockedError):
+            self._wrong()
+
+    def test_locked_blocks_even_correct_password(self):
+        for _ in range(5):
+            with self.assertRaises((InvalidCredentialsError, AccountLockedError)):
+                self._wrong()
+        with self.assertRaises(AccountLockedError):
+            self._ok()
+
+    def test_success_resets_counter(self):
+        for _ in range(4):
+            with self.assertRaises(InvalidCredentialsError):
+                self._wrong()
+        self.assertEqual(self._ok().username, "u@example.com")
+        # 카운터가 0으로 초기화됐으므로 다시 4회까지는 잠기지 않는다.
+        for _ in range(4):
+            with self.assertRaises(InvalidCredentialsError):
+                self._wrong()
+
+    def test_threshold_is_configurable(self):
+        os.environ["AUTH_MAX_LOGIN_ATTEMPTS"] = "2"
+        with self.assertRaises(InvalidCredentialsError):
+            self._wrong()
+        with self.assertRaises(AccountLockedError):
+            self._wrong()
+
+    def test_lock_auto_expires(self):
+        os.environ["AUTH_LOCKOUT_SECONDS"] = "1"
+        for _ in range(4):
+            with self.assertRaises(InvalidCredentialsError):
+                self._wrong()
+        with self.assertRaises(AccountLockedError) as ctx:
+            self._wrong()
+        self.assertGreaterEqual(ctx.exception.retry_after_seconds, 1)
+        time.sleep(1.3)
+        self.assertEqual(self._ok().username, "u@example.com")
+
+    def test_expired_lock_starts_fresh_count(self):
+        # 잠금이 자동 해제된 뒤 한 번 더 틀려도 즉시 재잠금되지 않는다.
+        conn = _repo.connect(self.db)
+        try:
+            _repo.init_schema(conn)
+            row = _repo.get_user_by_username(conn, "u@example.com")
+            _repo.set_login_security(
+                conn, int(row["id"]),
+                failed_login_count=5,
+                locked_until="2000-01-01T00:00:00+00:00",
+            )
+        finally:
+            conn.close()
+        with self.assertRaises(InvalidCredentialsError):
+            self._wrong()
 
 
 class PiiLoggingTests(unittest.TestCase):

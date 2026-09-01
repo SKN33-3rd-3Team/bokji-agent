@@ -313,6 +313,44 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         self.assertIsNone(at.session_state["auth_user"])
         self.assertEqual(at.session_state["view"], "chat")
 
+    def test_logout_clears_conversation_state(self):
+        # 공용 PC: 로그아웃 시 이전 사용자의 상담 내역·민감 슬롯이 남으면 안 된다.
+        at = self._register_and_login(email="conv@example.com")
+        at.session_state["messages"] = [
+            {"role": "user", "content": "월 소득 300만원, 장애 있음"}
+        ]
+        at.session_state["slots"] = {"income_bracket": "median_60", "disability": True}
+        at.session_state["slot_ask_counts"] = {"region": 1}
+        at.session_state["pending_prompt"] = "이어서 물어봐"
+        at = at.run()
+
+        at = self._click(at, "로그아웃")
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["messages"], [])
+        self.assertEqual(at.session_state["slots"], {})
+        self.assertEqual(at.session_state["slot_ask_counts"], {})
+        # chat 페이지가 렌더 중 pending_prompt 를 소비(pop)하므로 falsy 만 확인.
+        self.assertFalse(
+            "pending_prompt" in at.session_state
+            and at.session_state["pending_prompt"]
+        )
+
+    def test_login_clears_previous_users_conversation(self):
+        self._signup(self._app("signup"), email="ua@example.com", pw=_PW, name="에이")
+        self._signup(self._app("signup"), email="ub@example.com", pw=_PW, name="비이")
+
+        at = self._login(self._app("login"), email="ua@example.com", pw=_PW)
+        at.session_state["messages"] = [{"role": "user", "content": "에이의 상담"}]
+        at.session_state["slots"] = {"disability": True}
+        at = at.run()
+
+        at.session_state["view"] = "login"
+        at = at.run()
+        at = self._login(at, email="ub@example.com", pw=_PW)
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["messages"], [])
+        self.assertEqual(at.session_state["slots"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

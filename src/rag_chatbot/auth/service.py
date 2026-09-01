@@ -4,8 +4,10 @@
 ----
 - ``sign_up``        : 정책 검사 -> 비밀번호 해싱 -> 표시이름·관심조건 암호화 ->
                        INSERT
-- ``authenticate``   : 조회 -> 비밀번호 검증 -> **표시이름·관심조건 명시적
-                       복호화** -> :class:`AuthUser` 반환 (요구사항 4)
+- ``authenticate``   : 조회 -> **계정 잠금 확인** -> 비밀번호 검증 (실패 시
+                       실패 횟수 누적, 임계값 도달 시 일정 시간 잠금) ->
+                       표시이름·관심조건 명시적 복호화 -> :class:`AuthUser`
+                       반환 (요구사항 4). 잠금 정책은 ``lockout`` 참고.
 - ``get_profile``    : 비밀번호 없이 프로필을 다시 읽어 복호화 (마이페이지 표시용)
 - ``update_profile`` : 표시이름·지역·관심조건 수정 후 최신 :class:`AuthUser` 반환
 - ``change_password``: 현재 비밀번호 검증 -> 새 비밀번호 정책 검사 -> UPDATE
@@ -25,7 +27,9 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
+from . import lockout
 from . import repository as repo
 from .crypto import (
     decrypt_pii,
@@ -44,6 +48,12 @@ _log = get_auth_logger(__name__)
 DISPLAY_NAME_MAX = 40
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _WS_RE = re.compile(r"\s+")
+
+# 아이디(이메일): RFC 5321 경로 최대 길이 254 로 제한하고, 제어문자·공백·다중
+# ``@`` 를 거부한다(로그 주입·화면 Markdown 오염·DB 오염 방지). 배달 가능성까지
+# 검증하지는 않고 형태만 본다.
+USERNAME_MAX = 254
+_EMAIL_SHAPE_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _clean_display_name(value: object) -> str:
@@ -82,6 +92,17 @@ class UserNotFoundError(AuthError):
     """대상 사용자가 없음 (로그인 이후 흐름에서만 사용)."""
 
 
+class AccountLockedError(AuthError):
+    """연속 로그인 실패로 계정이 일시적으로 잠김. ``retry_after_seconds`` 참고."""
+
+    def __init__(self, retry_after_seconds: int):
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+        minutes = (self.retry_after_seconds + 59) // 60
+        super().__init__(
+            f"로그인 시도가 너무 많습니다. 약 {minutes}분 후 다시 시도해 주세요."
+        )
+
+
 @dataclass(frozen=True)
 class AuthUser:
     """로그인/조회 결과. 암호화된 값들은 메모리에서만 존재하는 복호화 결과."""
@@ -96,9 +117,25 @@ class AuthUser:
 
 
 def _normalize_username(username: object) -> str:
-    if not isinstance(username, str) or not username.strip():
+    """아이디(이메일)를 정규화·검증한다.
+
+    앞뒤 공백 제거 후: 빈 값·제어문자·길이 초과·이메일 형태 위반을 거부한다.
+    ``sign_up`` 과 ``authenticate`` 가 모두 이 함수를 지나므로, 형태에 맞지
+    않는 값은 애초에 계정 ID 로 저장되지 않는다.
+    """
+
+    if not isinstance(username, str):
         raise AuthError("아이디(이메일)를 입력해 주세요.")
-    return username.strip()
+    uname = username.strip()
+    if not uname:
+        raise AuthError("아이디(이메일)를 입력해 주세요.")
+    if _CONTROL_RE.search(uname):
+        raise AuthError("아이디에 사용할 수 없는 문자가 포함되어 있습니다.")
+    if len(uname) > USERNAME_MAX:
+        raise AuthError(f"아이디(이메일)는 {USERNAME_MAX}자 이하여야 합니다.")
+    if not _EMAIL_SHAPE_RE.match(uname):
+        raise AuthError("올바른 이메일 형식이 아닙니다.")
+    return uname
 
 
 def _open(db_path):
@@ -109,6 +146,22 @@ def _open(db_path):
         conn.close()
         raise
     return conn
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_ts(value) -> datetime | None:
+    """저장된 ISO8601 타임스탬프 문자열을 tz-aware datetime 으로. 실패 시 None."""
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -213,22 +266,61 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
     conn = _open(db_path)
     try:
         row = repo.get_user_by_username(conn, uname)
+
+        if row is None:
+            # 계정 존재 여부를 응답 시간으로 알아내지 못하게 같은 검증 시간을 쓴다.
+            verify_password_dummy()
+            _log.info("login fail username=%s", mask_email(uname))
+            raise InvalidCredentialsError()
+
+        user_id = int(row["id"])
+        now = _utcnow()
+        locked_until = _parse_ts(row["locked_until"])
+
+        # 잠금 상태면 비밀번호가 맞아도 차단한다.
+        if locked_until is not None and locked_until > now:
+            remaining = int((locked_until - now).total_seconds())
+            _log.info("login blocked (locked) username=%s", mask_email(uname))
+            raise AccountLockedError(remaining)
+
+        # 잠금 창이 지났으면(자동 해제) 카운터를 새로 센다.
+        prev_fails = 0 if locked_until is not None else int(row["failed_login_count"] or 0)
+
+        if not verify_password(password, row["password_hash"]):
+            fails = prev_fails + 1
+            limit = lockout.max_attempts()
+            if fails >= limit:
+                secs = lockout.lockout_seconds()
+                new_lock = (now + timedelta(seconds=secs)).isoformat(timespec="seconds")
+                repo.set_login_security(
+                    conn, user_id, failed_login_count=fails, locked_until=new_lock
+                )
+                _log.info(
+                    "login fail username=%s (locked, fails=%d)",
+                    mask_email(uname), fails,
+                )
+                raise AccountLockedError(secs)
+            repo.set_login_security(
+                conn, user_id, failed_login_count=fails, locked_until=None
+            )
+            _log.info(
+                "login fail username=%s (fails=%d/%d)",
+                mask_email(uname), fails, limit,
+            )
+            raise InvalidCredentialsError()
+
+        # 성공: 이전 실패 흔적이 있으면 초기화한다.
+        if row["failed_login_count"] or row["locked_until"]:
+            repo.set_login_security(
+                conn, user_id, failed_login_count=0, locked_until=None
+            )
+
+        # 저장 시 암호화한 값들을 로그인 시점에 명시적으로 복호화한다 (요구사항 4).
+        display_name = _safe_decrypt_name(row["display_name_enc"], uname)
+        _log.info("login ok username=%s", mask_email(uname))
+        return _row_to_user(row, display_name=display_name)
     finally:
         conn.close()
-
-    if row is None:
-        # 계정 존재 여부를 응답 시간으로 알아내지 못하게 동일한 검증 시간을 쓴다.
-        verify_password_dummy()
-        _log.info("login fail username=%s", mask_email(uname))
-        raise InvalidCredentialsError()
-    if not verify_password(password, row["password_hash"]):
-        _log.info("login fail username=%s", mask_email(uname))
-        raise InvalidCredentialsError()
-
-    # 저장 시 암호화한 값들을 로그인 시점에 명시적으로 복호화한다 (요구사항 4).
-    display_name = _safe_decrypt_name(row["display_name_enc"], uname)
-    _log.info("login ok username=%s", mask_email(uname))
-    return _row_to_user(row, display_name=display_name)
 
 
 def get_profile(username: str, *, db_path=None) -> AuthUser:
@@ -320,7 +412,12 @@ def change_password(
 
 
 def delete_account(username: str, password: str, *, db_path=None) -> None:
-    """비밀번호를 확인한 뒤 회원 행을 즉시 삭제한다(되돌릴 수 없음)."""
+    """비밀번호를 확인한 뒤 회원 행과 그 내용을 삭제한다(되돌릴 수 없음).
+
+    ``repo.delete_user`` 가 ``secure_delete`` 로 삭제 페이지를 0으로 덮고 WAL 을
+    체크포인트한다. 다만 파일 크기 축소나 디스크 물리 소거까지는 보장하지
+    않는다(포렌식 수준 완전 삭제 아님).
+    """
 
     uname = _normalize_username(username)
 

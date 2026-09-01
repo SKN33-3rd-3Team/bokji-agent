@@ -20,7 +20,7 @@ from ..constants import (
 from ..nav import goto
 from ..pipeline import run_pipeline
 from ..rendering import profile_summary, render_result
-from ..session import escape_md, logout
+from ..session import clear_conversation_state, escape_md, logout
 from ..vector_store import get_store
 
 # 임베딩 provider 는 korean(multilingual-e5) 고정. 최초 실행 시 모델을 내려받는다.
@@ -28,10 +28,7 @@ _EMBEDDING_CHOICE = "korean"
 
 
 def _reset_conversation() -> None:
-    st.session_state.messages = []
-    st.session_state.slots = {}
-    st.session_state.slot_ask_counts = {}
-    st.session_state.pending_prompt = None
+    clear_conversation_state()
 
 
 def _render_intro() -> None:

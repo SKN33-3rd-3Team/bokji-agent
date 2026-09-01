@@ -5,12 +5,16 @@ Fernet)로 처리한다. 회원가입은 이름·거주 지역·관심 지원조
 저장하고, 로그인 성공 시 그 프로필을 복호화해 ``st.session_state["auth_user"]``
 (``session.auth_user_dict`` 형태)에 심는다. 마이페이지에서 이 값을 표시하고
 ``update_profile`` / ``change_password`` 로 수정한다.
+
+로그인 5회 연속 실패 시 계정이 일정 시간 잠긴다(``rag_chatbot.auth.lockout``).
+잠금 중에는 ``AccountLockedError`` 로 안내만 하고 폼을 막지는 않는다.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 from rag_chatbot.auth import (
+    AccountLockedError,
     AuthError,
     InvalidCredentialsError,
     PasswordPolicyError,
@@ -22,7 +26,7 @@ from rag_chatbot.auth import (
 from ..constants import INTEREST_OPTIONS, SIDO_OPTIONS
 from ..nav import goto
 from ..session import auth_user_dict as _user_to_session
-from ..session import clear_auth_form_state, escape_md
+from ..session import clear_auth_form_state, clear_conversation_state, escape_md
 
 _REGION_NONE = "선택 안 함"
 
@@ -44,6 +48,9 @@ def _handle_login() -> None:
         return
     try:
         user = authenticate(email, password)
+    except AccountLockedError as exc:
+        st.warning(str(exc), icon=":material/lock_clock:")
+        return
     except InvalidCredentialsError:
         st.error("이메일 또는 비밀번호가 올바르지 않습니다.")
         return
@@ -53,6 +60,8 @@ def _handle_login() -> None:
     st.session_state.auth_user = _user_to_session(user)
     # 로그인/회원가입 폼 입력(비밀번호 포함)을 세션에서 모두 제거한다.
     clear_auth_form_state()
+    # 공용 PC 계정 전환 대비: 로그인 경계에서 이전 사용자의 상담 내역·슬롯을 비운다.
+    clear_conversation_state()
     st.toast(f"{escape_md(user.display_name or user.username)} 님, 환영합니다.",
              icon=":material/check_circle:")
     goto("chat")

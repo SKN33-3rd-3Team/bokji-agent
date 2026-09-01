@@ -60,8 +60,23 @@ def clear_auth_form_state() -> None:
     st.session_state.pop("_mp_forms_user", None)
 
 
+def clear_conversation_state() -> None:
+    """상담 내역·프로필 슬롯을 세션에서 비운다.
+
+    공용 PC 에서 로그아웃·계정 전환 시 이전 사용자의 상담 내용과 소득·장애·
+    임신 등 슬롯이 다음 사용자에게 그대로 보이지 않게 한다. init_session 이
+    심는 기본값과 같은 형태로 되돌린다.
+    """
+
+    st.session_state["messages"] = []
+    st.session_state["slots"] = {}
+    st.session_state["slot_ask_counts"] = {}
+    st.session_state["pending_prompt"] = None
+
+
 def logout() -> None:
-    """세션에서 로그인 사용자와 폼 입력 흔적을 지운다."""
+    """세션에서 로그인 사용자·폼 입력·상담 상태를 모두 지운다."""
 
     st.session_state.auth_user = None
     clear_auth_form_state()
+    clear_conversation_state()
