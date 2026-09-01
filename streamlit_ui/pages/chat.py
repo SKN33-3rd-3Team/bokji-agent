@@ -79,14 +79,6 @@ def _render_sidebar() -> dict:
             value=DEFAULT_TOP_K, key="topk",
             help="검색이 가져오는 후보 정책 청크 수. 늘리면 더 많은 제도를 훑습니다.",
         )
-        min_benefit = st.select_slider(
-            "최소 지원금 (월)",
-            options=[0, 100_000, 200_000, 300_000, 500_000, 1_000_000],
-            value=0, key="min_benefit",
-            format_func=lambda v: "제한 없음" if v == 0 else f"{v:,}원 이상",
-            help="이 금액 이상인 제도를 결과에서 강조합니다. "
-                 "문서에 금액이 없는 제도는 그대로 표시합니다.",
-        )
 
         if st.button("대화 초기화", icon=":material/delete_sweep:",
                      width="stretch", type="secondary"):
@@ -108,7 +100,6 @@ def _render_sidebar() -> dict:
     return {
         "as_of": as_of,
         "top_k": top_k,
-        "min_benefit": min_benefit,
         "extra_interests": [*selected_interests, *selected_fields],
     }
 
@@ -196,7 +187,6 @@ def page_chat() -> None:
                 store=store,
                 top_k=config["top_k"],
                 extra_interests=config["extra_interests"],
-                min_benefit=config["min_benefit"],
                 on_step=_on_step,
             )
             status.update(

@@ -91,11 +91,6 @@ def _render_answer(result: PipelineResult) -> None:
     unknown = len(verdicts) - met - unmet
 
     st.markdown(f"입력하신 조건으로 **{len(policies)}건**의 제도를 확인했어요.")
-    if result.min_benefit:
-        st.caption(
-            f":material/payments: 지원금 필터: 월 {result.min_benefit:,}원 이상 "
-            "· 금액이 확인된 제도만 기준선과 비교합니다."
-        )
     with st.container(horizontal=True):
         st.metric("확인한 제도", f"{len(policies)}건", border=True,
                   icon=":material/fact_check:")
@@ -124,13 +119,7 @@ def _render_answer(result: PipelineResult) -> None:
             if verdict == "충족":
                 if isinstance(amount, dict) and amount.get("amount") is not None:
                     value = float(amount["amount"])
-                    delta = None
-                    if result.min_benefit:
-                        delta = ("기준 충족" if value >= result.min_benefit
-                                 else "기준 미만")
-                    cols.metric("예상 지원금", f"{value:,.0f}원", delta=delta,
-                                delta_color="normal" if delta == "기준 충족"
-                                else "inverse",
+                    cols.metric("예상 지원금", f"{value:,.0f}원",
                                 border=True, icon=":material/payments:")
                 else:
                     cols.metric("예상 지원금", "정보 부족", border=True,

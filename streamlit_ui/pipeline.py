@@ -56,7 +56,6 @@ class PipelineResult:
     abstention_reason: str | None = None
     error: str | None = None
     elapsed_sec: float = 0.0
-    min_benefit: int = 0   # 사이드바 "최소 지원금(월)" 값. 표시/강조에만 사용.
 
 
 def _run_evidence_loop(
@@ -111,14 +110,9 @@ def run_pipeline(
     store: ChromaVectorStore,
     top_k: int = DEFAULT_TOP_K,
     extra_interests: list[str] | None = None,
-    min_benefit: int = 0,
     on_step: Callable[[str], None] | None = None,
 ) -> PipelineResult:
     """그래프를 한 턴 실행하고 소요 시간을 기록한다.
-
-    min_benefit(최소 지원금)은 그래프 판정에는 관여하지 않고, 결과 화면에서
-    금액이 확인된 제도를 기준선과 비교해 강조하는 데만 쓴다(현재 샘플 데이터에
-    구조화 금액이 없어 실질 필터로는 아직 동작하지 않음).
 
     on_step(선택)은 단계가 넘어갈 때마다 사람이 읽는 한글 문구로 호출된다.
     Streamlit ``st.status`` 진행 표시에 흘려 넣는 용도라 그래프 로직과 무관하다.
@@ -136,7 +130,6 @@ def run_pipeline(
         on_step=on_step,
     )
     result.elapsed_sec = time.perf_counter() - started
-    result.min_benefit = min_benefit
     return result
 
 
