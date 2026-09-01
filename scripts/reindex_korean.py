@@ -14,8 +14,9 @@
 주의사항
 --------
 - **첫 실행 때 임베딩 모델을 내려받는다(약 1GB).** 인터넷이 필요하다.
-- **오래 걸린다.** subsidy 10,963건(약 4.5만 청크) + law 1,466건을 CPU로
-  임베딩하면 수십 분이 걸릴 수 있다. GPU가 있으면 ``--device cuda``.
+- **오래 걸린다.** law 파이프라인이 전체 목록을 ID로만 중복 제거하므로
+  약 19만 건까지 늘어날 수 있다. CPU 임베딩은 매우 오래 걸릴 수 있으며,
+  GPU가 있으면 ``--device cuda``.
 - 기존 해시 색인은 **지우지 않는다.** 임베딩 provider가 다르면 컬렉션이
   따로 생기므로, 문제가 생기면 ``.env``의 ``EMBEDDING_PROVIDER``만 되돌리면
   원래대로 돌아간다. 대신 디스크를 그만큼 더 쓴다.
@@ -28,7 +29,7 @@
     $env:PYTHONPATH = ".;src"
     python scripts/reindex_korean.py
 
-    # 오래 걸리니 먼저 law(1,466건)만 돌려서 확인해보고 싶다면
+    # law만 별도로 색인하고 싶다면
     python scripts/reindex_korean.py --only law
 
     # 색인 후 검색이 실제로 좋아졌는지만 다시 보고 싶다면
@@ -95,15 +96,17 @@ def _secret_values() -> tuple[str, ...]:
     )
 
 
-def _build_provider(device: str) -> SentenceTransformerKoreanProvider:
+def _build_provider(
+    device: str, workers: int = 1
+) -> SentenceTransformerKoreanProvider:
     return SentenceTransformerKoreanProvider(
-        _MODEL_NAME, dimension=_DIMENSION, device=device
+        _MODEL_NAME, dimension=_DIMENSION, device=device, workers=workers
     )
 
 
-def _open_store(device: str) -> ChromaVectorStore:
+def _open_store(device: str, workers: int = 1) -> ChromaVectorStore:
     return ChromaVectorStore(
-        _build_provider(device),
+        _build_provider(device, workers),
         VectorStoreConfig(
             persist_directory=_VECTOR_DB, collection_prefix=_COLLECTION_PREFIX
         ),
@@ -149,7 +152,13 @@ def _check_model_available(device: str) -> bool:
     return True
 
 
-def _reindex(name: str, snapshot_id: str, device: str, chunk_config: ChunkingConfig) -> bool:
+def _reindex(
+    name: str,
+    snapshot_id: str,
+    device: str,
+    chunk_config: ChunkingConfig,
+    workers: int,
+) -> bool:
     source_type, documents_path = _SOURCES[name]
     if not documents_path.exists():
         print(f"      [건너뜀] {documents_path}가 없습니다.")
@@ -174,13 +183,22 @@ def _reindex(name: str, snapshot_id: str, device: str, chunk_config: ChunkingCon
     print(f"      [{name}] 이 단계가 가장 오래 걸립니다 (CPU면 수십 분).")
 
     started = time.monotonic()
-    store = _open_store(device)
-    result = store.sync_snapshot(
-        source_type,
-        tuple(chunks),
-        snapshot_id=snapshot_id,
-        secret_values=_secret_values(),
+    provider = _build_provider(device, workers)
+    store = ChromaVectorStore(
+        provider,
+        VectorStoreConfig(
+            persist_directory=_VECTOR_DB, collection_prefix=_COLLECTION_PREFIX
+        ),
     )
+    try:
+        result = store.sync_snapshot(
+            source_type,
+            tuple(chunks),
+            snapshot_id=snapshot_id,
+            secret_values=_secret_values(),
+        )
+    finally:
+        provider.close()
     elapsed = time.monotonic() - started
 
     print(
@@ -221,10 +239,16 @@ def main() -> int:
     parser.add_argument(
         "--only",
         choices=sorted(_SOURCES),
-        help="한쪽만 재색인. 생략하면 subsidy와 law 모두. law(1,466건)가 훨씬 빨라서 먼저 시험해보기 좋다.",
+        help="한쪽만 재색인. 생략하면 subsidy와 law 모두.",
     )
     parser.add_argument(
         "--device", default="cpu", help="임베딩 장치. GPU가 있으면 cuda (기본 cpu)."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="CPU 임베딩 프로세스 수 (기본 1, CPU에서는 2 권장)",
     )
     parser.add_argument(
         "--snapshot-id",
@@ -239,6 +263,10 @@ def main() -> int:
         help="재색인 없이 검색 스모크 테스트만 실행(이미 재색인을 끝낸 뒤 확인용).",
     )
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers는 1 이상의 정수여야 합니다.")
+    if args.device != "cpu" and args.workers != 1:
+        parser.error("GPU device에서는 --workers=1을 사용하세요.")
 
     print("=" * 68)
     print("한국어 의미 임베딩으로 vectorDB 재색인")
@@ -260,7 +288,9 @@ def main() -> int:
     chunk_config = ChunkingConfig(args.max_chars, args.overlap_chars)
 
     for name in targets:
-        if not _reindex(name, args.snapshot_id, args.device, chunk_config):
+        if not _reindex(
+            name, args.snapshot_id, args.device, chunk_config, args.workers
+        ):
             return 1
 
     _smoke_search(args.device)

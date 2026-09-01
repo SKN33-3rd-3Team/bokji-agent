@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from rag_design.chunking import chunk_document
+from rag_design.chunking import ChunkingConfig, chunk_document
 from rag_design.contracts import Document, SourceType, compute_content_hash
 from rag_design.embeddings import (
     EmbeddingProviderError,
@@ -25,6 +25,7 @@ from rag_design.vector_store import (
     VectorSearchFilter,
     VectorStoreConfig,
 )
+from scripts import reindex_korean
 
 
 try:
@@ -92,6 +93,84 @@ class EmbeddingProviderTests(unittest.TestCase):
             ):
                 provider.embed_query("복지 서비스")
 
+    def test_korean_provider_rejects_invalid_worker_count(self) -> None:
+        for value in (0, -1, True, 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "workers"):
+                SentenceTransformerKoreanProvider(workers=value)
+
+    def test_korean_provider_serial_encode_does_not_use_pool_api(self) -> None:
+        model = unittest.mock.Mock()
+        model.encode.return_value.tolist.return_value = [[1.0, 0.0], [0.0, 1.0]]
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=1)
+        provider._model = model
+
+        self.assertEqual(
+            provider.embed_documents(["첫째", "둘째"]),
+            [[1.0, 0.0], [0.0, 1.0]],
+        )
+        model.encode.assert_called_once_with(
+            ["passage: 첫째", "passage: 둘째"],
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        model.start_multi_process_pool.assert_not_called()
+        model.encode_multi_process.assert_not_called()
+
+    def test_korean_provider_parallel_encode_reuses_and_closes_pool_once(self) -> None:
+        model = unittest.mock.Mock()
+        pool = object()
+        model.start_multi_process_pool.return_value = pool
+        model.encode_multi_process.return_value.tolist.return_value = [
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=2)
+        provider._model = model
+
+        result = provider.embed_documents(["첫째", "둘째"])
+        provider.embed_documents(["셋째"])
+        provider.close()
+        provider.close()
+
+        self.assertEqual(result, [[1.0, 0.0], [0.0, 1.0]])
+        self.assertEqual(
+            provider.provider_id,
+            SentenceTransformerKoreanProvider(dimension=2, workers=1).provider_id,
+        )
+        model.start_multi_process_pool.assert_called_once_with(["cpu", "cpu"])
+        self.assertEqual(model.encode_multi_process.call_count, 2)
+        model.encode_multi_process.assert_any_call(
+            ["passage: 셋째"], pool, normalize_embeddings=True
+        )
+        model.stop_multi_process_pool.assert_called_once_with(pool)
+
+    def test_korean_provider_parallel_error_pool_can_be_closed_once(self) -> None:
+        model = unittest.mock.Mock()
+        pool = object()
+        model.start_multi_process_pool.return_value = pool
+        model.encode_multi_process.side_effect = RuntimeError("injected failure")
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=2)
+        provider._model = model
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "inference failed"):
+            provider.embed_documents(["실패"])
+        provider.close()
+        provider.close()
+
+        model.stop_multi_process_pool.assert_called_once_with(pool)
+
+    def test_korean_provider_parallel_rejects_invalid_dimension(self) -> None:
+        model = unittest.mock.Mock()
+        model.start_multi_process_pool.return_value = object()
+        model.encode_multi_process.return_value.tolist.return_value = [[1.0]]
+        provider = SentenceTransformerKoreanProvider(dimension=2, workers=2)
+        provider._model = model
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "invalid dimension"):
+            provider.embed_documents(["차원 오류"])
+        provider.close()
+
     def test_vector_region_filter_requires_canonical_names(self) -> None:
         with self.assertRaisesRegex(ValueError, "region names"):
             VectorSearchFilter(region_names=("1100000000",))
@@ -118,6 +197,49 @@ class EmbeddingProviderTests(unittest.TestCase):
             ]
         )
         self.assertEqual(args.region_name, ["서울특별시 강남구"])
+
+
+class ReindexEmbeddingLifecycleTests(unittest.TestCase):
+    def _run_reindex(
+        self, sync_side_effect=None, target="subsidy"
+    ) -> unittest.mock.Mock:
+        provider = unittest.mock.Mock(spec=SentenceTransformerKoreanProvider)
+        store = unittest.mock.Mock()
+        store.sync_snapshot.side_effect = sync_side_effect
+        store.sync_snapshot.return_value.total_count = 0
+        store.sync_snapshot.return_value.collection_name = "test"
+        source_type = SourceType.SUBSIDY if target == "subsidy" else SourceType.LAW
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "documents.jsonl"
+            source_path.touch()
+            with (
+                patch.dict(
+                    reindex_korean._SOURCES,
+                    {target: (source_type, source_path)},
+                ),
+                patch.object(reindex_korean, "_load_documents", return_value=[]),
+                patch.object(reindex_korean, "_build_provider", return_value=provider),
+                patch.object(reindex_korean, "ChromaVectorStore", return_value=store),
+            ):
+                if sync_side_effect is None:
+                    self.assertTrue(
+                        reindex_korean._reindex(
+                            target, "snapshot", "cpu", ChunkingConfig(), 2
+                        )
+                    )
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "sync failed"):
+                        reindex_korean._reindex(
+                            target, "snapshot", "cpu", ChunkingConfig(), 2
+                        )
+        return provider
+
+    def test_reindex_closes_parallel_provider_between_targets(self) -> None:
+        self._run_reindex(target="subsidy").close.assert_called_once_with()
+        self._run_reindex(target="law").close.assert_called_once_with()
+
+    def test_reindex_closes_parallel_provider_after_error(self) -> None:
+        self._run_reindex(RuntimeError("sync failed")).close.assert_called_once_with()
 
 
 @unittest.skipUnless(CHROMA_AVAILABLE, "chromadb is not installed")
@@ -449,9 +571,33 @@ class ChromaVectorStoreTests(unittest.TestCase):
             synced.collection_fingerprint,
         )
 
-        incompatible = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
+        other_provider = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
         with self.assertRaises(CollectionNotFoundError):
-            incompatible.collection_fingerprint(SourceType.SUBSIDY)
+            other_provider.collection_fingerprint(SourceType.SUBSIDY)
+        other = other_provider.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-32",
+        )
+        self.assertNotEqual(other.collection_fingerprint, synced.collection_fingerprint)
+        self.assertEqual(
+            store.collection_fingerprint(SourceType.SUBSIDY),
+            synced.collection_fingerprint,
+        )
+
+    def test_mismatched_legacy_registry_is_missing_for_active_provider(self) -> None:
+        hash_store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        hash_store._client.get_or_create_collection(
+            name=hash_store._legacy_registry_name(SourceType.LAW),
+            metadata=hash_store._registry_metadata(SourceType.LAW),
+            embedding_function=None,
+        )
+
+        korean_dimension_store = ChromaVectorStore(
+            HashEmbeddingProvider(32), self.config
+        )
+        with self.assertRaises(CollectionNotFoundError):
+            korean_dimension_store.collection_fingerprint(SourceType.LAW)
 
     def test_age_filter_rejects_mismatch_and_honors_missing_policy(self) -> None:
         aged_chunks = tuple(
@@ -509,7 +655,7 @@ class ChromaVectorStoreTests(unittest.TestCase):
         self.assertEqual(len(kept), len(self.subsidy_chunks))
         self.assertEqual(dropped, ())
 
-    def test_provider_registries_coexist_and_matching_legacy_falls_back(self) -> None:
+    def test_provider_registries_coexist_and_matching_legacy_migrates(self) -> None:
         legacy_store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
         source = SourceType.SUBSIDY
         legacy_name = legacy_store._legacy_registry_name(source)
@@ -518,10 +664,19 @@ class ChromaVectorStoreTests(unittest.TestCase):
             metadata=legacy_store._registry_metadata(source),
             embedding_function=None,
         )
+        self.assertEqual(legacy_store._get_registry(source).name, legacy_name)
+
         legacy_sync = legacy_store.sync_snapshot(
             source, self.subsidy_chunks, snapshot_id="legacy-hash-64"
         )
-        self.assertEqual(legacy_store._get_registry(source).name, legacy_name)
+        migrated_name = legacy_store._registry_name(source)
+        self.assertEqual(legacy_store._get_registry(source).name, migrated_name)
+        self.assertEqual(
+            legacy_store._client.get_collection(
+                name=legacy_name, embedding_function=None
+            ).name,
+            legacy_name,
+        )
 
         qualified_store = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
         qualified_sync = qualified_store.sync_snapshot(
@@ -754,6 +909,36 @@ class ChromaVectorStoreTests(unittest.TestCase):
         )
         self.assertEqual(promoted.total_count, len(self.subsidy_chunks))
         self.assertEqual(len(visible_new), len(self.subsidy_chunks))
+
+    def test_incomplete_generation_resumes_from_verified_batches(self) -> None:
+        resume_config = VectorStoreConfig(
+            persist_directory=self.persist_directory,
+            collection_prefix="resume_rag",
+            batch_size=1,
+        )
+        provider = FailingBatchEmbeddingProvider()
+        provider.fail_on_document_call = 2
+        store = ChromaVectorStore(provider, resume_config)
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "injected batch failure"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY,
+                self.subsidy_chunks,
+                snapshot_id="resume-001",
+            )
+        calls_after_failure = provider.document_calls
+        provider.fail_on_document_call = None
+
+        result = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="resume-001",
+        )
+        self.assertEqual(result.total_count, len(self.subsidy_chunks))
+        self.assertEqual(
+            provider.document_calls,
+            calls_after_failure + len(self.subsidy_chunks) - 1,
+        )
 
 
 if __name__ == "__main__":

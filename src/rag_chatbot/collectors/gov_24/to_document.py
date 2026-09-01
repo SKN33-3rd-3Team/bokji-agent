@@ -213,7 +213,11 @@ def _has_active_support_condition(item: dict) -> bool:
 
 
 def _extract_text_age_bounds(item: dict) -> tuple[int | None, int | None] | None:
-    """지원대상/선정기준의 명시적인 ``N세`` 조건만 보수적으로 추출한다."""
+    """지원대상/선정기준의 명시적인 ``N세`` 조건만 보수적으로 추출한다.
+
+    서로 다른 연령대가 여러 개 발견되면 단일 범위로 억지 병합하지 않는다.
+    출생연도, 학년, '청년/노인' 같은 해석이 필요한 표현도 다루지 않는다.
+    """
 
     text = "\n".join(
         str(item.get(field) or "") for field in ("지원대상", "선정기준")
@@ -226,6 +230,9 @@ def _extract_text_age_bounds(item: dict) -> tuple[int | None, int | None] | None
     candidates: set[tuple[int | None, int | None]] = set()
 
     for segment in segments:
+        # "18세 미만 자녀가 있는 부모"의 18세는 신청자 나이가 아니다.
+        # 현재 메타데이터는 연령 주체까지 표현하지 못하므로 이런 관계형
+        # 조건은 잘못된 하드 필터보다 미추출을 택한다.
         if _DEPENDENT_AGE_CONTEXT_PATTERN.search(segment):
             continue
         consumed: list[tuple[int, int]] = []
@@ -525,7 +532,10 @@ def run() -> None:
             "license": LICENSE,
             "document_count": len(documents),
             "collection_scope": "보조금24 공개 서비스 전체 목록(serviceList/serviceDetail/supportConditions 병합)",
-            "cleaning_method": "공백/개행 정규화, 빈 섹션 제거",
+            "cleaning_method": (
+                "공백/개행 정규화, 빈 섹션 제거, 지원조건 JA0110/JA0111 연령 정규화, "
+                "JA 연령이 없을 때 지원대상/선정기준의 명시적 N세 범위만 보수적으로 추출"
+            ),
             "chunking_method": "서비스 섹션(지원대상/선정기준/지원내용/신청방법/신청기한/근거법령) 경계 우선",
             "exclusion_criteria": ["서비스ID 없음", "공식 도메인(gov.kr 등) URL 아님", "본문 없음"],
             "update_policy": "source_updated_at 기준 버전 보존",
@@ -543,7 +553,9 @@ def run() -> None:
                 f"서로 다른 서비스ID의 동일 본문 {duplicate_count}건을 "
                 "metadata.duplicate_content_of_source_ids로 표시했고, 삭제하지 않고 그대로 보존한다"
             ),
-            "parse_warnings_log": OUT_PARSE_WARNINGS,
+            "parse_warnings_log": Path(OUT_PARSE_WARNINGS)
+            .relative_to(PROJECT_ROOT)
+            .as_posix(),
             "rights_reviewed": True,
             "sensitive_data_reviewed": True,
         },

@@ -102,7 +102,7 @@ def _source_id(row: object) -> str | None:
 
 
 def load_support_conditions(path: str | Path) -> dict[str, dict[str, str | None]]:
-    """raw response wrapper 배열을 exact ``서비스ID`` index로 읽는다.
+    """canonical flat row와 기존 exact wrapper를 ``서비스ID`` index로 읽는다.
 
     파일·JSON·wrapper·값 계약이 불명확한 경우 예외를 서비스 시작까지 전파하지
     않고 해당 서비스 조건을 싣지 않는다. 조건이 없는 서비스는 N4에서 그대로
@@ -125,28 +125,30 @@ def load_support_conditions(path: str | Path) -> dict[str, dict[str, str | None]
     duplicates = 0
     degraded_categories = 0
 
-    for wrapper in payload:
-        data = wrapper.get("data") if isinstance(wrapper, Mapping) else None
-        if not isinstance(data, list):
-            dropped += 1
-            continue
-        counts_are_exact = all(
-            not isinstance(wrapper.get(name), bool)
-            and isinstance(wrapper.get(name), int)
-            and wrapper.get(name) == 1
-            for name in ("matchCount", "currentCount")
-        )
-        if not counts_are_exact or len(data) != 1:
-            # 잘못된 응답에 포함된 ID도 이후 정상 wrapper로 덮어쓰지 않는다.
-            dropped += max(1, len(data))
-            for row in data:
-                source_id = _source_id(row)
-                if source_id is not None:
-                    blocked.add(source_id)
-                    indexed.pop(source_id, None)
-            continue
+    for item in payload:
+        row = item
+        if isinstance(item, Mapping) and "data" in item:
+            data = item.get("data")
+            if not isinstance(data, list):
+                dropped += 1
+                continue
+            counts_are_exact = all(
+                not isinstance(item.get(name), bool)
+                and isinstance(item.get(name), int)
+                and item.get(name) == 1
+                for name in ("matchCount", "currentCount")
+            )
+            if not counts_are_exact or len(data) != 1:
+                # 잘못된 응답에 포함된 ID도 이후 정상 row로 덮어쓰지 않는다.
+                dropped += max(1, len(data))
+                for candidate in data:
+                    source_id = _source_id(candidate)
+                    if source_id is not None:
+                        blocked.add(source_id)
+                        indexed.pop(source_id, None)
+                continue
+            row = data[0]
 
-        row = data[0]
         source_id = _source_id(row)
         if source_id is None:
             dropped += 1

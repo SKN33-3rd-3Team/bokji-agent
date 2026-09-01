@@ -76,6 +76,18 @@ class SupportConditionsLoaderTests(unittest.TestCase):
         self.assertEqual(loaded["service-1"]["JA0102"], "Y")
         self.assertIsNone(loaded["service-1"]["JA0101"])
 
+    def test_loads_canonical_flat_rows_alongside_legacy_wrappers(self) -> None:
+        loaded = self._load(
+            [
+                _row("flat", "JA0101"),
+                _wrapper(_row("wrapped", "JA0102")),
+            ]
+        )
+
+        self.assertEqual(set(loaded), {"flat", "wrapped"})
+        self.assertEqual(loaded["flat"]["JA0101"], "Y")
+        self.assertEqual(loaded["wrapped"]["JA0102"], "Y")
+
     def test_missing_or_invalid_file_fails_open(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(
             policy_conditions, "_LOAD_WARNING_EMITTED", False

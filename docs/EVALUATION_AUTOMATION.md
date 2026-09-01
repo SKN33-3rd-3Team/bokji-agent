@@ -19,12 +19,21 @@ python scripts/run_dev_validation.py
 python scripts/run_dev_validation.py `
   --questions data/evaluation/dev_questions.jsonl `
   --output-dir artifacts/evaluation/dev-baseline `
-  --top-k 5
+  --top-k 5 `
+  --workers 4
 ```
 
 같은 실험 결과를 덮어쓰지 않도록 `--output-dir`에는 `dev-baseline`,
 `dev-top-k-10`처럼 실험별 이름을 사용한다. 한 실험에서는 한 조건만 바꾸고,
 비교할 때는 같은 질문 파일과 그 SHA-256을 유지한다.
+
+질문은 기본적으로 4개씩 병렬 실행한다. API 또는 GPU의 동시 처리 한도가 낮으면
+`--workers 2`로 낮추고, 기존 직렬 실행이 필요하면 `--workers 1`을 사용한다.
+병렬 모드에서는 서비스 내부 전역 진단 타이머가 요청 사이에 섞일 수 있어
+질문 작업별 wall-clock 시간을 응답시간으로 기록한다. 세션 ID는 질문 ID별로
+분리되고 결과 파일의 순서는 원래 질문 세트 순서를 유지한다. 그래프와 Vector
+DB는 worker 시작 전에 한 번 직렬로 초기화하므로 첫 요청끼리 초기화가 충돌하지
+않으며, 초기화 시간은 질문 응답시간 지표에 포함하지 않는다.
 
 ## 질문 추가
 

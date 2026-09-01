@@ -42,17 +42,20 @@ class PhaseTimer:
         self._lock = threading.Lock()
 
     def reset(self) -> None:
-        self._totals.clear()
-        self._counts.clear()
-        self._trace.clear()
+        with self._lock:
+            self._totals.clear()
+            self._counts.clear()
+            self._trace.clear()
 
     def trace(self, node_name: str, seconds: float) -> None:
-        self._trace.append((node_name, seconds))
+        with self._lock:
+            self._trace.append((node_name, seconds))
 
     def path(self) -> list[tuple[str, float]]:
         """노드가 돈 순서와 각각의 소요 시간."""
 
-        return list(self._trace)
+        with self._lock:
+            return list(self._trace)
 
     def record(self, name: str, seconds: float) -> None:
         # N5가 청크별 LLM 호출을 동시에 돌리므로 여러 스레드가 여기로 온다.
@@ -83,17 +86,18 @@ class PhaseTimer:
         다르다 - 순위를 보는 용도지 합이 100%가 되는 값이 아니다.
         """
 
-        total = sum(self._totals.values()) or 1.0
-        rows = [
-            {
-                "name": name,
-                "count": self._counts[name],
-                "total_s": seconds,
-                "avg_s": seconds / self._counts[name],
-                "share": seconds / total,
-            }
-            for name, seconds in self._totals.items()
-        ]
+        with self._lock:
+            total = sum(self._totals.values()) or 1.0
+            rows = [
+                {
+                    "name": name,
+                    "count": self._counts[name],
+                    "total_s": seconds,
+                    "avg_s": seconds / self._counts[name],
+                    "share": seconds / total,
+                }
+                for name, seconds in self._totals.items()
+            ]
         return sorted(rows, key=lambda row: row["total_s"], reverse=True)
 
 

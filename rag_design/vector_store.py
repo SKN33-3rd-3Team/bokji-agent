@@ -321,14 +321,24 @@ class ChromaVectorStore:
         )
 
     def _get_or_create_registry(self, source_type: SourceType) -> Any:
+        registry = self._open_registry(self._registry_name(source_type), source_type)
+        if registry is not None:
+            return registry
+
+        metadata = self._registry_metadata(source_type)
         try:
-            return self._get_registry(source_type)
-        except CollectionNotFoundError:
-            pass
+            legacy = self._open_registry(
+                self._legacy_registry_name(source_type), source_type
+            )
+        except CollectionFingerprintMismatch:
+            legacy = None
+        if legacy is not None:
+            metadata = dict(legacy.metadata or metadata)
+
         try:
             registry = self._client.get_or_create_collection(
                 name=self._registry_name(source_type),
-                metadata=self._registry_metadata(source_type),
+                metadata=metadata,
                 embedding_function=None,
             )
         except Exception as exc:
@@ -1018,24 +1028,64 @@ class ChromaVectorStore:
             ):
                 changed_count += 1
 
-        self._discard_inactive_generation(source_type, snapshot_digest)
         generation_name = self._generation_name(source_type, snapshot_digest)
+        expected_generation_metadata = self._generation_metadata(
+            source_type,
+            resolved_version,
+            snapshot_id,
+            snapshot_digest,
+            len(chunks),
+        )
         try:
             collection = self._client.get_or_create_collection(
                 name=generation_name,
-                metadata=self._generation_metadata(
-                    source_type,
-                    resolved_version,
-                    snapshot_id,
-                    snapshot_digest,
-                    len(chunks),
-                ),
+                metadata=expected_generation_metadata,
                 embedding_function=None,
             )
         except Exception as exc:
             raise VectorStoreError("failed to create a staging generation") from exc
 
-        ordered_chunks = tuple(sorted(chunks, key=lambda item: item.chunk_id))
+        # 중단된 동일 snapshot generation은 검증한 뒤 이미 저장된 batch를
+        # 재사용한다. registry가 가리키지 않는 staging collection이므로 부분
+        # 데이터가 검색에 노출되지는 않는다.
+        self._validate_collection(
+            collection,
+            source_type,
+            expected_chunking_version=resolved_version,
+            expected_fingerprint=fingerprint,
+        )
+        metadata = collection.metadata or {}
+        if any(
+            metadata.get(key) != value
+            for key, value in expected_generation_metadata.items()
+        ):
+            raise CollectionFingerprintMismatch(
+                "existing staging generation differs from the incoming snapshot"
+            )
+        staged_records = self._read_records(collection)
+        desired_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        for chunk_id, (document, record_metadata) in staged_records.items():
+            chunk = desired_by_id.get(chunk_id)
+            if chunk is None:
+                raise CorruptVectorRecordError(
+                    "staging generation contains an unexpected chunk"
+                )
+            expected_record = self._record_metadata(chunk, snapshot_id)
+            if (
+                document != chunk.text
+                or record_metadata.get("snapshot_id") != snapshot_id
+                or record_metadata.get("chunk_json")
+                != expected_record["chunk_json"]
+            ):
+                raise CorruptVectorRecordError(
+                    "staging generation contains a mismatched chunk"
+                )
+
+        ordered_chunks = tuple(
+            chunk
+            for chunk in sorted(chunks, key=lambda item: item.chunk_id)
+            if chunk.chunk_id not in staged_records
+        )
         try:
             for start in range(0, len(ordered_chunks), self.config.batch_size):
                 batch = ordered_chunks[start : start + self.config.batch_size]
@@ -1069,10 +1119,8 @@ class ChromaVectorStore:
                 len(chunks),
             )
         except Exception:
-            try:
-                self._discard_inactive_generation(source_type, snapshot_digest)
-            except VectorStoreError:
-                pass
+            # 재실행 시 위 검증을 통과한 batch부터 이어갈 수 있도록 incomplete
+            # generation을 남긴다. active registry는 아직 바뀌지 않았다.
             raise
 
         promoted = self._active_generation(source_type)

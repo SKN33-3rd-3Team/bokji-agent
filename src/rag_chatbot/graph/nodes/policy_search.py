@@ -90,6 +90,7 @@ def _load_legal_basis_chunks(
             legal_basis_chunks.append(chunk)
     return legal_basis_chunks
 
+
 def _build_query(slots: dict, question: str | None = None) -> str:
     """검색 질의를 만든다: 관심사 키워드 + 사용자의 원래 질문.
 

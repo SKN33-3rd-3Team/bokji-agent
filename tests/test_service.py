@@ -11,7 +11,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 import os
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock, Thread
 from unittest.mock import patch
 
 import pytest
@@ -382,6 +382,36 @@ def test_service_response_includes_completed_request_total_timing():
     assert any(
         phase["name"] == "request_total" for phase in response["timing"]["phases"]
     )
+
+
+def test_phase_timer_serializes_summary_with_concurrent_record():
+    timer = PhaseTimer()
+    timer.record("initial", 1.0)
+    writer_started = Event()
+    writer_finished = Event()
+    worker = None
+
+    class CoordinatedTotals(dict):
+        def items(self):
+            nonlocal worker
+
+            def write_during_summary():
+                writer_started.set()
+                timer.record("concurrent", 2.0)
+                writer_finished.set()
+
+            worker = Thread(target=write_during_summary)
+            worker.start()
+            assert writer_started.wait(timeout=1)
+            assert not writer_finished.wait(timeout=0.05)
+            return super().items()
+
+    timer._totals = CoordinatedTotals(timer._totals)
+    summary = timer.summary()
+    worker.join(timeout=1)
+
+    assert writer_finished.is_set()
+    assert [row["name"] for row in summary] == ["initial"]
 
 
 def test_extract_title_and_strip_prefix():
