@@ -765,6 +765,23 @@ class ProfileSlotExtractionTests(unittest.TestCase):
         self.assertIsNone(result["pregnancy_status"])
         self.assertIn("출산", result["interests"])
 
+    def test_extracts_requested_benefit_names_as_soft_interests(self) -> None:
+        cases = (
+            ("지원금제도 받고 싶어", "지원금제도"),
+            ("실업급여 관련 제도 알아봐줘", "실업급여"),
+            ("청년수당 받을 수 있나요?", "청년수당"),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                result = llm_gateway.extract_slots(text, {})
+                self.assertIn(expected, result["interests"])
+
+    def test_llm_prompt_explains_open_ended_interest_intent(self) -> None:
+        prompt = llm_gateway.build_slot_extraction_prompt("문화예술비 받고 싶어")
+        self.assertIn("OOO 받고 싶어", prompt)
+        self.assertIn("OOO 관련 제도 알아봐줘", prompt)
+        self.assertIn("실업급여", prompt)
+
     def test_out_of_contract_enum_values_are_not_stored(self) -> None:
         # 계약에 없는 값이 슬롯에 들어가면 하드 게이트가 "채워졌음"으로 읽고
         # 검증되지 않은 값으로 판정이 진행된다 - 회귀 테스트.

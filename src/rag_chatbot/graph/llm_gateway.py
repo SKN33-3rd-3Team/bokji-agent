@@ -272,6 +272,7 @@ _INCOME_BRACKET_UPPER_BOUNDS = (
 )
 
 _INTEREST_KEYWORDS = (
+    "지원금제도", "지원금", "실업급여", "청년수당",
     "육아", "출산", "보육", "주거", "주택", "취업", "일자리", "창업",
     "교육", "장학", "의료", "건강", "돌봄", "노인", "장애인", "저소득",
     "청년", "다문화", "한부모",
@@ -431,7 +432,11 @@ def build_slot_extraction_prompt(
         '"전국") 또는 null\n'
         f"{enum_lines}\n"
         f"- household_types: 배열. 가능한 값 {_enum_values_text_household()}\n"
-        '- interests: 관심 분야 키워드 배열(예: "육아", "주거", "일자리"). 없으면 []\n'
+        '- interests: 사용자가 찾거나 받고 싶은 복지 제도·급여·지원 분야의 '
+        '핵심 표현 배열(예: "지원금제도", "실업급여", "청년수당", "육아", '
+        '"주거", "일자리"). "OOO 받고 싶어", "OOO 관련 제도 알아봐줘", '
+        '"OOO 지원 있나요?"처럼 요청한 대상은 OOO를 interests에 넣습니다. '
+        '제도명이 길면 검색에 유용한 원문 표현을 보존하고, 없으면 []\n'
         "- household_size: 가구원 수(정수) 또는 null\n"
         "- children_count: 자녀 수(정수) 또는 null\n"
         '- age_subject_signals: {"self": bool, "child": bool, "other": bool}. '
