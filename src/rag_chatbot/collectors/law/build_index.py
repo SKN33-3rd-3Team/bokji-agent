@@ -2,7 +2,7 @@
 
 본문 없이 이름·ID만 받는 거라 19만 건 전체를 받아도 몇 분이면 끝난다.
 한 번 받아두면, 그 이후엔 API 호출 없이 로컬에서 원하는 만큼 정확하게
-키워드 필터링해서 쓸 수 있다 (filter_index.py가 이 캐시를 읽어서 씀).
+공식 ID 기준으로 중복 제거해서 쓸 수 있다 (filter_index.py가 이 캐시를 읽어서 씀).
 
 사용법:
     PYTHONPATH=src python -m rag_chatbot.collectors.law.build_index data/raw/law_index

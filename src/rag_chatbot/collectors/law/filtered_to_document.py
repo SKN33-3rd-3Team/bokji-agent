@@ -140,7 +140,6 @@ def build_document(record: dict) -> Document | None:
             "issued_date": issued_date,
             "effective_date": effective_from,
             "revision_type": record.get(fields["revision"]),
-            "matched_keywords": record.get("_matched_keywords", []),
         }
     )
     content = render_legal_metadata_summary(metadata)
@@ -240,8 +239,8 @@ def write_outputs(
             "license": LICENSE,
             "document_count": len(documents),
             "collection_scope": (
-                "복지 도메인 키워드로 로컬 필터링한 법령·행정규칙·자치법규 "
-                "목록조회 메타데이터 - 본문은 수집·색인하지 않음"
+                "공식 ID 기준으로만 중복 제거한 법령·행정규칙·자치법규 "
+                "전체 목록조회 메타데이터 - 본문은 수집·색인하지 않음"
             ),
             "unsupported_scope": [
                 "법령·행정규칙·자치법규 조문 본문 검색·인용",

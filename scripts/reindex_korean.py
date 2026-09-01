@@ -14,8 +14,9 @@
 주의사항
 --------
 - **첫 실행 때 임베딩 모델을 내려받는다(약 1GB).** 인터넷이 필요하다.
-- **오래 걸린다.** subsidy 10,963건(약 4.5만 청크) + law 1,466건을 CPU로
-  임베딩하면 수십 분이 걸릴 수 있다. GPU가 있으면 ``--device cuda``.
+- **오래 걸린다.** law 파이프라인이 전체 목록을 ID로만 중복 제거하므로
+  약 19만 건까지 늘어날 수 있다. CPU 임베딩은 매우 오래 걸릴 수 있으며,
+  GPU가 있으면 ``--device cuda``.
 - 기존 해시 색인은 **지우지 않는다.** 임베딩 provider가 다르면 컬렉션이
   따로 생기므로, 문제가 생기면 ``.env``의 ``EMBEDDING_PROVIDER``만 되돌리면
   원래대로 돌아간다. 대신 디스크를 그만큼 더 쓴다.
@@ -28,7 +29,7 @@
     $env:PYTHONPATH = ".;src"
     python scripts/reindex_korean.py
 
-    # 오래 걸리니 먼저 law(1,466건)만 돌려서 확인해보고 싶다면
+    # law만 별도로 색인하고 싶다면
     python scripts/reindex_korean.py --only law
 
     # 색인 후 검색이 실제로 좋아졌는지만 다시 보고 싶다면
@@ -229,7 +230,7 @@ def main() -> int:
     parser.add_argument(
         "--only",
         choices=sorted(_SOURCES),
-        help="한쪽만 재색인. 생략하면 subsidy와 law 모두. law(1,466건)가 훨씬 빨라서 먼저 시험해보기 좋다.",
+        help="한쪽만 재색인. 생략하면 subsidy와 law 모두.",
     )
     parser.add_argument(
         "--device", default="cpu", help="임베딩 장치. GPU가 있으면 cuda (기본 cpu)."

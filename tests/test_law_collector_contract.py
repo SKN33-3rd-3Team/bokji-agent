@@ -21,6 +21,49 @@ from rag_chatbot.collectors.law.filtered_to_document import (  # noqa: E402
     build_document,
     write_outputs,
 )
+from rag_chatbot.collectors.law.filter_index import filter_target  # noqa: E402
+
+
+class LawIndexFilterTests(unittest.TestCase):
+    def test_deduplicates_only_by_target_source_id(self) -> None:
+        records = [
+            {"법령명한글": "복지 기본법", "법령ID": "100", "법령일련번호": "1"},
+            {"법령명한글": "복지 기본법", "법령ID": "200", "법령일련번호": "2"},
+            {"법령명한글": "복지 개정법", "법령ID": "100", "법령일련번호": "3"},
+        ]
+
+        filtered = filter_target(records, "law")
+
+        self.assertEqual([item["법령ID"] for item in filtered], ["100", "200"])
+        self.assertEqual(
+            [item["법령명한글"] for item in filtered],
+            ["복지 기본법", "복지 기본법"],
+        )
+
+    def test_missing_ids_are_not_deduplicated_by_name(self) -> None:
+        records = [
+            {"행정규칙명": "복지 지침"},
+            {"행정규칙명": "복지 지침"},
+        ]
+
+        filtered = filter_target(records, "admrul")
+
+        self.assertEqual(len(filtered), 2)
+
+    def test_rejects_unknown_target(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported law target"):
+            filter_target([], "unknown")
+
+    def test_does_not_apply_keyword_exclusion_or_count_cap(self) -> None:
+        records = [
+            {"자치법규명": "복지와 무관한 첫 조례", "자치법규ID": "1"},
+            {"자치법규명": "공무원 수당 조례", "자치법규ID": "2"},
+            {"자치법규명": "일반 행정 조례", "자치법규ID": "3"},
+        ]
+
+        filtered = filter_target(records, "ordin")
+
+        self.assertEqual([item["자치법규ID"] for item in filtered], ["1", "2", "3"])
 
 
 class LawCollectorContractTests(unittest.TestCase):
