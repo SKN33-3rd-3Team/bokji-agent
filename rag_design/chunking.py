@@ -218,6 +218,8 @@ def chunk_document(
                     # (N9가 재검색해도 못 보는 버그였음 - Issue #11에서 발견).
                     "age_start",
                     "age_end",
+                    "age_basis",
+                    "age_source",
                 )
             )
             for key in source_metadata_fields:

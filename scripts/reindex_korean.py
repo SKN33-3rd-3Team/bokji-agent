@@ -95,15 +95,17 @@ def _secret_values() -> tuple[str, ...]:
     )
 
 
-def _build_provider(device: str) -> SentenceTransformerKoreanProvider:
+def _build_provider(
+    device: str, workers: int = 1
+) -> SentenceTransformerKoreanProvider:
     return SentenceTransformerKoreanProvider(
-        _MODEL_NAME, dimension=_DIMENSION, device=device
+        _MODEL_NAME, dimension=_DIMENSION, device=device, workers=workers
     )
 
 
-def _open_store(device: str) -> ChromaVectorStore:
+def _open_store(device: str, workers: int = 1) -> ChromaVectorStore:
     return ChromaVectorStore(
-        _build_provider(device),
+        _build_provider(device, workers),
         VectorStoreConfig(
             persist_directory=_VECTOR_DB, collection_prefix=_COLLECTION_PREFIX
         ),
@@ -149,7 +151,13 @@ def _check_model_available(device: str) -> bool:
     return True
 
 
-def _reindex(name: str, snapshot_id: str, device: str, chunk_config: ChunkingConfig) -> bool:
+def _reindex(
+    name: str,
+    snapshot_id: str,
+    device: str,
+    chunk_config: ChunkingConfig,
+    workers: int,
+) -> bool:
     source_type, documents_path = _SOURCES[name]
     if not documents_path.exists():
         print(f"      [건너뜀] {documents_path}가 없습니다.")
@@ -174,7 +182,7 @@ def _reindex(name: str, snapshot_id: str, device: str, chunk_config: ChunkingCon
     print(f"      [{name}] 이 단계가 가장 오래 걸립니다 (CPU면 수십 분).")
 
     started = time.monotonic()
-    store = _open_store(device)
+    store = _open_store(device, workers)
     result = store.sync_snapshot(
         source_type,
         tuple(chunks),
@@ -227,6 +235,12 @@ def main() -> int:
         "--device", default="cpu", help="임베딩 장치. GPU가 있으면 cuda (기본 cpu)."
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="CPU 임베딩 프로세스 수 (기본 1, CPU에서는 2 권장)",
+    )
+    parser.add_argument(
         "--snapshot-id",
         default=f"korean-{date.today().isoformat()}",
         help="이번 색인의 스냅샷 ID (기본: korean-오늘날짜).",
@@ -239,6 +253,10 @@ def main() -> int:
         help="재색인 없이 검색 스모크 테스트만 실행(이미 재색인을 끝낸 뒤 확인용).",
     )
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers는 1 이상의 정수여야 합니다.")
+    if args.device != "cpu" and args.workers != 1:
+        parser.error("GPU device에서는 --workers=1을 사용하세요.")
 
     print("=" * 68)
     print("한국어 의미 임베딩으로 vectorDB 재색인")
@@ -260,7 +278,9 @@ def main() -> int:
     chunk_config = ChunkingConfig(args.max_chars, args.overlap_chars)
 
     for name in targets:
-        if not _reindex(name, args.snapshot_id, args.device, chunk_config):
+        if not _reindex(
+            name, args.snapshot_id, args.device, chunk_config, args.workers
+        ):
             return 1
 
     _smoke_search(args.device)
