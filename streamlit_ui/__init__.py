@@ -4,10 +4,8 @@
 하위 모듈에 나눠 둔다.
 
 - ``constants``       : 한글 라벨 매핑, 선택지 목록 등 순수 상수
-- ``vector_store``    : Chroma 벡터스토어 준비/샘플 색인 (``get_store``)
-- ``claim_extractor`` : N5용 임시 규칙 기반 ClaimExtractor
-- ``pipeline``        : N1~N12 그래프 배선 (``run_pipeline``)
-- ``rendering``       : 파이프라인 결과 → Streamlit 위젯 렌더링
+- ``pipeline``        : 공식 N1~N14 서비스 API 호출 어댑터
+- ``rendering``       : ``ChatResponse`` → Streamlit 위젯 렌더링
 - ``theme``           : 헤더 로고, 우측 상단 메뉴 한글화
 - ``session`` / ``nav``: 세션 상태 초기화, 화면 전환 헬퍼
 - ``pages``           : 화면별 모듈 (chat / auth / mypage)
