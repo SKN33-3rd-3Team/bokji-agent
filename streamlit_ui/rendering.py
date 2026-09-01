@@ -99,7 +99,16 @@ def _render_answer(result: PipelineResult) -> None:
         st.metric("미충족·미확인", f"{unmet + unknown}건", border=True,
                   icon=":material/pending:")
 
-    for pid, entry in policies.items():
+    # 중복수급 metric 의 값 글자를 라벨("중복수급")과 같은 크기로 맞춘다
+    # (다른 metric 은 그대로). 라벨·값에 동일 선언을 걸어 확실히 일치시킨다.
+    st.html(
+        "<style>"
+        "[class*='st-key-dup-metric-'] [data-testid='stMetricLabel'],"
+        "[class*='st-key-dup-metric-'] [data-testid='stMetricValue']"
+        "{font-size:0.875rem;font-weight:500;line-height:1.4}</style>"
+    )
+
+    for pos, (pid, entry) in enumerate(policies.items()):
         elig = entry.get("eligibility", {})
         verdict = elig.get("verdict", "미확인")
         style = VERDICT_STYLE.get(verdict, VERDICT_STYLE["미확인"])
@@ -127,8 +136,9 @@ def _render_answer(result: PipelineResult) -> None:
                                 help="문서에 구조화된 금액이 없어 계산을 보류했습니다.")
             dup = entry.get("duplicate")
             if isinstance(dup, dict):
-                cols.metric("중복수급", dup.get("status", "미확인"), border=True,
-                            icon=":material/join_inner:")
+                dup_box = cols.container(key=f"dup-metric-{pos}")
+                dup_box.metric("중복수급", dup.get("status", "미확인"),
+                               border=True, icon=":material/join_inner:")
                 if dup.get("conflicts_with"):
                     st.caption("상충 제도: " + ", ".join(dup["conflicts_with"]))
 
@@ -159,12 +169,16 @@ def _render_answer(result: PipelineResult) -> None:
                         )
                         st.code(retrieved.chunk.text[:1200], language="text",
                                 wrap_lines=True)
-            st.caption(f"정책 ID `{pid}`")
+            if st.session_state.get("debug"):
+                st.caption(f"정책 ID `{pid}`")
 
-    tail = ":material/robot_2: 규칙 기반 판정 결과입니다(자연어 답변 생성 N13·최종 검증 N14 미구현)."
-    if result.elapsed_sec:
-        tail += f" · 응답 {result.elapsed_sec:.2f}초"
-    st.caption(tail + " " + GUIDANCE_OFFICIAL)
+    st.caption(GUIDANCE_OFFICIAL)
+    if st.session_state.get("debug"):
+        dev = (":material/robot_2: 규칙 기반 판정 결과입니다"
+               "(자연어 답변 생성 N13·최종 검증 N14 미구현).")
+        if result.elapsed_sec:
+            dev += f" · 응답 {result.elapsed_sec:.2f}초"
+        st.caption(dev)
 
 
 def render_result(result: PipelineResult) -> None:
@@ -201,12 +215,12 @@ def render_result(result: PipelineResult) -> None:
         with st.expander("오류 상세", icon=":material/bug_report:"):
             st.code(result.error or "", language="text", wrap_lines=True)
 
-    with st.expander("노드 실행 추적 / 상태 보기", icon=":material/route:"):
-        st.markdown(
-            " ".join(f":blue-badge[{step}]" for step in result.trace)
-            or "_추적 정보 없음_"
-        )
-        if st.session_state.get("debug"):
+    if st.session_state.get("debug"):
+        with st.expander("노드 실행 추적 / 상태 보기", icon=":material/route:"):
+            st.markdown(
+                " ".join(f":blue-badge[{step}]" for step in result.trace)
+                or "_추적 정보 없음_"
+            )
             st.json(_state_summary(result.state))
 
 
