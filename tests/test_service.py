@@ -8,7 +8,17 @@ tests/test_graph_builder.py의 인터럽트/재개 스모크 테스트가 이미
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+import os
+from threading import Barrier, Lock
+from unittest.mock import patch
+
+import pytest
+
 from rag_design.contracts import Chunk, RetrievedChunk, SCHEMA_VERSION, SourceType, compute_content_hash
+from rag_design.embeddings import HashEmbeddingProvider, SentenceTransformerKoreanProvider
+from src.rag_chatbot import service as service_module
 from src.rag_chatbot.llm import (
     FailingLLMClient,
     FakeLLMClient,
@@ -26,7 +36,9 @@ from src.rag_chatbot.service import (
     _rank_policies,
     _strip_prefix,
     _to_chat_response,
+    build_embedding_provider,
 )
+from src.rag_chatbot.timing import PhaseTimer
 
 
 def _section_chunk(policy_id: str, section_type: str, label: str, body: str) -> RetrievedChunk:
@@ -72,6 +84,304 @@ class FakeDetailStore:
         key = f"{me.get('source_id')}:{me.get('section_type')}"
         hit = self._sections.get(key)
         return (hit,) if hit else ()
+
+
+def test_embedding_provider_defaults_to_korean_with_explicit_hash_override():
+    with patch.dict(os.environ, {}, clear=True):
+        korean = build_embedding_provider()
+    assert isinstance(korean, SentenceTransformerKoreanProvider)
+    assert korean.model_name == "intfloat/multilingual-e5-base"
+    assert korean.dimension == 768
+
+    with patch.dict(os.environ, {"EMBEDDING_PROVIDER": "hash"}, clear=True):
+        offline = build_embedding_provider()
+    assert isinstance(offline, HashEmbeddingProvider)
+    assert offline.dimension == 128
+
+
+def test_connect_store_rejects_an_empty_directory(tmp_path):
+    with patch.object(service_module, "_REAL_VECTOR_DB_PATH", tmp_path):
+        with pytest.raises(SystemExit, match="사전 구축된 vectorDB"):
+            service_module.connect_store()
+
+
+def test_get_graph_loads_support_conditions_once_and_injects_them():
+    original_cache = dict(service_module._runtime_cache)
+    service_module._runtime_cache.clear()
+    store = object()
+    llm_client = object()
+    conditions = {"service-1": {"JA0101": "Y"}}
+    graph = object()
+    try:
+        with (
+            patch.object(service_module, "connect_store", return_value=store),
+            patch.object(
+                service_module, "build_llm_client", return_value=llm_client
+            ),
+            patch.object(
+                service_module,
+                "load_support_conditions",
+                return_value=conditions,
+            ) as load_mock,
+            patch.object(
+                service_module, "build_graph", return_value=graph
+            ) as build_mock,
+        ):
+            assert service_module.get_graph() is graph
+            assert service_module.get_graph() is graph
+
+        load_mock.assert_called_once_with(service_module._REAL_SUPPORT_CONDITIONS_PATH)
+        build_mock.assert_called_once_with(
+            store,
+            llm_client=llm_client,
+            support_conditions=conditions,
+        )
+    finally:
+        service_module._runtime_cache.clear()
+        service_module._runtime_cache.update(original_cache)
+
+
+def test_concurrent_first_requests_share_runtime_and_followup_checkpointer():
+    class BarrierCache(dict):
+        def __init__(self):
+            super().__init__()
+            self._first_checks = Barrier(2)
+            self._check_count = 0
+            self._check_lock = Lock()
+
+        def __contains__(self, key):
+            with self._check_lock:
+                self._check_count += 1
+                check_count = self._check_count
+                present = super().__contains__(key)
+            if key == "graph" and check_count <= 2:
+                self._first_checks.wait(timeout=5)
+            return present
+
+    class FakeTimer:
+        def reset(self):
+            pass
+
+        def measure(self, _name):
+            return nullcontext()
+
+        def summary(self):
+            return []
+
+        def path(self):
+            return []
+
+    class Interrupt:
+        value = "어느 지역에 거주하시나요?"
+
+    class FakeGraph:
+        def __init__(self, store):
+            self.store = store
+            self.pending: set[str] = set()
+            self.lock = Lock()
+
+    connected_stores: list[object] = []
+    built_graphs: list[FakeGraph] = []
+
+    def connect_store():
+        store = object()
+        connected_stores.append(store)
+        return store
+
+    def build_graph(store, **_kwargs):
+        graph = FakeGraph(store)
+        built_graphs.append(graph)
+        return graph
+
+    def run_graph(graph, *, session_id, **_kwargs):
+        with graph.lock:
+            graph.pending.add(session_id)
+        return {
+            "__interrupt__": (Interrupt(),),
+            "missing_slots": ["region_names"],
+            "_runtime_store": graph.store,
+        }
+
+    def resume_graph(graph, *, session_id, **_kwargs):
+        with graph.lock:
+            assert session_id in graph.pending
+            graph.pending.remove(session_id)
+        return {
+            "query_id": session_id,
+            "assembled_result": {"policies": {}},
+            "answer_status": "abstained",
+            "final_answer": "확인 완료",
+            "final_citations": [],
+            "_runtime_store": graph.store,
+        }
+
+    original_to_chat_response = service_module._to_chat_response
+
+    def to_chat_response(result, *, session_id, store):
+        assert store is result["_runtime_store"]
+        payload = dict(result)
+        payload.pop("_runtime_store")
+        return original_to_chat_response(payload, session_id=session_id, store=store)
+
+    with (
+        patch.object(service_module, "_runtime_cache", BarrierCache()),
+        patch.object(service_module, "_runtime_lock", Lock()),
+        patch.object(service_module, "TIMER", FakeTimer()),
+        patch.object(service_module, "connect_store", side_effect=connect_store),
+        patch.object(service_module, "build_llm_client", return_value=None),
+        patch.object(service_module, "load_support_conditions", return_value={}),
+        patch.object(service_module, "build_graph", side_effect=build_graph),
+        patch.object(service_module, "run_graph", side_effect=run_graph),
+        patch.object(service_module, "resume_graph", side_effect=resume_graph),
+        patch.object(
+            service_module, "_to_chat_response", side_effect=to_chat_response
+        ),
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        sessions = ("session-a", "session-b")
+        first_futures = [
+            executor.submit(service_module.ask, "첫 질문", session_id)
+            for session_id in sessions
+        ]
+        first_responses = [
+            future.result(timeout=10) for future in first_futures
+        ]
+        followup_futures = [
+            executor.submit(service_module.answer_followup, session_id, "서울")
+            for session_id in sessions
+        ]
+        followup_responses = [
+            future.result(timeout=10) for future in followup_futures
+        ]
+
+        assert [response["status"] for response in first_responses] == [
+            "needs_input",
+            "needs_input",
+        ]
+        assert [response["status"] for response in followup_responses] == [
+            "answered",
+            "answered",
+        ]
+        assert len(connected_stores) == 1
+        assert len(built_graphs) == 1
+        assert built_graphs[0].store is service_module._runtime_cache["store"]
+        assert not built_graphs[0].pending
+
+
+def test_simultaneous_ask_and_followup_keep_llm_status_separate():
+    class MarkerClient:
+        model = "marker-model"
+
+        def __init__(self):
+            self.barrier = Barrier(2)
+
+        def complete(self, prompt, *, system=None):
+            self.barrier.wait(timeout=5)
+            if prompt == "failure-b":
+                raise LLMCallError("failure-b")
+            return prompt
+
+    class FakeTimer:
+        def reset(self):
+            pass
+
+        def measure(self, _name):
+            return nullcontext()
+
+        def summary(self):
+            return []
+
+        def path(self):
+            return []
+
+    class Interrupt:
+        value = "추가 정보를 알려주세요."
+
+    recorder = RecordingLLMClient(MarkerClient())
+    graph = object()
+    store = object()
+
+    def run_or_resume_graph(_graph, *, user_input, **_kwargs):
+        try:
+            recorder.complete(user_input)
+        except LLMCallError:
+            pass
+        return {
+            "__interrupt__": (Interrupt(),),
+            "missing_slots": ["region_names"],
+        }
+
+    with (
+        patch.object(
+            service_module,
+            "_runtime_cache",
+            {
+                "store": store,
+                "llm_client": recorder,
+                "support_conditions": {},
+                "graph": graph,
+            },
+        ),
+        patch.object(service_module, "TIMER", FakeTimer()),
+        patch.object(
+            service_module, "run_graph", side_effect=run_or_resume_graph
+        ),
+        patch.object(
+            service_module, "resume_graph", side_effect=run_or_resume_graph
+        ),
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        futures = [
+            executor.submit(service_module.ask, "success-a", "session-success-a"),
+            executor.submit(
+                service_module.answer_followup, "session-failure-b", "failure-b"
+            ),
+        ]
+        success_response, failure_response = [
+            future.result(timeout=10) for future in futures
+        ]
+
+    assert success_response["llm_status"]["calls"] == 1
+    assert success_response["llm_status"]["successes"] == 1
+    assert success_response["llm_status"]["failures"] == 0
+    assert success_response["llm_status"]["messages"] == []
+    assert failure_response["llm_status"]["calls"] == 1
+    assert failure_response["llm_status"]["successes"] == 0
+    assert failure_response["llm_status"]["failures"] == 1
+    assert failure_response["llm_status"]["messages"] == ["failure-b"]
+    assert recorder.summary()["calls"] == 0
+
+
+def test_service_response_includes_completed_request_total_timing():
+    class Interrupt:
+        value = "추가 정보를 알려주세요."
+
+    with (
+        patch.object(
+            service_module,
+            "_runtime_cache",
+            {
+                "store": object(),
+                "llm_client": None,
+                "support_conditions": {},
+                "graph": object(),
+            },
+        ),
+        patch.object(service_module, "TIMER", PhaseTimer()),
+        patch.object(
+            service_module,
+            "run_graph",
+            return_value={
+                "__interrupt__": (Interrupt(),),
+                "missing_slots": ["region_names"],
+            },
+        ),
+    ):
+        response = service_module.ask("첫 질문", "timing-session")
+
+    assert any(
+        phase["name"] == "request_total" for phase in response["timing"]["phases"]
+    )
 
 
 def test_extract_title_and_strip_prefix():
@@ -295,6 +605,68 @@ def test_recording_client_exposes_inner_model_name():
             return "{}"
 
     assert RecordingLLMClient(_Inner()).summary()["model"] == "some/model"
+
+
+def test_recording_client_isolates_overlapping_request_scopes():
+    class MarkerClient:
+        def __init__(self):
+            self.barrier = Barrier(2)
+
+        def complete(self, prompt, *, system=None):
+            self.barrier.wait(timeout=5)
+            if prompt == "failure-b":
+                raise LLMCallError("failure-b")
+            return prompt
+
+    recorder = RecordingLLMClient(MarkerClient())
+
+    def run_request(marker):
+        with recorder.request_scope():
+            try:
+                recorder.complete(marker)
+            except LLMCallError:
+                pass
+            return recorder.summary()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(run_request, marker)
+            for marker in ("success-a", "failure-b")
+        ]
+        success_summary, failure_summary = [
+            future.result(timeout=10) for future in futures
+        ]
+
+    assert success_summary["calls"] == 1
+    assert success_summary["successes"] == 1
+    assert success_summary["failures"] == 0
+    assert success_summary["messages"] == []
+    assert failure_summary["calls"] == 1
+    assert failure_summary["successes"] == 0
+    assert failure_summary["failures"] == 1
+    assert failure_summary["messages"] == ["failure-b"]
+    assert recorder.summary()["calls"] == 0
+
+
+def test_recording_client_restores_nested_default_and_exception_stats():
+    recorder = RecordingLLMClient(FakeLLMClient("응답"))
+    recorder.complete("default")
+
+    with recorder.request_scope():
+        recorder.complete("outer")
+        with recorder.request_scope():
+            recorder.complete("inner")
+            assert recorder.summary()["calls"] == 1
+        assert recorder.summary()["calls"] == 1
+
+    assert recorder.summary()["calls"] == 1
+
+    with pytest.raises(RuntimeError, match="scope failure"):
+        with recorder.request_scope():
+            recorder.complete("discarded")
+            raise RuntimeError("scope failure")
+
+    assert recorder.summary()["calls"] == 1
 
 
 # --- HuggingFace 실패 원인 진단 --------------------------------------------

@@ -110,12 +110,11 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
   한다 - 프론트엔드는 이 필드를 "추가 확인이 필요한 항목" 안내로 렌더링하고,
   O/X 버튼은 만들지 않는다.
 - ``eligibility_status``("충족")만 화면에 띄우면 **"모든 자격 조건을 만족한다"로
-  읽힌다.** 실제로 N9가 대조하는 조건은 문서 metadata에 있는 연령 기준뿐이고,
-  장애 여부·성별·소득·취업 상태는 문서 쪽에 구조화된 기준이 없어 비교조차
-  하지 못한다(그래서 비장애인에게 장애인 정책이 "자격 충족"으로 뜬 적이 있다).
-  ``verification_checked``/``verification_unchecked``/``verification_note``를
-  함께 내려보내니 **정책 카드에 반드시 같이 노출할 것.** 조건을 실제로
-  대조하려면 문서 metadata 확장 + 재색인이나 LLM 본문 대조가 필요하다(별도 작업).
+  읽힌다.** N4는 정상 raw 지원조건이 있는 서비스에 한해 명확히 대응되는
+  성별·소득·취업·장애 조건으로 후보를 먼저 거르지만, N9의 구조화된 검증
+  범위는 문서 metadata에 있는 연령 기준뿐이다. ``verification_checked``/
+  ``verification_unchecked``/``verification_note``를 함께 내려보내니 **정책
+  카드에 반드시 같이 노출할 것.** 최종 자격 확인에는 원문 확인이 필요하다.
 - ``amount_label``은 이제 지원 주기와 한도 여부를 함께 표기한다(2026-08-31).
   N10이 원문에서 "월/연/1회", "최대/한도", "1인당/가구당"을 읽어 넘겨주고,
   월 단가와 지원 개월수가 둘 다 명시된 경우에만 총액까지 계산한다
@@ -143,8 +142,10 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
 
 from __future__ import annotations
 
+from contextlib import ExitStack, nullcontext
 import sys
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, TypedDict
 
 # Streamlit 등 다른 위치에서 이 모듈을 import해도 rag_design/src.rag_chatbot를
@@ -172,6 +173,7 @@ from rag_design.vector_store import (
 )
 
 from .graph import build_graph, resume_graph, run_graph
+from .graph.policy_conditions import load_support_conditions
 from .llm import HuggingFaceInferenceClient, RecordingLLMClient
 from .timing import TIMER, node_title
 
@@ -183,8 +185,13 @@ load_dotenv(_REPO_ROOT / ".env")
 # 의 실제 색인 경로/collection_prefix와 동일하게 맞춘다 - 다르게 쓰면 빈
 # 컬렉션을 새로 만들 뿐 실제 데이터에 연결되지 않는다.
 _REAL_VECTOR_DB_PATH = _REPO_ROOT / "data" / "vector_db"
+_REAL_SUPPORT_CONDITIONS_PATH = (
+    _REPO_ROOT / "data" / "raw" / "gov24_support_conditions.json"
+)
 _REAL_COLLECTION_PREFIX = "bokji_rag"
-_REAL_EMBEDDING_DIMENSION = 128  # 컬렉션 메타데이터 rag_embedding_provider: "local-hash-v1:128"
+_HASH_EMBEDDING_DIMENSION = 128
+_KOREAN_EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
+_KOREAN_EMBEDDING_DIMENSION = 768
 
 # HF_TOKEN이 있는데 LLM_MODEL_NAME/LLM_HF_MODEL을 안 정한 경우의 기본 모델 -
 # 세 후보(client.py 상단 docstring 참고) 중 가장 작아서 HuggingFace 서버리스
@@ -195,36 +202,31 @@ _DEFAULT_HF_MODEL = "Bllossom/llama-3.2-Korean-Bllossom-3B"
 def build_embedding_provider():
     """검색에 쓸 임베딩 provider를 만든다.
 
-    **현재 색인된 vectorDB는 ``HashEmbeddingProvider``(local-hash-v1:128)로
-    만들어져 있다.** 이 provider는 자기 docstring이 밝히듯 "테스트와 오프라인
-    스모크 체크 전용"이라, 문자 n-gram 해시일 뿐 의미를 담지 않는다. 그래서
-    "월세가 부담돼요"로 검색해도 유기질비료·입양축하금 같은 무관한 정책이
-    올라온다(2026-08-31 실측) - 검색 품질 문제의 근본 원인이다.
-
-    진짜 의미 검색을 하려면 ``SentenceTransformerKoreanProvider``
-    (intfloat/multilingual-e5-base, 768차원)로 **전체를 재색인해야 한다**.
-    임베딩 provider가 다르면 벡터 공간 자체가 달라서, 색인과 검색이 반드시
-    같은 provider여야 한다(ChromaVectorStore가 fingerprint로 확인한다).
+    서비스 기본은 ``SentenceTransformerKoreanProvider``
+    (intfloat/multilingual-e5-base, 768차원)이다. 색인과 검색의 provider가
+    다르면 벡터 공간 자체가 달라지므로 ``ChromaVectorStore`` fingerprint가
+    연결을 차단한다. 테스트·오프라인 스모크는 ``EMBEDDING_PROVIDER=hash``로
+    기존 ``HashEmbeddingProvider``(local-hash-v1:128)를 계속 쓸 수 있다.
 
     재색인 방법(레포 루트에서, sentence-transformers 설치 필요):
-        python -m rag_design.vector_cli index-documents \
+        python -m rag_design.vector_cli \
             --persist-directory data/vector_db --collection-prefix bokji_rag \
-            --embedding korean --source subsidy --snapshot-id <id> \
+            --embedding korean index-documents \
+            --source subsidy --snapshot-id <id> \
             --documents <documents.jsonl>
-
-    재색인 후 ``.env``에 ``EMBEDDING_PROVIDER=korean``을 넣으면 이 함수가
-    같은 provider로 연결한다. 기본값은 지금 색인된 상태에 맞춰 ``hash``다.
     """
 
-    provider_name = (os.environ.get("EMBEDDING_PROVIDER") or "hash").strip().lower()
+    provider_name = (os.environ.get("EMBEDDING_PROVIDER") or "korean").strip().lower()
     if provider_name == "hash":
         return HashEmbeddingProvider(
-            int(os.environ.get("EMBEDDING_DIMENSION") or _REAL_EMBEDDING_DIMENSION)
+            int(os.environ.get("EMBEDDING_DIMENSION") or _HASH_EMBEDDING_DIMENSION)
         )
     if provider_name == "korean":
         return SentenceTransformerKoreanProvider(
-            os.environ.get("EMBEDDING_MODEL_NAME") or "intfloat/multilingual-e5-base",
-            dimension=int(os.environ.get("EMBEDDING_DIMENSION") or 768),
+            os.environ.get("EMBEDDING_MODEL_NAME") or _KOREAN_EMBEDDING_MODEL,
+            dimension=int(
+                os.environ.get("EMBEDDING_DIMENSION") or _KOREAN_EMBEDDING_DIMENSION
+            ),
         )
     raise SystemExit(
         f"EMBEDDING_PROVIDER={provider_name!r}는 지원하지 않습니다 "
@@ -235,9 +237,10 @@ def build_embedding_provider():
 def connect_store() -> ChromaVectorStore:
     """실제 서비스 vectorDB(``data/vector_db``)에 연결한다 (색인은 안 함)."""
 
-    if not _REAL_VECTOR_DB_PATH.exists():
+    if not (_REAL_VECTOR_DB_PATH / "chroma.sqlite3").is_file():
         raise SystemExit(
-            f"{_REAL_VECTOR_DB_PATH}가 없습니다. 레포 루트에 실제 vectorDB가 "
+            f"{_REAL_VECTOR_DB_PATH}에 실제 Chroma DB가 없습니다. "
+            "레포 루트에 사전 구축된 vectorDB가 "
             "있는 컴퓨터에서 실행했는지 확인해 주세요."
         )
     return ChromaVectorStore(
@@ -302,24 +305,40 @@ def build_llm_client() -> RecordingLLMClient | None:
 # Streamlit에서는 get_graph()를 @st.cache_resource로 한 번 더 감싸는 걸
 # 권장한다(스크립트 재실행마다 이 캐시가 초기화되는 걸 막기 위해).
 _runtime_cache: dict[str, Any] = {}
+# ponytail: 프로세스당 한 번뿐인 startup에는 전역 잠금 하나면 충분하다.
+_runtime_lock = Lock()
 
 
 def get_graph() -> Any:
     """조립된 그래프를 반환한다(프로세스당 한 번만 조립)."""
 
+    global _runtime_cache
     if "graph" not in _runtime_cache:
-        # 이 세 단계를 따로 재는 이유: "첫 실행이 느리다"의 범인이
-        # vectorDB 인덱스 로딩인지 그래프 조립인지 구분되지 않으면
-        # 엉뚱한 데를 최적화하게 된다.
-        with TIMER.measure("startup:vectordb_connect"):
-            store = connect_store()
-        with TIMER.measure("startup:llm_client"):
-            llm_client = build_llm_client()
-        with TIMER.measure("startup:graph_build"):
-            graph = build_graph(store, llm_client=llm_client)
-        _runtime_cache["store"] = store
-        _runtime_cache["llm_client"] = llm_client
-        _runtime_cache["graph"] = graph
+        with _runtime_lock:
+            if "graph" not in _runtime_cache:
+                # 이 세 단계를 따로 재는 이유: "첫 실행이 느리다"의 범인이
+                # vectorDB 인덱스 로딩인지 그래프 조립인지 구분되지 않으면
+                # 엉뚱한 데를 최적화하게 된다.
+                with TIMER.measure("startup:vectordb_connect"):
+                    store = connect_store()
+                with TIMER.measure("startup:llm_client"):
+                    llm_client = build_llm_client()
+                with TIMER.measure("startup:support_conditions"):
+                    support_conditions = load_support_conditions(
+                        _REAL_SUPPORT_CONDITIONS_PATH
+                    )
+                with TIMER.measure("startup:graph_build"):
+                    graph = build_graph(
+                        store,
+                        llm_client=llm_client,
+                        support_conditions=support_conditions,
+                    )
+                _runtime_cache = {
+                    "store": store,
+                    "llm_client": llm_client,
+                    "support_conditions": support_conditions,
+                    "graph": graph,
+                }
     return _runtime_cache["graph"]
 
 
@@ -685,12 +704,13 @@ def _llm_status() -> dict:
     return client.summary()
 
 
-def _reset_llm_recorder() -> None:
-    """요청 하나의 LLM 성공/실패만 보도록 기록을 비운다."""
+def _llm_request_scope():
+    """공유 client의 기록만 현재 요청에 격리한다."""
 
     client = _runtime_cache.get("llm_client")
     if isinstance(client, RecordingLLMClient):
-        client.reset()
+        return client.request_scope()
+    return nullcontext()
 
 
 def _timing_report() -> dict:
@@ -853,15 +873,18 @@ def ask(user_input: str, session_id: str, *, top_k: int = 5) -> ChatResponse:
     체크포인터에 보존되므로 다시 전달하지 않는다.
     """
 
-    _reset_llm_recorder()
     TIMER.reset()
-    with TIMER.measure("request_total"):
+    with ExitStack() as request_timer:
+        request_timer.enter_context(TIMER.measure("request_total"))
         graph = get_graph()
         store = get_store()
-        result = run_graph(
-            graph, user_input=user_input, session_id=session_id, top_k=top_k
-        )
-    return _to_chat_response(result, session_id=session_id, store=store)
+        with _llm_request_scope():
+            result = run_graph(
+                graph, user_input=user_input, session_id=session_id, top_k=top_k
+            )
+            # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
+            request_timer.close()
+            return _to_chat_response(result, session_id=session_id, store=store)
 
 
 def answer_followup(session_id: str, user_input: str) -> ChatResponse:
@@ -870,13 +893,15 @@ def answer_followup(session_id: str, user_input: str) -> ChatResponse:
     같은 ``session_id``로만 호출할 수 있다 - 체크포인터에 해당 세션의 이전
     진행 상태가 없으면 LangGraph가 에러를 낸다."""
 
-    _reset_llm_recorder()
     TIMER.reset()
-    with TIMER.measure("request_total"):
+    with ExitStack() as request_timer:
+        request_timer.enter_context(TIMER.measure("request_total"))
         graph = get_graph()
         store = get_store()
-        result = resume_graph(graph, session_id=session_id, user_input=user_input)
-    return _to_chat_response(result, session_id=session_id, store=store)
+        with _llm_request_scope():
+            result = resume_graph(graph, session_id=session_id, user_input=user_input)
+            request_timer.close()
+            return _to_chat_response(result, session_id=session_id, store=store)
 
 
 __all__ = [
