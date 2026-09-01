@@ -1,28 +1,103 @@
-"""로그인 / 회원가입 — 화면 시안 (기능 미연결).
+"""로그인 / 회원가입 — 화면 + 인증 연동.
 
-폼 제출은 ``stub_notice()`` 로 안내만 띄운다. 실제 인증 연동은 추후.
+폼 제출은 ``rag_chatbot.auth`` 서비스(SQLite ``users`` 테이블 + bcrypt +
+Fernet)로 처리한다. 회원가입은 이름·거주 지역·관심 지원조건·마케팅 동의까지
+저장하고, 로그인 성공 시 그 프로필을 복호화해 ``st.session_state["auth_user"]``
+(``session.auth_user_dict`` 형태)에 심는다. 마이페이지에서 이 값을 표시하고
+``update_profile`` / ``change_password`` 로 수정한다.
 """
 
 from __future__ import annotations
 
 import streamlit as st
+from rag_chatbot.auth import (
+    AuthError,
+    InvalidCredentialsError,
+    PasswordPolicyError,
+    UsernameTakenError,
+    authenticate,
+    sign_up,
+)
 
 from ..constants import INTEREST_OPTIONS, SIDO_OPTIONS
-from ..nav import goto, stub_notice
+from ..nav import goto
+from ..session import auth_user_dict as _user_to_session
+from ..session import clear_auth_form_state, escape_md
+
+_REGION_NONE = "선택 안 함"
 
 
-def _auth_footer_links(active: str) -> None:
+def _auth_footer_back() -> None:
+    # 로그인<->회원가입 이동은 폼 아래 인라인 링크 하나로 충분하다.
+    # 여기서는 상담으로 돌아가는 버튼만 둔다.
     st.space("small")
-    row = st.container(horizontal=True)
-    if active != "login":
-        if row.button("로그인", key="lnk_login", icon=":material/login:"):
-            goto("login")
-    if active != "signup":
-        if row.button("회원가입", key="lnk_signup", icon=":material/person_add:"):
-            goto("signup")
-    if row.button("상담으로 돌아가기", key="lnk_chat", icon=":material/arrow_back:",
-                  type="secondary"):
+    if st.button("상담으로 돌아가기", key="lnk_chat", icon=":material/arrow_back:",
+                 type="secondary"):
         goto("chat")
+
+
+def _handle_login() -> None:
+    email = (st.session_state.get("login_email") or "").strip()
+    password = st.session_state.get("login_pw") or ""
+    if not email or not password:
+        st.error("이메일과 비밀번호를 모두 입력해 주세요.")
+        return
+    try:
+        user = authenticate(email, password)
+    except InvalidCredentialsError:
+        st.error("이메일 또는 비밀번호가 올바르지 않습니다.")
+        return
+    except AuthError as exc:
+        st.error(str(exc))
+        return
+    st.session_state.auth_user = _user_to_session(user)
+    # 로그인/회원가입 폼 입력(비밀번호 포함)을 세션에서 모두 제거한다.
+    clear_auth_form_state()
+    st.toast(f"{escape_md(user.display_name or user.username)} 님, 환영합니다.",
+             icon=":material/check_circle:")
+    goto("chat")
+
+
+def _handle_signup() -> None:
+    email = (st.session_state.get("su_email") or "").strip()
+    password = st.session_state.get("su_pw") or ""
+    password2 = st.session_state.get("su_pw2") or ""
+    name = (st.session_state.get("su_name") or "").strip()
+
+    if not email or not password:
+        st.error("이메일과 비밀번호를 입력해 주세요.")
+        return
+    if password != password2:
+        st.error("비밀번호와 비밀번호 확인이 일치하지 않습니다.")
+        return
+    if not (st.session_state.get("su_tos") and st.session_state.get("su_privacy")):
+        st.error("[필수] 이용약관과 개인정보 수집·이용에 동의해 주세요.")
+        return
+
+    region_sel = st.session_state.get("su_region") or _REGION_NONE
+    region = "" if region_sel == _REGION_NONE else region_sel
+    interests = list(st.session_state.get("su_interests") or [])
+    marketing = bool(st.session_state.get("su_marketing"))
+
+    try:
+        sign_up(email, password, name, region=region, interests=interests,
+                marketing_opt_in=marketing)
+    except PasswordPolicyError as exc:
+        for violation in exc.violations:
+            st.error(violation)
+        return
+    except UsernameTakenError:
+        st.error("이미 가입된 이메일입니다.")
+        return
+    except AuthError as exc:
+        st.error(str(exc))
+        return
+
+    # 회원가입 폼 입력(비밀번호·이름·동의 등)을 세션에서 모두 제거한다.
+    clear_auth_form_state()
+    st.toast("회원가입이 완료되었습니다. 로그인해 주세요.",
+             icon=":material/check_circle:")
+    goto("login")
 
 
 def page_login() -> None:
@@ -34,18 +109,15 @@ def page_login() -> None:
             st.text_input("이메일", key="login_email", placeholder="you@example.com")
             st.text_input("비밀번호", key="login_pw", type="password",
                           placeholder="비밀번호 입력")
-            st.checkbox("로그인 상태 유지", key="login_keep")
             submitted = st.form_submit_button("로그인", type="primary",
                                               width="stretch")
         if submitted:
-            stub_notice()
+            _handle_login()
         c = st.container(horizontal=True)
-        if c.button("비밀번호 찾기", key="login_findpw"):
-            stub_notice()
         c.caption("계정이 없으신가요?")
         if c.button("회원가입", key="login_to_signup"):
             goto("signup")
-    _auth_footer_links("login")
+    _auth_footer_back()
 
 
 def page_signup() -> None:
@@ -62,7 +134,8 @@ def page_signup() -> None:
 
             st.space("small")
             st.markdown("**기본 정보 (선택)**")
-            st.selectbox("거주 지역", ["선택 안 함", *SIDO_OPTIONS], key="su_region")
+            st.caption("입력하면 마이페이지에 저장되고 추천에 활용됩니다.")
+            st.selectbox("거주 지역", [_REGION_NONE, *SIDO_OPTIONS], key="su_region")
             st.pills("해당하는 지원조건", INTEREST_OPTIONS, selection_mode="multi",
                      key="su_interests", default=[])
 
@@ -74,9 +147,9 @@ def page_signup() -> None:
             submitted = st.form_submit_button("회원가입", type="primary",
                                               width="stretch")
         if submitted:
-            stub_notice()
+            _handle_signup()
         c = st.container(horizontal=True)
         c.caption("이미 계정이 있으신가요?")
         if c.button("로그인", key="signup_to_login"):
             goto("login")
-    _auth_footer_links("signup")
+    _auth_footer_back()
