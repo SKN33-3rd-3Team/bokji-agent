@@ -1,0 +1,5 @@
+{"question_id":"dev-child-education-001","question":"서울에 사는 2022년 5월 10일생 여자아이입니다. 소득은 중위소득 80%이고 장애는 없으며 보호자는 재직 중입니다. 유치원 학비 지원을 알려주세요.","expected_policy_ids":["000000465790"],"should_abstain":false,"category":"보육·교육"}
+{"question_id":"dev-earned-income-002","question":"서울 거주 1990년 3월 1일생 남성입니다. 중위소득 50%이고 장애는 없으며 근로 중입니다. 근로장려금 지원 내용을 알려주세요.","expected_policy_ids":["105100000001"],"should_abstain":false,"category":"주거·자립"}
+{"question_id":"dev-rent-guarantee-003","question":"서울 거주 1995년 8월 20일생 여성입니다. 중위소득 60%, 비장애, 취업준비생입니다. 월세 보증 지원 제도를 알려주세요.","expected_policy_ids":["116010000001"],"should_abstain":false,"category":"주거·자립"}
+{"question_id":"dev-marine-defense-004","question":"부산 거주 1950년 2월 10일생 남성입니다. 중위소득 50%, 청각장애가 있고 무직입니다. 해양사고 심판변론 지원을 알려주세요.","expected_policy_ids":["119200000007"],"should_abstain":false,"category":"행정·안전"}
+{"question_id":"dev-no-evidence-law-005","question":"서울 거주 1990년 1월 1일생 남성이고 중위소득 100%, 비장애, 재직 중입니다. 유아교육법 제24조의 정확한 조문 전체를 인용하고 법률상 예외를 해석해 주세요.","expected_policy_ids":[],"should_abstain":true,"category":"근거없음·법률본문"}
