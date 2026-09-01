@@ -28,9 +28,9 @@
     python -m rag_chatbot.collectors.gov_24.gov24 all
     python -m rag_chatbot.collectors.gov_24.gov24 detail 50
 
-주의: BASE_URL과 파라미터 이름(serviceKey/page/perPage/servId 등)은 공공데이터
-API에서 흔히 쓰이는 패턴을 예시로 적어둔 것이다. data.go.kr 활용가이드 문서를
-보고 실제 값으로 꼭 확인해야 한다. (지난 실행에서 실제로 이 값들이 맞았다.)
+``supportConditions``는 공식 ODcloud 조건식
+``cond[서비스ID::EQ]=<서비스ID>``로 한 서비스를 exact 조회한다. ``servId``를
+넘기면 필터가 적용되지 않은 응답을 받을 수 있으므로 이 endpoint에는 쓰지 않는다.
 """
 
 import concurrent.futures
@@ -39,6 +39,7 @@ import os
 import random
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote, quote_plus, unquote
@@ -116,10 +117,31 @@ def _require_key() -> None:
         )
 
 
-def save(items: list[dict], out_path: str) -> None:
+def save(items: object, out_path: str) -> None:
+    """JSON을 같은 디렉터리의 임시 파일에 쓴 뒤 원자적으로 교체한다."""
+
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    serialized = json.dumps(items, ensure_ascii=False, indent=2)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(serialized)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def load(path: str) -> list[dict]:
@@ -186,27 +208,60 @@ def _fetch_one(kind: str, url: str, service_id: str) -> tuple[str, dict | None, 
     전혀 영향을 주지 않는다. 실패할 때마다 재시도 횟수, 오류난 구간(kind와
     서비스ID), API 주소를 콘솔에 즉시 남긴다.
     """
-    params = {
-        "serviceKey": GOV24_SERVICE_KEY,
-        # TODO: 활용가이드에서 실제 파라미터 이름 확인 (servId, serviceId 등일 수 있음)
-        "servId": service_id,
-    }
+    params = {"serviceKey": GOV24_SERVICE_KEY}
+    if url == CONDITIONS_URL:
+        params["cond[서비스ID::EQ]"] = service_id
+    else:
+        params["servId"] = service_id
     last_err: str | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
-            return service_id, response.json(), None
-        except requests.exceptions.RequestException as e:
+            payload = response.json()
+            if url == CONDITIONS_URL and not _conditions_payload_matches(
+                payload, service_id
+            ):
+                raise Gov24RequestError(
+                    "supportConditions exact one-row response contract mismatch"
+                )
+            return service_id, payload, None
+        except (requests.exceptions.RequestException, Gov24RequestError) as e:
             last_err = _safe_request_error(e)
             log(
                 f"[{kind}] 오류 발생(시도 {attempt}/{MAX_RETRIES}) "
-                f"- 구간: {kind}(servId={service_id}), API: {url} - {last_err}"
+                f"- 구간: {kind}(서비스ID={service_id}), API: {url} - {last_err}"
             )
             if attempt < MAX_RETRIES:
                 sleep_sec = BACKOFF_BASE_SEC * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
                 time.sleep(sleep_sec)
     return service_id, None, last_err
+
+
+def _conditions_payload_service_id(payload: object) -> str | None:
+    """exact 한 건인 supportConditions 응답에서 canonical 서비스ID를 읽는다."""
+
+    if not isinstance(payload, dict):
+        return None
+    for count_name in ("matchCount", "currentCount"):
+        count = payload.get(count_name)
+        if isinstance(count, bool) or not isinstance(count, int) or count != 1:
+            return None
+    data = payload.get("data")
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        return None
+    service_id = data[0].get("서비스ID")
+    if (
+        not isinstance(service_id, str)
+        or not service_id
+        or service_id != service_id.strip()
+    ):
+        return None
+    return service_id
+
+
+def _conditions_payload_matches(payload: object, requested_id: str) -> bool:
+    return _conditions_payload_service_id(payload) == requested_id
 
 
 def _service_id_of(item: dict) -> str | None:
@@ -245,16 +300,32 @@ def fetch_many(
     failed_path = out_path.replace(".json", "_failed_ids.json")
 
     existing_by_id: dict[str, dict] = {}
-    ids_to_fetch = list(service_ids)
+    duplicate_existing_ids: set[str] = set()
+    ids_to_fetch = list(dict.fromkeys(service_ids))
     if resume and Path(out_path).exists():
         for item in load(out_path):
-            sid = _service_id_of(item)
-            if sid:
-                existing_by_id[sid] = item
+            sid = (
+                _conditions_payload_service_id(item)
+                if url == CONDITIONS_URL
+                else _service_id_of(item)
+            )
+            if not sid:
+                continue
+            if sid in existing_by_id or sid in duplicate_existing_ids:
+                existing_by_id.pop(sid, None)
+                duplicate_existing_ids.add(sid)
+                continue
+            existing_by_id[sid] = item
+        if duplicate_existing_ids:
+            log(
+                f"[{kind}] 중복된 기존 결과 {len(duplicate_existing_ids)}건은 "
+                "재사용하지 않고 다시 조회합니다."
+            )
         previously_failed = set(load(failed_path)) if Path(failed_path).exists() else set()
         ids_to_fetch = [
             sid for sid in service_ids if sid not in existing_by_id or sid in previously_failed
         ]
+        ids_to_fetch = list(dict.fromkeys(ids_to_fetch))
         skipped = len(service_ids) - len(ids_to_fetch)
         if skipped:
             log(f"[{kind}] 이미 성공한 {skipped}건은 재호출하지 않고 재사용합니다.")
@@ -263,7 +334,7 @@ def fetch_many(
         log(f"[{kind}] 재호출할 서비스ID가 없습니다. 기존 {len(existing_by_id)}건을 그대로 사용합니다.")
         return list(existing_by_id.values())
 
-    new_results: list[dict] = []
+    new_results: dict[str, dict] = {}
     failed_ids: list[str] = []
     total = len(ids_to_fetch)
     done = 0
@@ -271,10 +342,7 @@ def fetch_many(
 
     def _flush() -> dict[str, dict]:
         merged = dict(existing_by_id)
-        for item in new_results:
-            sid = _service_id_of(item)
-            if sid:
-                merged[sid] = item  # 서비스ID로 병합 -> 재실행해도 중복 불가능
+        merged.update(new_results)
         save(list(merged.values()), out_path)
         return merged
 
@@ -291,7 +359,16 @@ def fetch_many(
                 failed_ids.append(service_id)
                 log(f"[{kind}] {service_id} 실패({MAX_RETRIES}회 시도 후): {err}")
             else:
-                new_results.append(data)
+                returned_id = (
+                    _conditions_payload_service_id(data)
+                    if url == CONDITIONS_URL
+                    else _service_id_of(data)
+                )
+                if returned_id != service_id or data is None:
+                    failed_ids.append(service_id)
+                    log(f"[{kind}] 응답 식별자 계약 불일치로 실패 처리했습니다.")
+                else:
+                    new_results[service_id] = data
 
             if done % PROGRESS_EVERY == 0 or done == total:
                 elapsed = time.time() - start
@@ -315,13 +392,11 @@ def fetch_many(
     )
 
     if failed_ids:
-        Path(failed_path).write_text(
-            json.dumps(failed_ids, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        save(failed_ids, failed_path)
         log(f"[{kind}] 실패한 서비스ID {len(failed_ids)}건 저장: {failed_path}")
     elif Path(failed_path).exists():
         # 이번 실행에서 전부 성공했다면 이전 실패 목록은 더 이상 유효하지 않으므로 비운다.
-        Path(failed_path).write_text("[]", encoding="utf-8")
+        save([], failed_path)
 
     return list(merged.values())
 

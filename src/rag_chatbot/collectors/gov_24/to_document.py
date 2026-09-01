@@ -129,6 +129,21 @@ def _normalize_updated_at(value: str | None) -> str | None:
 
 _EMBEDDED_URL_PATTERN = re.compile(r"https?://[^\s)\]}>,;\"']+")
 
+_AGE_RANGE_PATTERN = re.compile(
+    r"(?:만\s*)?(\d{1,3})\s*(?:세\s*)?"
+    r"(?:~|～|∼|〜|[-–—]|부터)\s*"
+    r"(?:만\s*)?(\d{1,3})\s*세(?:까지)?"
+)
+_AGE_LOWER_PATTERN = re.compile(r"(?:만\s*)?(\d{1,3})\s*세\s*(이상|초과)")
+_AGE_UPPER_PATTERN = re.compile(r"(?:만\s*)?(\d{1,3})\s*세\s*(이하|미만)")
+_DEPENDENT_AGE_CONTEXT_PATTERN = re.compile(
+    r"(?:자녀|아동|영유아).{0,20}(?:둔|있는|양육|부양|보호하는)|"
+    r"(?:자녀|아동|영유아).{0,20}(?:부모|보호자|가구|아버지|어머니)|"
+    r"(?:부모|보호자|가구|아버지|어머니).{0,20}(?:자녀|아동|영유아)"
+)
+_JA_FIELD_PATTERN = re.compile(r"JA\d{4}")
+_MAX_PLAUSIBLE_AGE = 120
+
 
 def _strip_secret_query_params(url: str) -> str:
     """본문 속에 인용된(citation이 아닌) URL에서 시크릿성 쿼리파라미터 이름만 제거한다.
@@ -166,6 +181,98 @@ def _clean_text(text: str) -> str:
     lines = [line for line in lines if line]
     cleaned = "\n".join(lines)
     return _sanitize_embedded_urls(cleaned)
+
+
+def _coerce_age(value: object) -> int | None:
+    """정부24 JA 연령값을 bool 제외 정수로 정규화한다."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        age = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        age = int(value.strip())
+    else:
+        return None
+    return age if 0 <= age <= _MAX_PLAUSIBLE_AGE else None
+
+
+def _has_active_support_condition(item: dict) -> bool:
+    """연령 외 JA 플래그도 지원조건 수집 성공으로 인식한다."""
+
+    return any(
+        _JA_FIELD_PATTERN.fullmatch(key)
+        and (
+            _coerce_age(value) is not None
+            if key in {"JA0110", "JA0111"}
+            else value == "Y"
+        )
+        for key, value in item.items()
+        if isinstance(key, str)
+    )
+
+
+def _extract_text_age_bounds(item: dict) -> tuple[int | None, int | None] | None:
+    """지원대상/선정기준의 명시적인 ``N세`` 조건만 보수적으로 추출한다."""
+
+    text = "\n".join(
+        str(item.get(field) or "") for field in ("지원대상", "선정기준")
+    )
+    segments = [
+        part.strip()
+        for part in re.split(r"[\n;]|(?:\s*[○●▪■□▶※]\s*)", text)
+        if part.strip()
+    ]
+    candidates: set[tuple[int | None, int | None]] = set()
+
+    for segment in segments:
+        if _DEPENDENT_AGE_CONTEXT_PATTERN.search(segment):
+            continue
+        consumed: list[tuple[int, int]] = []
+        for match in _AGE_RANGE_PATTERN.finditer(segment):
+            start, end = int(match.group(1)), int(match.group(2))
+            if 0 <= start <= end <= _MAX_PLAUSIBLE_AGE:
+                candidates.add((start, end))
+                consumed.append(match.span())
+
+        remainder = "".join(
+            char
+            for index, char in enumerate(segment)
+            if not any(start <= index < end for start, end in consumed)
+        )
+        lowers = []
+        uppers = []
+        for match in _AGE_LOWER_PATTERN.finditer(remainder):
+            value = int(match.group(1)) + (1 if match.group(2) == "초과" else 0)
+            if 0 <= value <= _MAX_PLAUSIBLE_AGE:
+                lowers.append(value)
+        for match in _AGE_UPPER_PATTERN.finditer(remainder):
+            value = int(match.group(1)) - (1 if match.group(2) == "미만" else 0)
+            if 0 <= value <= _MAX_PLAUSIBLE_AGE:
+                uppers.append(value)
+        if lowers or uppers:
+            start = max(lowers) if lowers else None
+            end = min(uppers) if uppers else None
+            if start is None or end is None or start <= end:
+                candidates.add((start, end))
+
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def extract_age_metadata(item: dict) -> tuple[int | None, int | None, str | None]:
+    """JA 조건을 우선하고, 없을 때만 명시적 본문 표현을 사용한다."""
+
+    api_start = _coerce_age(item.get("JA0110"))
+    api_end = _coerce_age(item.get("JA0111"))
+    if api_start is not None or api_end is not None:
+        if api_start is not None and api_end is not None and api_start > api_end:
+            return None, None, None
+        return api_start, api_end, "support_conditions_api"
+
+    extracted = _extract_text_age_bounds(item)
+    if extracted is None:
+        return None, None, None
+    return extracted[0], extracted[1], "support_target_text"
 
 
 def _build_sections(item: dict) -> list[dict]:
@@ -229,7 +336,7 @@ def build_field_statuses(
     else:
         statuses["legal_basis"] = FieldStatus.MISSING_SOURCE.value
 
-    has_conditions = bool(item.get("JA0110")) or bool(item.get("JA0111"))
+    has_conditions = _has_active_support_condition(item)
     statuses["support_conditions"] = _field_status(has_conditions, service_id, conditions_failed_ids)
 
     return statuses
@@ -292,6 +399,8 @@ def convert_one(
             "소관기관명에서 지역 범위를 확정하지 못해 region_scope=unknown으로 보존"
         )
 
+    age_start, age_end, age_source = extract_age_metadata(item)
+
     return {
         "schema_version": "1.0",
         "doc_id": doc_id,
@@ -326,8 +435,10 @@ def convert_one(
             "region_sigungu_code": region["sigungu_code"],
             "service_category": item.get("서비스분야") or "",
             "public_detail_url": source_url,
-            "age_start": item.get("JA0110") if isinstance(item.get("JA0110"), int) else None,
-            "age_end": item.get("JA0111") if isinstance(item.get("JA0111"), int) else None,
+            "age_start": age_start,
+            "age_end": age_end,
+            "age_basis": "international_age" if age_source else None,
+            "age_source": age_source,
             "field_status": field_statuses,
         },
         "parse_warnings": doc_parse_warnings,
