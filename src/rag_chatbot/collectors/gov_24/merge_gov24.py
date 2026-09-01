@@ -22,6 +22,21 @@ def load(path: str) -> list[dict]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def flatten_records(items: list[dict]) -> list[dict]:
+    """원본 레코드와 ``{"data": [...]}`` wrapper를 모두 평탄화한다."""
+
+    records: list[dict] = []
+    for item in items:
+        inner = item.get("data")
+        if isinstance(inner, list):
+            records.extend(row for row in inner if isinstance(row, dict))
+        elif isinstance(inner, dict):
+            records.append(inner)
+        else:
+            records.append(item)
+    return records
+
+
 def merge(limit: int | None = None) -> list[dict]:
     """service_list, detail, conditions 결과를 서비스ID 기준으로 병합한다.
 
@@ -37,17 +52,16 @@ def merge(limit: int | None = None) -> list[dict]:
     detail_items = load(DETAIL_OUT)
     condition_items = load(CONDITIONS_OUT)
 
-    # detail/conditions는 {"data": [...]} 형태로 감싸져 있을 수 있어서 풀어준다.
-    def unwrap(item: dict) -> dict:
-        inner = item.get("data")
-        if isinstance(inner, list) and inner:
-            return inner[0]
-        if isinstance(inner, dict):
-            return inner
-        return item
-
-    detail_by_id = {unwrap(d)["서비스ID"]: unwrap(d) for d in detail_items if unwrap(d).get("서비스ID")}
-    cond_by_id = {unwrap(c)["서비스ID"]: unwrap(c) for c in condition_items if unwrap(c).get("서비스ID")}
+    detail_by_id = {
+        item["서비스ID"]: item
+        for item in flatten_records(detail_items)
+        if item.get("서비스ID")
+    }
+    cond_by_id = {
+        item["서비스ID"]: item
+        for item in flatten_records(condition_items)
+        if item.get("서비스ID")
+    }
 
     merged = []
     for item in service_list:

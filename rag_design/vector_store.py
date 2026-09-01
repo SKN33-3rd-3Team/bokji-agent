@@ -98,6 +98,8 @@ class VectorStoreConfig:
 class VectorSearchFilter:
     as_of: date | None = None
     region_names: tuple[str, ...] = ()
+    age: int | None = None
+    allow_missing_age: bool = True
     metadata_equals: Mapping[str, str | int | float | bool] = field(
         default_factory=dict
     )
@@ -108,6 +110,12 @@ class VectorSearchFilter:
             validate_region_name(name)
         if len(set(self.region_names)) != len(self.region_names):
             raise ValueError("region_names must not contain duplicates")
+        if self.age is not None and (
+            isinstance(self.age, bool)
+            or not isinstance(self.age, int)
+            or not 0 <= self.age <= 120
+        ):
+            raise ValueError("age must be an integer between 0 and 120")
         if self.snapshot_id is not None and not self.snapshot_id.strip():
             raise ValueError("snapshot_id must be non-empty")
         for key, value in self.metadata_equals.items():
@@ -192,8 +200,19 @@ class ChromaVectorStore:
         except Exception as exc:
             raise VectorStoreError("failed to open persistent Chroma storage") from exc
 
-    def _registry_name(self, source_type: SourceType) -> str:
+    def _legacy_registry_name(self, source_type: SourceType) -> str:
         return f"{self.config.collection_prefix}_{source_type.value}_registry"
+
+    def _registry_name(self, source_type: SourceType) -> str:
+        """Provider별 active generation pointer 이름을 반환한다.
+
+        generation은 fingerprint를 포함하지만 예전 registry는 source_type별로
+        하나뿐이라 hash와 korean 색인을 같은 DB에 둘 수 없었다. provider와
+        dimension을 포함한 base fingerprint로 registry도 분리한다.
+        """
+
+        suffix = self._base_fingerprint(source_type)[:16]
+        return f"{self._legacy_registry_name(source_type)}_{suffix}"
 
     def _generation_name(
         self, source_type: SourceType, snapshot_digest: str
@@ -274,10 +293,23 @@ class ChromaVectorStore:
             )
 
     def _get_or_create_registry(self, source_type: SourceType) -> Any:
+        metadata = self._registry_metadata(source_type)
+        # 기존 DB의 provider가 현재 설정과 같으면 legacy pointer를 새 provider별
+        # registry로 복사한다. 기존 컬렉션은 지우지 않아 롤백도 가능하다.
+        try:
+            legacy = self._client.get_collection(
+                name=self._legacy_registry_name(source_type), embedding_function=None
+            )
+            self._validate_registry(legacy, source_type)
+            metadata = dict(legacy.metadata or metadata)
+        except Exception:
+            # 다른 provider의 legacy registry이거나 아예 없는 경우에는 빈
+            # provider별 registry를 만든다.
+            metadata = self._registry_metadata(source_type)
         try:
             registry = self._client.get_or_create_collection(
                 name=self._registry_name(source_type),
-                metadata=self._registry_metadata(source_type),
+                metadata=metadata,
                 embedding_function=None,
             )
         except Exception as exc:
@@ -292,10 +324,31 @@ class ChromaVectorStore:
             registry = self._client.get_collection(
                 name=self._registry_name(source_type), embedding_function=None
             )
-        except Exception as exc:
-            raise CollectionNotFoundError(
-                f"collection for {source_type.value!r} does not exist"
-            ) from exc
+        except Exception:
+            # 읽기 경로는 아직 migration되지 않은 같은-provider legacy DB도
+            # 그대로 열 수 있어야 한다. 다른 provider의 legacy pointer는 현재
+            # provider에 색인이 없다는 뜻이지 현재 설정이 손상됐다는 뜻이
+            # 아니므로 CollectionNotFoundError로 처리한다.
+            try:
+                registry = self._client.get_collection(
+                    name=self._legacy_registry_name(source_type),
+                    embedding_function=None,
+                )
+            except Exception as exc:
+                raise CollectionNotFoundError(
+                    f"collection for {source_type.value!r} does not exist"
+                ) from exc
+            legacy_metadata = registry.metadata or {}
+            if (
+                legacy_metadata.get("rag_embedding_provider")
+                != self.embedding_provider.provider_id
+                or legacy_metadata.get("rag_embedding_dimension")
+                != self.embedding_provider.dimension
+            ):
+                raise CollectionNotFoundError(
+                    f"collection for {source_type.value!r} does not exist "
+                    "for the active embedding provider"
+                )
         self._validate_registry(registry, source_type)
         return registry
 
@@ -973,24 +1026,64 @@ class ChromaVectorStore:
             ):
                 changed_count += 1
 
-        self._discard_inactive_generation(source_type, snapshot_digest)
         generation_name = self._generation_name(source_type, snapshot_digest)
+        expected_generation_metadata = self._generation_metadata(
+            source_type,
+            resolved_version,
+            snapshot_id,
+            snapshot_digest,
+            len(chunks),
+        )
         try:
             collection = self._client.get_or_create_collection(
                 name=generation_name,
-                metadata=self._generation_metadata(
-                    source_type,
-                    resolved_version,
-                    snapshot_id,
-                    snapshot_digest,
-                    len(chunks),
-                ),
+                metadata=expected_generation_metadata,
                 embedding_function=None,
             )
         except Exception as exc:
             raise VectorStoreError("failed to create a staging generation") from exc
 
-        ordered_chunks = tuple(sorted(chunks, key=lambda item: item.chunk_id))
+        # 중단된 동일 snapshot generation은 검증한 뒤 이미 저장된 batch를
+        # 재사용한다. registry가 가리키지 않는 staging collection이므로 부분
+        # 데이터가 검색에 노출되지는 않는다.
+        self._validate_collection(
+            collection,
+            source_type,
+            expected_chunking_version=resolved_version,
+            expected_fingerprint=fingerprint,
+        )
+        metadata = collection.metadata or {}
+        if any(
+            metadata.get(key) != value
+            for key, value in expected_generation_metadata.items()
+        ):
+            raise CollectionFingerprintMismatch(
+                "existing staging generation differs from the incoming snapshot"
+            )
+        staged_records = self._read_records(collection)
+        desired_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+        for chunk_id, (document, record_metadata) in staged_records.items():
+            chunk = desired_by_id.get(chunk_id)
+            if chunk is None:
+                raise CorruptVectorRecordError(
+                    "staging generation contains an unexpected chunk"
+                )
+            expected_record = self._record_metadata(chunk, snapshot_id)
+            if (
+                document != chunk.text
+                or record_metadata.get("snapshot_id") != snapshot_id
+                or record_metadata.get("chunk_json")
+                != expected_record["chunk_json"]
+            ):
+                raise CorruptVectorRecordError(
+                    "staging generation contains a mismatched chunk"
+                )
+
+        ordered_chunks = tuple(
+            chunk
+            for chunk in sorted(chunks, key=lambda item: item.chunk_id)
+            if chunk.chunk_id not in staged_records
+        )
         try:
             for start in range(0, len(ordered_chunks), self.config.batch_size):
                 batch = ordered_chunks[start : start + self.config.batch_size]
@@ -1024,10 +1117,8 @@ class ChromaVectorStore:
                 len(chunks),
             )
         except Exception:
-            try:
-                self._discard_inactive_generation(source_type, snapshot_digest)
-            except VectorStoreError:
-                pass
+            # 재실행 시 위 검증을 통과한 batch부터 이어갈 수 있도록 incomplete
+            # generation을 남긴다. active registry는 아직 바뀌지 않았다.
             raise
 
         promoted = self._active_generation(source_type)
@@ -1129,6 +1220,16 @@ class ChromaVectorStore:
                 return False
         if not subsidy_regions_match(chunk.metadata, search_filter.region_names):
             return False
+        if search_filter.age is not None:
+            age_start = chunk.metadata.get("age_start")
+            age_end = chunk.metadata.get("age_end")
+            has_age_condition = isinstance(age_start, int) or isinstance(age_end, int)
+            if not has_age_condition and not search_filter.allow_missing_age:
+                return False
+            if isinstance(age_start, int) and search_filter.age < age_start:
+                return False
+            if isinstance(age_end, int) and search_filter.age > age_end:
+                return False
         for key, expected in search_filter.metadata_equals.items():
             actual = {
                 "doc_id": chunk.doc_id,

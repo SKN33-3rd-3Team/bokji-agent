@@ -25,6 +25,7 @@ from rag_design.contracts import SourceType
 from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
 
 from ..llm_gateway import redact_sensitive_text
+from ..slot_schema import resolve_filter_slots
 from ..state import GraphState
 
 DEFAULT_TOP_K = 5
@@ -108,7 +109,15 @@ def search_policies(
 
     query = _build_query(slots, state.get("initial_user_input"))
     region_names = tuple(slots.get("region_names") or ())
-    search_filter = VectorSearchFilter(region_names=region_names, as_of=as_of)
+    filter_plan = resolve_filter_slots(slots)
+    age_condition = filter_plan["hard"].get("birth_date")
+    age = age_condition.get("age") if age_condition else None
+    search_filter = VectorSearchFilter(
+        region_names=region_names,
+        as_of=as_of,
+        age=age if isinstance(age, int) else None,
+        allow_missing_age=True,
+    )
 
     results = store.search(
         SourceType.SUBSIDY,

@@ -1,7 +1,7 @@
 """법령/행정규칙/자치법규 파이프라인을 순서대로 한 번에 실행한다.
 
     1. build_index  - 전체 목록(이름+ID, 본문 없음) 캐싱 (API 호출, 오래 걸림)
-    2. filter_index - 로컬 키워드 필터링 (API 호출 없음, 빠름)
+    2. filter_index - 공식 ID 기준 중복 제거 (API 호출 없음, 빠름)
     3. filtered_to_document - rag_design.contracts.Document 스키마로 변환
 
 본문(lawService.do) API는 쓰지 않는다 — 목록조회 API 필드만 쓴다(2번 단계
@@ -36,12 +36,12 @@ if str(_SRC_DIR) not in sys.path:
 
 from rag_chatbot.collectors.law.build_index import PROGRESS_EVERY
 from rag_chatbot.collectors.law.law import TARGET_LABEL, TARGET_ORDER, list_all
-from rag_chatbot.collectors.law.filter_index import ORDIN_CAP, filter_target, load_index
+from rag_chatbot.collectors.law.filter_index import filter_target, load_index
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="법령/행정규칙/자치법규 파이프라인 (목록 인덱싱 -> 로컬 필터링 -> Document 변환)"
+        description="법령/행정규칙/자치법규 파이프라인 (목록 인덱싱 -> ID 중복 제거 -> Document 변환)"
     )
     parser.add_argument(
         "--index-dir", default=str(_REPO_ROOT / "data/raw/law_index")
@@ -88,15 +88,16 @@ def step1_build_index(index_dir: Path) -> None:
 
 
 def step2_filter(index_dir: Path, out_path: Path) -> int:
-    print("=== 2/3 로컬 키워드 필터링 ===", file=sys.stderr)
+    print("=== 2/3 공식 ID 기준 중복 제거 ===", file=sys.stderr)
     import json
 
     all_matched: list[dict] = []
-    for target, cap in (("law", None), ("admrul", None), ("ordin", ORDIN_CAP)):
+    for target in ("law", "admrul", "ordin"):
         items = load_index(index_dir, target)
-        matched = filter_target(items, target, cap)
+        matched = filter_target(items, target)
         print(
-            f"[run_pipeline] {target}: 전체 {len(items)}건 중 {len(matched)}건 매칭",
+            f"[run_pipeline] {target}: 전체 {len(items)}건 중 "
+            f"ID 중복 제거 후 {len(matched)}건",
             file=sys.stderr,
         )
         all_matched.extend(matched)

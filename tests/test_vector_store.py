@@ -92,11 +92,21 @@ class EmbeddingProviderTests(unittest.TestCase):
             ):
                 provider.embed_query("복지 서비스")
 
+    def test_korean_provider_rejects_invalid_worker_count(self) -> None:
+        for value in (0, -1, True, 1.5):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "workers"):
+                SentenceTransformerKoreanProvider(workers=value)
+
     def test_vector_region_filter_requires_canonical_names(self) -> None:
         with self.assertRaisesRegex(ValueError, "region names"):
             VectorSearchFilter(region_names=("1100000000",))
         with self.assertRaisesRegex(ValueError, "duplicates"):
             VectorSearchFilter(region_names=("서울특별시", "서울특별시"))
+
+    def test_vector_age_filter_requires_plausible_integer(self) -> None:
+        for value in (-1, 121, True, 65.0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "age"):
+                VectorSearchFilter(age=value)
 
     def test_vector_cli_accepts_canonical_region_names(self) -> None:
         args = build_parser().parse_args(
@@ -405,9 +415,61 @@ class ChromaVectorStoreTests(unittest.TestCase):
             synced.collection_fingerprint,
         )
 
-        incompatible = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
-        with self.assertRaises(CollectionFingerprintMismatch):
-            incompatible.collection_fingerprint(SourceType.SUBSIDY)
+        other_provider = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
+        with self.assertRaises(CollectionNotFoundError):
+            other_provider.collection_fingerprint(SourceType.SUBSIDY)
+        other = other_provider.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="subsidy-32",
+        )
+        self.assertNotEqual(other.collection_fingerprint, synced.collection_fingerprint)
+        self.assertEqual(
+            store.collection_fingerprint(SourceType.SUBSIDY),
+            synced.collection_fingerprint,
+        )
+
+    def test_mismatched_legacy_registry_is_missing_for_active_provider(self) -> None:
+        hash_store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        hash_store._client.get_or_create_collection(
+            name=hash_store._legacy_registry_name(SourceType.LAW),
+            metadata=hash_store._registry_metadata(SourceType.LAW),
+            embedding_function=None,
+        )
+
+        korean_dimension_store = ChromaVectorStore(
+            HashEmbeddingProvider(32), self.config
+        )
+        with self.assertRaises(CollectionNotFoundError):
+            korean_dimension_store.collection_fingerprint(SourceType.LAW)
+
+    def test_age_filter_rejects_explicit_mismatch_and_keeps_match(self) -> None:
+        chunks = tuple(
+            replace(
+                chunk,
+                metadata={**chunk.metadata, "age_start": 65, "age_end": 120},
+            )
+            for chunk in self.subsidy_chunks
+        )
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        store.sync_snapshot(SourceType.SUBSIDY, chunks, snapshot_id="age-filter")
+
+        rejected = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="too-young",
+            top_k=len(chunks),
+            search_filter=VectorSearchFilter(age=40),
+        )
+        accepted = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="old-enough",
+            top_k=len(chunks),
+            search_filter=VectorSearchFilter(age=70),
+        )
+        self.assertEqual(rejected, ())
+        self.assertEqual(len(accepted), len(chunks))
 
     def test_chunking_version_mismatch_is_rejected(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
@@ -613,6 +675,36 @@ class ChromaVectorStoreTests(unittest.TestCase):
         )
         self.assertEqual(promoted.total_count, len(self.subsidy_chunks))
         self.assertEqual(len(visible_new), len(self.subsidy_chunks))
+
+    def test_incomplete_generation_resumes_from_verified_batches(self) -> None:
+        resume_config = VectorStoreConfig(
+            persist_directory=self.persist_directory,
+            collection_prefix="resume_rag",
+            batch_size=1,
+        )
+        provider = FailingBatchEmbeddingProvider()
+        provider.fail_on_document_call = 2
+        store = ChromaVectorStore(provider, resume_config)
+
+        with self.assertRaisesRegex(EmbeddingProviderError, "injected batch failure"):
+            store.sync_snapshot(
+                SourceType.SUBSIDY,
+                self.subsidy_chunks,
+                snapshot_id="resume-001",
+            )
+        calls_after_failure = provider.document_calls
+        provider.fail_on_document_call = None
+
+        result = store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="resume-001",
+        )
+        self.assertEqual(result.total_count, len(self.subsidy_chunks))
+        self.assertEqual(
+            provider.document_calls,
+            calls_after_failure + len(self.subsidy_chunks) - 1,
+        )
 
 
 if __name__ == "__main__":

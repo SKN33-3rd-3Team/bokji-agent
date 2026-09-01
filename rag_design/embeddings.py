@@ -90,16 +90,21 @@ class SentenceTransformerKoreanProvider:
         dimension: int = 768,
         device: str = "cpu",
         local_files_only: bool = False,
+        workers: int = 1,
     ) -> None:
         if not model_name.strip():
             raise ValueError("model_name must be non-empty")
         if dimension < 1:
             raise ValueError("embedding dimension must be positive")
+        if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+            raise ValueError("workers must be a positive integer")
         self.model_name = model_name
         self._dimension = dimension
         self.device = device
         self.local_files_only = local_files_only
+        self.workers = workers
         self._model = None
+        self._pool = None
 
     @property
     def provider_id(self) -> str:
@@ -129,12 +134,12 @@ class SentenceTransformerKoreanProvider:
             raise EmbeddingProviderError(
                 f"failed to load embedding model {self.model_name!r}"
             ) from exc
-        # sentence-transformers 는 이 메서드를 get_embedding_dimension 으로
-        # 개명하는 중이다(구명은 FutureWarning). 새 이름이 있으면 그걸 쓴다.
-        _dim_getter = getattr(
-            self._model, "get_embedding_dimension", None
-        ) or self._model.get_sentence_embedding_dimension
-        actual_dimension = _dim_getter()
+        dimension_reader = getattr(self._model, "get_embedding_dimension", None)
+        actual_dimension = (
+            dimension_reader()
+            if callable(dimension_reader)
+            else self._model.get_sentence_embedding_dimension()
+        )
         if actual_dimension != self.dimension:
             self._model = None
             raise EmbeddingProviderError(
@@ -147,11 +152,17 @@ class SentenceTransformerKoreanProvider:
         if not texts or any(not isinstance(text, str) or not text.strip() for text in texts):
             raise EmbeddingProviderError("embedding texts must be non-empty strings")
         try:
-            values = self._load().encode(
+            model = self._load()
+            if self.workers > 1 and self._pool is None:
+                self._pool = model.start_multi_process_pool(
+                    [self.device] * self.workers
+                )
+            values = model.encode(
                 list(texts),
                 normalize_embeddings=True,
                 convert_to_numpy=True,
                 show_progress_bar=False,
+                pool=self._pool,
             )
         except EmbeddingProviderError:
             raise

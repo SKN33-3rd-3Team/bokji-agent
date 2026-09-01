@@ -140,9 +140,11 @@ class ConfigurableTopKTests(unittest.TestCase):
     class _Store:
         def __init__(self) -> None:
             self.top_k = None
+            self.search_filter = None
 
         def search(self, source_type, query, *, query_id, top_k, search_filter):
             self.top_k = top_k
+            self.search_filter = search_filter
             return ()
 
     def _state(self, top_k=7):
@@ -167,6 +169,35 @@ class ConfigurableTopKTests(unittest.TestCase):
         for value in (0, 21, True, "5"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 search_policies(self._state(value), self._Store())
+
+    def test_self_age_is_connected_to_search_filter(self) -> None:
+        store = self._Store()
+        state = self._state()
+        state["slots"].update(
+            {
+                "birth_date": "1960-01-01",
+                "age": 66,
+                "age_year_based": 66,
+                "age_subject": "self",
+            }
+        )
+        search_policies(state, store)
+        self.assertEqual(store.search_filter.age, 66)
+        self.assertTrue(store.search_filter.allow_missing_age)
+
+    def test_non_self_age_is_not_used_as_search_filter(self) -> None:
+        store = self._Store()
+        state = self._state()
+        state["slots"].update(
+            {
+                "birth_date": "2020-01-01",
+                "age": 6,
+                "age_year_based": 6,
+                "age_subject": "child",
+            }
+        )
+        search_policies(state, store)
+        self.assertIsNone(store.search_filter.age)
 
 
 if __name__ == "__main__":

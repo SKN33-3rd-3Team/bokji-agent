@@ -48,7 +48,7 @@ python -m rag_chatbot.collectors.gov_24 -n 50
 # 1. 목록조회 (전체 정책 목록)
 PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.gov24 list
 
-# 2. 상세조회 + 지원조건조회 (서비스ID당 1건씩, 병렬 처리)
+# 2. 상세조회 + 지원조건조회 (전체 페이지 순회)
 PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.gov24 detail
 PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.gov24 conditions
 
@@ -60,9 +60,8 @@ PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.merge_gov24 50
 PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 ```
 
-`detail`/`conditions`는 실패한 서비스ID가 있어도 그대로 다시 실행하면 된다.
-이미 성공한 서비스ID는 재호출하지 않고, 실패했던 것만 다시 시도한다(아래
-"재시도·재실행" 참고).
+`detail`/`conditions` 전체 실행은 페이지 단위로 다시 받아 원본 파일을
+갱신한다. 실패 ID 전용 명령은 `cond[서비스ID::EQ]` 단건 필터를 사용한다.
 
 ## 산출물
 
@@ -71,15 +70,16 @@ PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 | `data/raw/gov24_*.json` | API 원본 응답 | 아니오 (재생성 가능) |
 | `data/raw/gov24_*_failed_ids.json` | 상세조회/지원조건조회 중 API 호출이 끝내 실패한 서비스ID 목록 | 아니오 (재생성 가능) |
 | `data/raw/gov24_merged.json` | 서비스ID 기준 병합 | 아니오 (재생성 가능) |
-| `data/processed/subsidy_documents.jsonl` | `Document` 스키마 전체(10,957건) | 아니오 (재생성 가능) |
+| `data/processed/subsidy_documents.jsonl` | `Document` 스키마 전체(현재 10,968건) | 아니오 (재생성 가능) |
 | `data/processed/subsidy_manifest.json` | 매니페스트 + Document Card | **예** |
 | `data/processed/subsidy_parse_warnings.json` | 제외된 항목·형식 경고 전체 목록 | 아니오 (재생성 가능) |
 | `data/samples/subsidy_documents_sample.jsonl` | 형식 확인용 샘플 5건 | **예** |
 
 ## 알아둘 것
 
-- `serviceDetail`/`supportConditions`는 서비스ID당 1번씩 호출해야 해서 시간이
-  걸린다(약 10,957건 × 2). `MAX_WORKERS`(기본 6)로 동시 요청 수를 조절한다.
+- `serviceDetail`/`supportConditions` 전체 수집은 `page`/`perPage`로 순회한다.
+  단건 재시도만 `cond[서비스ID::EQ]`를 사용한다. `servId`는 서버가 무시해
+  첫 페이지가 반복되므로 사용하지 않는다.
 - `Document.source_url`은 반드시 공식 도메인(`data.go.kr`/`gov.kr`/`law.go.kr`)
   이어야 해서, "온라인신청사이트URL"이 아니라 "상세조회URL"(gov.kr)을 쓴다.
   공개 URL은 공통 안전 정책으로 HTTPS canonical URL로 만들며 인증 쿼리와

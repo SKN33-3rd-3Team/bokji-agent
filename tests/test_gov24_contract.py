@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import requests
 
@@ -17,7 +17,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from rag_chatbot.collectors.gov_24 import gov24, to_document  # noqa: E402
+from rag_chatbot.collectors.gov_24 import gov24, merge_gov24, to_document  # noqa: E402
 from rag_chatbot.collectors.gov_24.region_utils import (  # noqa: E402
     extract_region,
     load_sigungu_code_table,
@@ -161,6 +161,72 @@ class UrlAndSecretSafetyTests(unittest.TestCase):
         self.assertNotIn(secret, rendered)
         self.assertNotIn(encoded_secret, rendered)
         self.assertIn("[REDACTED]", rendered)
+
+
+class Gov24CollectionShapeTests(unittest.TestCase):
+    def test_single_service_request_uses_odcloud_condition_filter(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": [{"서비스ID": "service-1"}]}
+        with (
+            patch.object(gov24, "GOV24_SERVICE_KEY", "secret"),
+            patch.object(gov24.requests, "get", return_value=response) as get_mock,
+        ):
+            service_id, row, error = gov24._fetch_one(
+                "conditions", gov24.CONDITIONS_URL, "service-1"
+            )
+
+        self.assertEqual(service_id, "service-1")
+        self.assertEqual(row, {"서비스ID": "service-1"})
+        self.assertIsNone(error)
+        params = get_mock.call_args.kwargs["params"]
+        self.assertEqual(params["cond[서비스ID::EQ]"], "service-1")
+        self.assertNotIn("servId", params)
+
+    def test_merge_flattens_every_row_in_wrapped_response(self) -> None:
+        wrapped = [{"data": [{"서비스ID": "a"}, {"서비스ID": "b"}]}]
+        self.assertEqual(
+            merge_gov24.flatten_records(wrapped),
+            [{"서비스ID": "a"}, {"서비스ID": "b"}],
+        )
+
+
+class AgeMetadataExtractionTests(unittest.TestCase):
+    def test_api_age_takes_precedence_and_accepts_numeric_strings(self) -> None:
+        item = {
+            "JA0110": "65",
+            "JA0111": "120",
+            "지원대상": "만 18세 이상",
+        }
+        self.assertEqual(
+            to_document.extract_age_metadata(item),
+            (65, 120, "support_conditions_api"),
+        )
+
+    def test_explicit_text_minimum_maximum_and_range_are_extracted(self) -> None:
+        cases = (
+            ({"지원대상": "만 60세 이상인 주민"}, (60, None)),
+            ({"지원대상": "만 18세 미만 아동"}, (None, 17)),
+            ({"선정기준": "만 19세 이상 34세 이하 청년"}, (19, 34)),
+            ({"지원대상": "3~5세 유아"}, (3, 5)),
+        )
+        for item, expected in cases:
+            with self.subTest(item=item):
+                self.assertEqual(
+                    to_document.extract_age_metadata(item),
+                    (*expected, "support_target_text"),
+                )
+
+    def test_ambiguous_multiple_ranges_and_labels_are_not_inferred(self) -> None:
+        for item in (
+            {"지원대상": "청년 또는 노인"},
+            {"지원대상": "만 18세 미만 아동\n만 65세 이상 노인"},
+            {"지원대상": "2000년 이후 출생자"},
+            {"지원대상": "만 18세 미만 자녀가 있는 부모"},
+            {"지원대상": "6-11세 자녀-아버지"},
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(to_document.extract_age_metadata(item), (None, None, None))
 
 
 class PackageEntrypointTests(unittest.TestCase):

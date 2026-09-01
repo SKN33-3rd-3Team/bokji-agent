@@ -5,10 +5,9 @@
     2. serviceDetail (상세조회) — 1에서 모은 서비스ID마다 상세정보를 하나씩 조회한다.
     3. supportConditions (지원조건조회) — 마찬가지로 서비스ID마다 JA코드 조건을 조회한다.
 
-2, 3번은 서비스ID 하나당 결과 하나라서, 여러 개를 동시에(병렬로) 요청해서
-속도를 낸다. 진행 상황은 실시간으로 출력되고(flush=True), 일정 건수마다
-중간 저장(체크포인트)도 하기 때문에 중간에 중단돼도 처음부터 다시 하지
-않아도 된다.
+2, 3번 API도 목록형 응답이다. 전체 수집은 ``page``/``perPage``로 순회해
+호출량을 줄이고, 실패 ID 재시도처럼 단건 조회가 필요할 때만
+``cond[서비스ID::EQ]`` 필터를 사용한다.
 
 재시도·재실행 정책:
     - 요청 하나가 실패하면(RequestException) 지수 백오프로 최대
@@ -28,9 +27,9 @@
     python -m rag_chatbot.collectors.gov_24.gov24 all
     python -m rag_chatbot.collectors.gov_24.gov24 detail 50
 
-주의: BASE_URL과 파라미터 이름(serviceKey/page/perPage/servId 등)은 공공데이터
-API에서 흔히 쓰이는 패턴을 예시로 적어둔 것이다. data.go.kr 활용가이드 문서를
-보고 실제 값으로 꼭 확인해야 한다. (지난 실행에서 실제로 이 값들이 맞았다.)
+주의: serviceDetail/supportConditions에 ``servId``를 보내면 필터로 인식되지
+않고 첫 페이지가 반복 반환된다. 단건 필터는 공공데이터포털 표준 조건식인
+``cond[서비스ID::EQ]``를 사용한다.
 """
 
 import concurrent.futures
@@ -73,6 +72,7 @@ CHECKPOINT_EVERY = 200     # 이만큼 처리할 때마다 중간 저장
 PROGRESS_EVERY = 20        # 이만큼 처리할 때마다 진행상황 출력
 MAX_RETRIES = 3            # 요청 하나당 최대 시도 횟수(최초 시도 포함)
 BACKOFF_BASE_SEC = 1.0     # 지수 백오프 기준 시간(초)
+DATASET_PAGE_SIZE = 1000   # 실제 API에서 확인한 안전한 페이지 크기
 
 _SENSITIVE_QUERY_VALUE = re.compile(
     r"(?i)((?:servicekey|api[_-]?key|token|authorization)\s*(?:=|%3d)\s*)"
@@ -188,20 +188,30 @@ def _fetch_one(kind: str, url: str, service_id: str) -> tuple[str, dict | None, 
     """
     params = {
         "serviceKey": GOV24_SERVICE_KEY,
-        # TODO: 활용가이드에서 실제 파라미터 이름 확인 (servId, serviceId 등일 수 있음)
-        "servId": service_id,
+        "cond[서비스ID::EQ]": service_id,
     }
     last_err: str | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
-            return service_id, response.json(), None
+            payload = response.json()
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(rows, list) or len(rows) != 1:
+                return (
+                    service_id,
+                    None,
+                    f"unexpected response row count: {len(rows) if isinstance(rows, list) else 'invalid'}",
+                )
+            row = rows[0]
+            if not isinstance(row, dict) or row.get("서비스ID") != service_id:
+                return service_id, None, "response service ID does not match request"
+            return service_id, row, None
         except requests.exceptions.RequestException as e:
             last_err = _safe_request_error(e)
             log(
                 f"[{kind}] 오류 발생(시도 {attempt}/{MAX_RETRIES}) "
-                f"- 구간: {kind}(servId={service_id}), API: {url} - {last_err}"
+                f"- 구간: {kind}(서비스ID={service_id}), API: {url} - {last_err}"
             )
             if attempt < MAX_RETRIES:
                 sleep_sec = BACKOFF_BASE_SEC * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
@@ -221,6 +231,89 @@ def _service_id_of(item: dict) -> str | None:
     if isinstance(inner, dict) and inner.get("서비스ID"):
         return inner.get("서비스ID")
     return item.get("서비스ID")
+
+
+def fetch_dataset_all(
+    kind: str,
+    url: str,
+    out_path: str,
+    *,
+    per_page: int = DATASET_PAGE_SIZE,
+) -> list[dict]:
+    """목록형 detail/conditions API를 페이지로 전부 수집해 평탄화한다.
+
+    예전 구현은 서비스ID마다 ``servId``를 보냈지만 서버가 그 파라미터를
+    무시해 같은 첫 페이지를 반복 반환했다. 페이지 수집은 전체 데이터 기준
+    수십 회 호출이면 끝나고, 응답의 ``data`` 배열을 즉시 개별 레코드로
+    평탄화하므로 병합 계층에 wrapper가 전달되지 않는다.
+    """
+
+    _require_key()
+    if per_page < 1:
+        raise ValueError("per_page must be positive")
+
+    rows_by_id: dict[str, dict] = {}
+    page = 1
+    total_count: int | None = None
+    while total_count is None or len(rows_by_id) < total_count:
+        params = {
+            "serviceKey": GOV24_SERVICE_KEY,
+            "page": page,
+            "perPage": per_page,
+        }
+        last_error: requests.exceptions.RequestException | None = None
+        payload: dict | None = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                candidate = response.json()
+                if not isinstance(candidate, dict):
+                    raise ValueError("API response must be an object")
+                payload = candidate
+                break
+            except (requests.exceptions.RequestException, ValueError) as exc:
+                if isinstance(exc, requests.exceptions.RequestException):
+                    last_error = exc
+                safe_error = _safe_request_error(exc)
+                log(
+                    f"[{kind}] {page}페이지 오류(시도 {attempt}/{MAX_RETRIES}) "
+                    f"- API: {url} - {safe_error}"
+                )
+                if attempt < MAX_RETRIES:
+                    time.sleep(BACKOFF_BASE_SEC * (2 ** (attempt - 1)))
+        if payload is None:
+            raise Gov24RequestError(_safe_request_error(last_error or "invalid response"))
+
+        page_rows = payload.get("data")
+        if not isinstance(page_rows, list):
+            raise Gov24RequestError(f"{kind} response data must be a list")
+        if total_count is None:
+            raw_total = payload.get("totalCount")
+            if not isinstance(raw_total, int) or raw_total < 0:
+                raise Gov24RequestError(f"{kind} response totalCount is invalid")
+            total_count = raw_total
+        if not page_rows:
+            break
+
+        for row in page_rows:
+            if not isinstance(row, dict):
+                continue
+            service_id = row.get("서비스ID")
+            if isinstance(service_id, str) and service_id:
+                rows_by_id[service_id] = row
+        save(list(rows_by_id.values()), out_path)
+        log(
+            f"[{kind}] {page}페이지: {len(page_rows)}건 "
+            f"(고유 {len(rows_by_id)}/{total_count}건)"
+        )
+        page += 1
+
+    failed_path = Path(out_path.replace(".json", "_failed_ids.json"))
+    failed_path.write_text("[]", encoding="utf-8")
+    result = list(rows_by_id.values())
+    save(result, out_path)
+    return result
 
 
 def fetch_many(
@@ -345,7 +438,9 @@ def run_detail(limit: int | None = None) -> None:
     if limit:
         ids = ids[:limit]
         log(f"[detail] 테스트 모드: 앞에서 {limit}건만 조회")
-    fetch_many("detail", DETAIL_URL, ids, DETAIL_OUT)
+        fetch_many("detail", DETAIL_URL, ids, DETAIL_OUT, resume=False)
+        return
+    fetch_dataset_all("detail", DETAIL_URL, DETAIL_OUT)
 
 
 def run_conditions(limit: int | None = None) -> None:
@@ -353,7 +448,9 @@ def run_conditions(limit: int | None = None) -> None:
     if limit:
         ids = ids[:limit]
         log(f"[conditions] 테스트 모드: 앞에서 {limit}건만 조회")
-    fetch_many("conditions", CONDITIONS_URL, ids, CONDITIONS_OUT)
+        fetch_many("conditions", CONDITIONS_URL, ids, CONDITIONS_OUT, resume=False)
+        return
+    fetch_dataset_all("conditions", CONDITIONS_URL, CONDITIONS_OUT)
 
 
 def _load_failed_ids(out_path: str) -> list[str]:
