@@ -17,8 +17,10 @@ invoke()만으로 끝까지 검증할 수 있다. 그래서 N1~N3 구간은 구�
 
 from __future__ import annotations
 
+from datetime import datetime
 import pathlib
 import tempfile
+from unittest.mock import patch
 
 from rag_design.embeddings import HashEmbeddingProvider
 from rag_design.vector_store import ChromaVectorStore, VectorStoreConfig
@@ -62,6 +64,17 @@ def test_build_graph_registers_all_n1_to_n14_nodes() -> None:
     node_names = set(graph.get_graph().nodes.keys())
 
     assert _EXPECTED_NODES.issubset(node_names)
+
+
+def test_build_graph_constructs_law_resolver_from_shared_store() -> None:
+    store = _store("law_resolver_wiring_test")
+
+    with patch(
+        "src.rag_chatbot.graph.builder.VectorStoreLawSourceResolver"
+    ) as resolver_type:
+        build_graph(store)
+
+    resolver_type.assert_called_once_with(store)
 
 
 def test_build_graph_succeeds_without_llm_client() -> None:
@@ -180,6 +193,23 @@ def test_run_graph_rejects_invalid_policy_top_k() -> None:
         except ValueError:
             continue
         raise AssertionError(f"invalid top_k was accepted: {value!r}")
+
+
+def test_run_graph_rejects_provided_non_date_as_of() -> None:
+    graph = build_graph(_store("invalid-as-of-test"))
+
+    for value in ("", 0, False, "2026-01-01", datetime(2026, 1, 1)):
+        try:
+            run_graph(
+                graph,
+                user_input="",
+                session_id=f"session-invalid-as-of-{value!r}",
+                as_of=value,
+            )
+        except ValueError as exc:
+            assert str(exc) == "as_of must be a date"
+            continue
+        raise AssertionError(f"invalid as_of was accepted: {value!r}")
 
 
 def test_run_graph_sessions_are_isolated() -> None:

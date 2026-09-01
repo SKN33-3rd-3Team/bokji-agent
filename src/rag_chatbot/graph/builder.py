@@ -22,13 +22,10 @@ Baseline이 안정적으로 동작한 뒤 검토"). 또한 ``MemorySaver``는 �
 중이던 세션은 사라진다(알려진 한계, 후속 작업에서 영속 체크포인터로 교체
 검토 필요).
 
-알려진 한계 (숨기지 않음): N4(policy_search)는 아직 이번에 새로 생긴
-프로필 하드 필터 슬롯(income_bracket, birth_date 기반 age,
-employment_status 등)을 ``slot_schema.resolve_filter_slots()``로 걸러
-검색 필터에 반영하지 않는다. N2가 슬롯을 다 모으긴 하지만, N4가 실제로
-그 필터를 쓰도록 잇는 작업은 이번 "노드 조립" 범위에서 의도적으로
-제외했다(N4는 이미 병합·테스트된 별도 담당 파일이라 별도 이슈로 처리하는
-편이 안전하다).
+N4(policy_search)는 ``slot_schema.resolve_filter_slots()``를 유일한 프로필
+조건 경로로 쓴다. 지역·연령은 기존 Chroma metadata 검색에, 성별·소득·취업·
+장애의 명확한 조건은 정부24 raw sidecar 후처리에 반영한다. raw 조건이 없거나
+의미가 불명확한 서비스는 후보를 유지한다(fail-open).
 """
 
 from __future__ import annotations
@@ -53,6 +50,7 @@ from .nodes.eligibility_verdict import determine_eligibility
 from .nodes.evidence_gate import evaluate_evidence, route_evidence_gate
 from .nodes.final_verification import route_final_verification, verify_final_answer
 from .nodes.general_law_reference_search import search_general_law_references
+from .nodes.law_source_resolver import VectorStoreLawSourceResolver
 from .nodes.policy_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, search_policies
 from .nodes.request_missing_slots import request_missing_slot_input
 from .nodes.result_assembly import assemble_result
@@ -64,6 +62,7 @@ from .nodes.slot_completeness_gate import (
 from .nodes.slot_parser import parse_slots
 from .nodes.targeted_law_search import search_targeted_laws
 from ..timing import timed_node
+from .policy_conditions import SupportConditionsIndex
 from .state import GraphState
 
 _SlotGateRoute = Literal["sufficient", "general_law", "request_input"]
@@ -139,10 +138,12 @@ def build_graph(
     store: ChromaVectorStore,
     *,
     llm_client: LLMClient | None = None,
+    support_conditions: SupportConditionsIndex | None = None,
 ) -> Any:
     """N1~N14를 다이어그램 간선대로 배선한 컴파일된 LangGraph 그래프를 만든다.
 
-    store: N4/N6(재시도)/N8/N9/N10/N11/N12가 공유하는 ChromaVectorStore.
+    store: N4/N5(법령명 resolver)/N6(재시도)/N8/N9/N10/N11/N12가 공유하는
+    ChromaVectorStore.
     임베딩 모델 재로딩을 피하려고 그래프 조립 시 한 번만 만들어 여기로
     주입한다(각 노드 docstring에 이미 명시된 관례).
 
@@ -153,6 +154,9 @@ def build_graph(
     실행된다. 테스트에서는 ``src.rag_chatbot.llm.FakeLLMClient`` /
     ``FailingLLMClient``로 대체할 수 있다.
 
+    support_conditions: N4가 semantic 후보를 후처리할 때 쓰는 정부24 raw
+    지원조건 index. None이면 모든 후보를 유지한다.
+
     반환된 그래프는 ``MemorySaver`` 체크포인터로 컴파일되므로, N3에서
     인터럽트가 걸린 세션을 재개하려면(``resume_graph``) 첫 호출
     (``run_graph``)과 같은 컴파일된 그래프 인스턴스를 계속 재사용해야 한다
@@ -160,7 +164,12 @@ def build_graph(
     부르면 이전 인터럽트 상태를 잃는다.
     """
 
-    extractor = LLMClaimExtractor(llm_client) if llm_client is not None else RuleBasedClaimExtractor()
+    extractor = (
+        LLMClaimExtractor(llm_client)
+        if llm_client is not None
+        else RuleBasedClaimExtractor()
+    )
+    law_resolver = VectorStoreLawSourceResolver(store)
 
     graph: StateGraph = StateGraph(GraphState)
 
@@ -171,8 +180,28 @@ def build_graph(
     graph.add_node("request_missing_slots", timed_node("request_missing_slots", _await_missing_slot_input))
 
     # --- N4~N14: 기존 정책 검색 ~ 최종 검증 --------------------------------
-    graph.add_node("policy_search", timed_node("policy_search", functools.partial(search_policies, store=store)))
-    graph.add_node("claim_plan", timed_node("claim_plan", functools.partial(plan_claims, extractor=extractor)))
+    graph.add_node(
+        "policy_search",
+        timed_node(
+            "policy_search",
+            functools.partial(
+                search_policies,
+                store=store,
+                support_conditions=support_conditions,
+            ),
+        ),
+    )
+    graph.add_node(
+        "claim_plan",
+        timed_node(
+            "claim_plan",
+            functools.partial(
+                plan_claims,
+                extractor=extractor,
+                law_resolver=law_resolver,
+            ),
+        ),
+    )
     graph.add_node("document_verification", timed_node("document_verification", functools.partial(verify_official_documents, store=store))
     )
     graph.add_node("evidence_gate", timed_node("evidence_gate", evaluate_evidence))
@@ -288,11 +317,13 @@ def run_graph(
         raise ValueError("top_k must be an integer")
     if not MIN_TOP_K <= top_k <= MAX_TOP_K:
         raise ValueError(f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}")
+    if as_of is not None and type(as_of) is not _date:
+        raise ValueError("as_of must be a date")
 
     initial_state: GraphState = {
         "query_id": session_id,
         "policy_top_k": top_k,
-        "as_of": as_of or _date.today(),
+        "as_of": as_of if as_of is not None else _date.today(),
         "user_input": user_input,
         "slots": dict(slots) if slots else {},
         "slot_ask_counts": {},

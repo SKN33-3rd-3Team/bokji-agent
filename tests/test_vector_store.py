@@ -98,6 +98,11 @@ class EmbeddingProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicates"):
             VectorSearchFilter(region_names=("서울특별시", "서울특별시"))
 
+    def test_vector_age_filter_requires_plausible_integer(self) -> None:
+        for value in (-1, 121, True, 65.0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "age"):
+                VectorSearchFilter(age=value)
+
     def test_vector_cli_accepts_canonical_region_names(self) -> None:
         args = build_parser().parse_args(
             [
@@ -285,6 +290,45 @@ class ChromaVectorStoreTests(unittest.TestCase):
                 )
                 self.assertEqual(chunk.citation_locator, "기본정보")
 
+    def test_exact_metadata_lookup_reads_every_page_without_query_embedding(self) -> None:
+        provider = CountingHashEmbeddingProvider()
+        store = ChromaVectorStore(provider, self.config)
+        synced = store.sync_snapshot(
+            SourceType.LAW,
+            self.law_chunks,
+            snapshot_id="legal-exact-lookup-001",
+        )
+        store._READ_RECORDS_BATCH_SIZE = 1
+
+        with patch.object(
+            provider,
+            "embed_query",
+            side_effect=AssertionError("exact lookup must not embed a query"),
+        ):
+            all_legal = store.get_chunks_by_metadata(
+                SourceType.LAW,
+                metadata_equals={"content_level": "metadata_only"},
+                expected_collection_fingerprint=synced.collection_fingerprint,
+            )
+            exact = store.get_chunks_by_metadata(
+                SourceType.LAW,
+                metadata_equals={"law_name": self.law.metadata["law_name"]},
+            )
+            missing = store.get_chunks_by_metadata(
+                SourceType.LAW,
+                metadata_equals={"law_name": "존재하지 않는 법령"},
+            )
+
+        self.assertEqual(
+            [chunk.chunk_id for chunk in all_legal],
+            sorted(chunk.chunk_id for chunk in self.law_chunks),
+        )
+        self.assertEqual(exact, chunk_document(self.law))
+        self.assertEqual(missing, ())
+
+        with self.assertRaisesRegex(ValueError, "metadata_equals"):
+            store.get_chunks_by_metadata(SourceType.LAW, metadata_equals={})
+
     def test_vector_rejects_noncanonical_legal_metadata_content(self) -> None:
         provider = CountingHashEmbeddingProvider()
         store = ChromaVectorStore(provider, self.config)
@@ -406,8 +450,105 @@ class ChromaVectorStoreTests(unittest.TestCase):
         )
 
         incompatible = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
-        with self.assertRaises(CollectionFingerprintMismatch):
+        with self.assertRaises(CollectionNotFoundError):
             incompatible.collection_fingerprint(SourceType.SUBSIDY)
+
+    def test_age_filter_rejects_mismatch_and_honors_missing_policy(self) -> None:
+        aged_chunks = tuple(
+            replace(
+                chunk,
+                metadata={
+                    **chunk.metadata,
+                    "age_start": 65,
+                    "age_end": 120,
+                    "age_basis": "international_age",
+                    "age_source": "support_conditions_api",
+                },
+            )
+            for chunk in self.subsidy_chunks
+        )
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        store.sync_snapshot(SourceType.SUBSIDY, aged_chunks, snapshot_id="age-filter")
+
+        rejected = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="too-young",
+            top_k=len(aged_chunks),
+            search_filter=VectorSearchFilter(age=40),
+        )
+        accepted = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="old-enough",
+            top_k=len(aged_chunks),
+            search_filter=VectorSearchFilter(age=70),
+        )
+        self.assertEqual(rejected, ())
+        self.assertEqual(len(accepted), len(aged_chunks))
+
+        store.sync_snapshot(
+            SourceType.SUBSIDY,
+            self.subsidy_chunks,
+            snapshot_id="age-missing",
+        )
+        kept = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="missing-kept",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(age=70),
+        )
+        dropped = store.search(
+            SourceType.SUBSIDY,
+            "유아학비",
+            query_id="missing-dropped",
+            top_k=len(self.subsidy_chunks),
+            search_filter=VectorSearchFilter(age=70, allow_missing_age=False),
+        )
+        self.assertEqual(len(kept), len(self.subsidy_chunks))
+        self.assertEqual(dropped, ())
+
+    def test_provider_registries_coexist_and_matching_legacy_falls_back(self) -> None:
+        legacy_store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        source = SourceType.SUBSIDY
+        legacy_name = legacy_store._legacy_registry_name(source)
+        legacy_store._client.get_or_create_collection(
+            name=legacy_name,
+            metadata=legacy_store._registry_metadata(source),
+            embedding_function=None,
+        )
+        legacy_sync = legacy_store.sync_snapshot(
+            source, self.subsidy_chunks, snapshot_id="legacy-hash-64"
+        )
+        self.assertEqual(legacy_store._get_registry(source).name, legacy_name)
+
+        qualified_store = ChromaVectorStore(HashEmbeddingProvider(32), self.config)
+        qualified_sync = qualified_store.sync_snapshot(
+            source, self.subsidy_chunks, snapshot_id="qualified-hash-32"
+        )
+        qualified_name = qualified_store._registry_name(source)
+        self.assertNotEqual(qualified_name, legacy_name)
+        self.assertEqual(qualified_store._get_registry(source).name, qualified_name)
+        self.assertEqual(
+            qualified_store.collection_fingerprint(source),
+            qualified_sync.collection_fingerprint,
+        )
+        self.assertEqual(
+            legacy_store.collection_fingerprint(source),
+            legacy_sync.collection_fingerprint,
+        )
+
+    def test_korean_registry_names_match_deployed_fingerprints(self) -> None:
+        store = ChromaVectorStore(SentenceTransformerKoreanProvider(), self.config)
+        self.assertEqual(
+            store._registry_name(SourceType.SUBSIDY),
+            "test_rag_subsidy_registry_f5423cb7327c4dcf",
+        )
+        self.assertEqual(
+            store._registry_name(SourceType.LAW),
+            "test_rag_law_registry_57f61b87c3f6cc78",
+        )
 
     def test_chunking_version_mismatch_is_rejected(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)

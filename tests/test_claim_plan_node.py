@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -8,7 +9,12 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from rag_design.chunking import chunk_document
-from rag_design.contracts import Document, RetrievedChunk, SourceType
+from rag_design.contracts import (
+    Document,
+    RetrievedChunk,
+    SourceType,
+    compute_content_hash,
+)
 
 from rag_chatbot.graph.nodes.claim_plan import plan_claims
 from rag_chatbot.graph.nodes.law_source_resolver import LawSourceResolver
@@ -201,6 +207,130 @@ class PlanClaimsNodeTests(unittest.TestCase):
         law_claims = [c for c in update["claim_plan"] if c["claim_type"] == "duplicate"]
         self.assertTrue(law_claims)
         self.assertTrue(all(c["required_law_sources"] == [] for c in law_claims))
+
+    def test_canonical_legal_basis_parts_are_ordered_deduped_and_preferred(self) -> None:
+        source_id = self.subsidy_chunks[0].chunk.metadata["source_id"]
+        base = self.subsidy_chunks[0].chunk
+
+        def legal_basis_chunk(raw_content: str, *, part: int, chunk_id: str):
+            text = f"테스트 정책\n근거법령\n\n{raw_content}"
+            return replace(
+                base,
+                chunk_id=chunk_id,
+                text=text,
+                heading_path=("근거법령",),
+                ordinal=10,
+                citation_locator="근거법령",
+                content_hash=compute_content_hash(text),
+                metadata={
+                    **base.metadata,
+                    "section_type": "legal_basis",
+                    "chunk_part": part,
+                    "chunk_part_count": 2,
+                },
+            )
+
+        canonical = [
+            legal_basis_chunk("A법(제1조)||B법(제2조)", part=0, chunk_id="basis-0"),
+            legal_basis_chunk("B법(제3조)||C법(제4조)", part=1, chunk_id="basis-1"),
+        ]
+        semantic_basis = as_retrieved(
+            legal_basis_chunk("무시법(제1조)", part=0, chunk_id="semantic-basis"),
+            rank=len(self.subsidy_chunks) + 1,
+        )
+        law_index = {
+            "A법": {"law_type": "law", "source_id": "100"},
+            "B법": {"law_type": "law", "source_id": "200"},
+            "C법": {"law_type": "law", "source_id": "300"},
+            "무시법": {"law_type": "law", "source_id": "999"},
+        }
+
+        class RecordingResolver:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def resolve(self, law_name: str):
+                self.calls.append(law_name)
+                return law_index.get(law_name)
+
+        resolver = RecordingResolver()
+        state = {
+            "subsidy_chunks": [*self.subsidy_chunks, semantic_basis],
+            "subsidy_legal_basis_chunks": canonical,
+        }
+
+        update = plan_claims(state, self.extractor, resolver)
+
+        law_claims = [
+            claim
+            for claim in update["claim_plan"]
+            if claim.get("law_check_required")
+        ]
+        self.assertTrue(law_claims)
+        self.assertTrue(
+            all(
+                claim["required_law_sources"]
+                == [
+                    {"law_type": "law", "source_id": "100"},
+                    {"law_type": "law", "source_id": "200"},
+                    {"law_type": "law", "source_id": "300"},
+                ]
+                for claim in law_claims
+            )
+        )
+        self.assertEqual(resolver.calls, ["A법", "B법", "B법", "C법"])
+        self.assertNotIn("무시법", resolver.calls)
+        self.assertTrue(
+            all(policy_id == source_id for policy_id, _ in self.extractor.calls)
+        )
+
+    def test_empty_canonical_legal_basis_does_not_fall_back_to_semantic_chunk(
+        self,
+    ) -> None:
+        base = self.subsidy_chunks[0].chunk
+        text = "테스트 정책\n근거법령\n\n무시법(제1조)"
+        semantic_basis = as_retrieved(
+            replace(
+                base,
+                chunk_id="semantic-basis",
+                text=text,
+                heading_path=("근거법령",),
+                ordinal=10,
+                citation_locator="근거법령",
+                content_hash=compute_content_hash(text),
+                metadata={**base.metadata, "section_type": "legal_basis"},
+            ),
+            rank=len(self.subsidy_chunks) + 1,
+        )
+
+        class RecordingResolver:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def resolve(self, law_name: str):
+                self.calls.append(law_name)
+                return {"law_type": "law", "source_id": "999"}
+
+        resolver = RecordingResolver()
+        update = plan_claims(
+            {
+                "subsidy_chunks": [*self.subsidy_chunks, semantic_basis],
+                "subsidy_legal_basis_chunks": [],
+            },
+            self.extractor,
+            resolver,
+        )
+
+        law_claims = [
+            claim
+            for claim in update["claim_plan"]
+            if claim.get("law_check_required")
+        ]
+        self.assertTrue(law_claims)
+        self.assertTrue(
+            all(claim["required_law_sources"] == [] for claim in law_claims)
+        )
+        self.assertEqual(resolver.calls, [])
 
     def test_policy_id_matches_chunk_source_id(self) -> None:
         """N7 리뷰 피드백: policy_id는 doc_id가 아니라 원본 source_id여야 함."""

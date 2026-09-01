@@ -1,5 +1,5 @@
-"""정책 원문의 "근거법령" 문자열을, 유나님이 수집한 법령 데이터
-(law_documents.jsonl)와 이름으로 매칭해서 {law_type, source_id}로 바꾼다.
+"""정책 원문의 "근거법령" 문자열을 active LAW vector index의 canonical
+metadata와 이름으로 exact 매칭해서 {law_type, source_id}로 바꾼다.
 
 N5(claim_plan.py)가 law_check_required=True인 claim에 required_law_sources를
 채울 때 이걸 쓴다. N5는 정책 데이터만 보고 법령 데이터에 직접 접근하지
@@ -14,10 +14,11 @@ N5(claim_plan.py)가 law_check_required=True인 claim에 required_law_sources를
 
 from __future__ import annotations
 
-import json
 import re
-from pathlib import Path
 from typing import Protocol
+
+from rag_design.contracts import LegalDocumentType, SourceType
+from rag_design.vector_store import ChromaVectorStore
 
 from ..state import RequiredLawSource
 
@@ -49,41 +50,54 @@ class LawSourceResolver(Protocol):
         ...
 
 
-class LawDocumentIndexResolver:
-    """law_documents.jsonl(Document 형식)을 읽어서 이름 -> {law_type, source_id}
-    조회 테이블을 만들고, 그걸로 매칭하는 실제 구현체.
+class VectorStoreLawSourceResolver:
+    """Resolve one exact canonical law name from the active LAW collection."""
 
-    법령명이 정확히 일치하는 것 우선, 없으면 "OO법 시행령"처럼 접미어가
-    붙은 이름이 기준 법령명으로 시작하는 경우도 매칭한다.
-    """
-
-    def __init__(self, law_documents_path: Path) -> None:
-        self._by_exact_name: dict[str, RequiredLawSource] = {}
-        with law_documents_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                doc = json.loads(line)
-                name = doc.get("metadata", {}).get("law_name") or doc.get("title")
-                law_type = doc.get("metadata", {}).get("law_type")
-                source_id = doc.get("source_id")
-                if not name or not law_type or not source_id:
-                    continue
-                self._by_exact_name[name] = {
-                    "law_type": law_type,
-                    "source_id": source_id,
-                }
+    def __init__(self, store: ChromaVectorStore) -> None:
+        self._store = store
 
     def resolve(self, law_name: str) -> RequiredLawSource | None:
-        if law_name in self._by_exact_name:
-            return self._by_exact_name[law_name]
-        # 정확히 안 맞으면, 기준 법령명으로 시작하는 걸 느슨하게 매칭
-        # (예: 정책 원문은 "OO법"만 언급했는데 실제 수집본은 "OO법 시행령"뿐인 경우 등).
-        for name, source in self._by_exact_name.items():
-            if name.startswith(law_name) or law_name.startswith(name):
-                return source
-        return None
+        if (
+            not isinstance(law_name, str)
+            or not law_name
+            or law_name != law_name.strip()
+        ):
+            raise ValueError("law_name must be a normalized non-empty string")
+
+        chunks = self._store.get_chunks_by_metadata(
+            SourceType.LAW,
+            metadata_equals={"law_name": law_name},
+        )
+        pairs: set[tuple[str, str]] = set()
+        for chunk in chunks:
+            metadata = chunk.metadata
+            if (
+                chunk.source_type is not SourceType.LAW
+                or metadata.get("law_name") != law_name
+                or chunk.text.split("\n", 1)[0] != law_name
+            ):
+                raise ValueError("exact law lookup returned a mismatched canonical name")
+            try:
+                law_type = LegalDocumentType(metadata.get("law_type")).value
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "exact law lookup returned an unsupported law_type"
+                ) from exc
+            source_id = metadata.get("source_id")
+            if (
+                not isinstance(source_id, str)
+                or not source_id.isascii()
+                or not source_id.isdigit()
+            ):
+                raise ValueError("exact law lookup returned an invalid source_id")
+            pairs.add((law_type, source_id))
+
+        if not pairs:
+            return None
+        if len(pairs) != 1:
+            raise ValueError("exact law_name maps to multiple source identities")
+        law_type, source_id = next(iter(pairs))
+        return {"law_type": law_type, "source_id": source_id}
 
 
 def resolve_required_law_sources(
@@ -95,8 +109,13 @@ def resolve_required_law_sources(
         return []
     names = parse_legal_basis_names(legal_basis_content)
     resolved: list[RequiredLawSource] = []
+    seen: set[tuple[str, str]] = set()
     for name in names:
         source = resolver.resolve(name)
         if source is not None:
+            pair = (source["law_type"], source["source_id"])
+            if pair in seen:
+                continue
+            seen.add(pair)
             resolved.append(source)
     return resolved

@@ -7,9 +7,14 @@ LLMClaimExtractor) 검증. Issue #25(graph builder 조립)에서 추가했다.
 from __future__ import annotations
 
 import json
+from threading import Barrier
 
 from src.rag_chatbot.graph.nodes import LLMClaimExtractor, RuleBasedClaimExtractor
-from src.rag_chatbot.llm import FailingLLMClient, FakeLLMClient
+from src.rag_chatbot.llm import (
+    FailingLLMClient,
+    FakeLLMClient,
+    RecordingLLMClient,
+)
 
 
 def test_rule_based_extractor_creates_one_claim_per_type_with_verbatim_reason() -> None:
@@ -201,3 +206,31 @@ def test_prefetch_failure_does_not_break_extraction() -> None:
 
     # 규칙 기반 폴백은 claim_type 3개를 만든다.
     assert len(claims) == 3
+
+
+def test_prefetch_workers_keep_the_request_recording_context(monkeypatch) -> None:
+    class ConcurrentClient:
+        def __init__(self):
+            self.barrier = Barrier(2)
+
+        def complete(self, prompt, *, system=None):
+            self.barrier.wait(timeout=5)
+            return json.dumps(
+                {"claims": [{"claim_type": "eligibility", "reasons": ["근거"]}]},
+                ensure_ascii=False,
+            )
+
+    recorder = RecordingLLMClient(ConcurrentClient())
+    extractor = LLMClaimExtractor(recorder)
+    monkeypatch.setenv("LLM_PREFETCH_WORKERS", "2")
+
+    with recorder.request_scope():
+        extractor.prefetch(
+            [("policy-a", "근거 하나"), ("policy-b", "근거 둘")]
+        )
+        summary = recorder.summary()
+
+    assert summary["calls"] == 2
+    assert summary["successes"] == 2
+    assert summary["failures"] == 0
+    assert recorder.summary()["calls"] == 0

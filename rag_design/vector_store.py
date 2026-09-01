@@ -98,6 +98,8 @@ class VectorStoreConfig:
 class VectorSearchFilter:
     as_of: date | None = None
     region_names: tuple[str, ...] = ()
+    age: int | None = None
+    allow_missing_age: bool = True
     metadata_equals: Mapping[str, str | int | float | bool] = field(
         default_factory=dict
     )
@@ -108,6 +110,12 @@ class VectorSearchFilter:
             validate_region_name(name)
         if len(set(self.region_names)) != len(self.region_names):
             raise ValueError("region_names must not contain duplicates")
+        if self.age is not None and (
+            isinstance(self.age, bool)
+            or not isinstance(self.age, int)
+            or not 0 <= self.age <= 120
+        ):
+            raise ValueError("age must be an integer between 0 and 120")
         if self.snapshot_id is not None and not self.snapshot_id.strip():
             raise ValueError("snapshot_id must be non-empty")
         for key, value in self.metadata_equals.items():
@@ -184,6 +192,7 @@ class ChromaVectorStore:
         self.config = config or VectorStoreConfig()
         self.config.persist_directory.mkdir(parents=True, exist_ok=True)
         chromadb, settings_type = _load_chroma()
+        self._not_found_error = chromadb.errors.NotFoundError
         try:
             self._client = chromadb.PersistentClient(
                 path=str(self.config.persist_directory),
@@ -192,8 +201,12 @@ class ChromaVectorStore:
         except Exception as exc:
             raise VectorStoreError("failed to open persistent Chroma storage") from exc
 
-    def _registry_name(self, source_type: SourceType) -> str:
+    def _legacy_registry_name(self, source_type: SourceType) -> str:
         return f"{self.config.collection_prefix}_{source_type.value}_registry"
+
+    def _registry_name(self, source_type: SourceType) -> str:
+        config_id = self._base_fingerprint(source_type)[:16]
+        return f"{self._legacy_registry_name(source_type)}_{config_id}"
 
     def _generation_name(
         self, source_type: SourceType, snapshot_digest: str
@@ -273,7 +286,45 @@ class ChromaVectorStore:
                 "active-generation registry does not match the active configuration"
             )
 
+    def _open_registry(self, name: str, source_type: SourceType) -> Any | None:
+        try:
+            registry = self._client.get_collection(
+                name=name, embedding_function=None
+            )
+        except self._not_found_error:
+            return None
+        except Exception as exc:
+            raise VectorStoreError(
+                "failed to open the active-generation registry"
+            ) from exc
+        self._validate_registry(registry, source_type)
+        return registry
+
+    def _get_registry(self, source_type: SourceType) -> Any:
+        registry = self._open_registry(self._registry_name(source_type), source_type)
+        if registry is not None:
+            return registry
+
+        # Pre-fingerprint registries remain readable only when their complete
+        # metadata matches this provider/configuration. A legacy registry for a
+        # different provider is unrelated, not a fallback candidate.
+        try:
+            registry = self._open_registry(
+                self._legacy_registry_name(source_type), source_type
+            )
+        except CollectionFingerprintMismatch:
+            registry = None
+        if registry is not None:
+            return registry
+        raise CollectionNotFoundError(
+            f"collection for {source_type.value!r} does not exist"
+        )
+
     def _get_or_create_registry(self, source_type: SourceType) -> Any:
+        try:
+            return self._get_registry(source_type)
+        except CollectionNotFoundError:
+            pass
         try:
             registry = self._client.get_or_create_collection(
                 name=self._registry_name(source_type),
@@ -283,18 +334,6 @@ class ChromaVectorStore:
         except Exception as exc:
             raise VectorStoreError(
                 "failed to create or open the active-generation registry"
-            ) from exc
-        self._validate_registry(registry, source_type)
-        return registry
-
-    def _get_registry(self, source_type: SourceType) -> Any:
-        try:
-            registry = self._client.get_collection(
-                name=self._registry_name(source_type), embedding_function=None
-            )
-        except Exception as exc:
-            raise CollectionNotFoundError(
-                f"collection for {source_type.value!r} does not exist"
             ) from exc
         self._validate_registry(registry, source_type)
         return registry
@@ -738,17 +777,23 @@ class ChromaVectorStore:
     _MAX_QUERY_N_RESULTS = 2000
 
     def _read_records(
-        self, collection: Any
+        self,
+        collection: Any,
+        *,
+        where: Mapping[str, Any] | None = None,
     ) -> dict[str, tuple[str, Mapping[str, Any]]]:
         records: dict[str, tuple[str, Mapping[str, Any]]] = {}
         offset = 0
         while True:
             try:
-                result = collection.get(
-                    include=["metadatas", "documents"],
-                    limit=self._READ_RECORDS_BATCH_SIZE,
-                    offset=offset,
-                )
+                kwargs: dict[str, Any] = {
+                    "include": ["metadatas", "documents"],
+                    "limit": self._READ_RECORDS_BATCH_SIZE,
+                    "offset": offset,
+                }
+                if where is not None:
+                    kwargs["where"] = where
+                result = collection.get(**kwargs)
             except Exception as exc:
                 raise VectorStoreError("failed to read a Chroma generation") from exc
             ids = list(result.get("ids") or [])
@@ -1129,6 +1174,16 @@ class ChromaVectorStore:
                 return False
         if not subsidy_regions_match(chunk.metadata, search_filter.region_names):
             return False
+        if search_filter.age is not None:
+            age_start = chunk.metadata.get("age_start")
+            age_end = chunk.metadata.get("age_end")
+            has_age_condition = isinstance(age_start, int) or isinstance(age_end, int)
+            if not has_age_condition and not search_filter.allow_missing_age:
+                return False
+            if isinstance(age_start, int) and search_filter.age < age_start:
+                return False
+            if isinstance(age_end, int) and search_filter.age > age_end:
+                return False
         for key, expected in search_filter.metadata_equals.items():
             actual = {
                 "doc_id": chunk.doc_id,
@@ -1138,6 +1193,40 @@ class ChromaVectorStore:
             if actual != expected:
                 return False
         return True
+
+    def get_chunks_by_metadata(
+        self,
+        source_type: SourceType,
+        *,
+        metadata_equals: Mapping[str, str | int | float | bool],
+        expected_collection_fingerprint: str | None = None,
+    ) -> tuple[Chunk, ...]:
+        """Return every chunk matching exact scalar metadata, without ranking."""
+
+        if not metadata_equals:
+            raise ValueError("metadata_equals must be non-empty")
+        search_filter = VectorSearchFilter(metadata_equals=metadata_equals)
+        collection = self._get_collection(source_type)
+        self._validate_collection(
+            collection,
+            source_type,
+            expected_fingerprint=expected_collection_fingerprint,
+        )
+        records = self._read_records(
+            collection, where=self._query_where(search_filter)
+        )
+        chunks: list[Chunk] = []
+        for record_id in sorted(records):
+            document, metadata = records[record_id]
+            chunk = self._decode_chunk(record_id, document, metadata)
+            if not self._matches_filter(
+                chunk, metadata, source_type, search_filter
+            ):
+                raise CorruptVectorRecordError(
+                    "exact metadata record differs from its serialized Chunk"
+                )
+            chunks.append(chunk)
+        return tuple(chunks)
 
     def search(
         self,

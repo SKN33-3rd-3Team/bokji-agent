@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import json
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from rag_design.chunking import chunk_document
+from rag_design.contracts import Document, SourceType
 from rag_chatbot.graph.nodes.law_source_resolver import (
-    LawDocumentIndexResolver,
+    VectorStoreLawSourceResolver,
     parse_legal_basis_names,
     resolve_required_law_sources,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeLawResolver:
@@ -22,6 +25,24 @@ class FakeLawResolver:
 
     def resolve(self, law_name: str):
         return self._table.get(law_name)
+
+
+class FakeExactLawStore:
+    def __init__(self, chunks=()) -> None:
+        self.chunks = tuple(chunks)
+        self.calls: list[tuple[SourceType, dict]] = []
+
+    def get_chunks_by_metadata(self, source_type, *, metadata_equals, **kwargs):
+        self.calls.append((source_type, dict(metadata_equals)))
+        return tuple(
+            chunk
+            for chunk in self.chunks
+            if chunk.source_type is source_type
+            and all(
+                chunk.metadata.get(key) == value
+                for key, value in metadata_equals.items()
+            )
+        )
 
 
 class ParseLegalBasisNamesTests(unittest.TestCase):
@@ -68,26 +89,96 @@ class ResolveRequiredLawSourcesTests(unittest.TestCase):
         result = resolve_required_law_sources("존재안함법(제1조)", resolver)
         self.assertEqual(result, [])
 
+    def test_duplicate_resolved_pairs_are_collapsed_in_input_order(self) -> None:
+        source = {"law_type": "law", "source_id": "001"}
+        resolver = FakeLawResolver({"A법": source, "A법 시행령": dict(source)})
 
-class LawDocumentIndexResolverTests(unittest.TestCase):
-    def test_loads_real_committed_sample_and_resolves_exact_match(self) -> None:
-        sample_path = REPO_ROOT / "data" / "samples" / "law_documents_sample.jsonl"
-        resolver = LawDocumentIndexResolver(sample_path)
+        result = resolve_required_law_sources("A법||A법 시행령", resolver)
 
-        # 실제 커밋된 샘플에 있는 법령명으로 조회 (유나님이 만든 진짜 데이터)
-        result = resolver.resolve(
-            "10ㆍ29이태원참사 피해자 권리보장과 진상규명 및 재발방지를 위한 특별법"
+        self.assertEqual(result, [source])
+
+
+class VectorStoreLawSourceResolverTests(unittest.TestCase):
+    def setUp(self) -> None:
+        documents = [
+            Document.from_dict(json.loads(line))
+            for line in (FIXTURES / "documents.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        self.chunks = tuple(
+            chunk_document(document)[0]
+            for document in documents
+            if document.source_type is SourceType.LAW
         )
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result["law_type"], "law")
-        self.assertEqual(result["source_id"], "014656")
+    def test_resolves_only_an_exact_canonical_law_name(self) -> None:
+        store = FakeExactLawStore(self.chunks)
+        resolver = VectorStoreLawSourceResolver(store)
+        chunk = self.chunks[0]
+        law_name = chunk.metadata["law_name"]
 
-    def test_unmatched_name_returns_none(self) -> None:
-        sample_path = REPO_ROOT / "data" / "samples" / "law_documents_sample.jsonl"
-        resolver = LawDocumentIndexResolver(sample_path)
+        result = resolver.resolve(law_name)
 
-        self.assertIsNone(resolver.resolve("이런 법은 없습니다"))
+        self.assertEqual(
+            result,
+            {
+                "law_type": chunk.metadata["law_type"],
+                "source_id": chunk.metadata["source_id"],
+            },
+        )
+        self.assertEqual(
+            store.calls,
+            [(SourceType.LAW, {"law_name": law_name})],
+        )
+        self.assertIsNone(resolver.resolve(f"{law_name} 시행령"))
+
+    def test_duplicate_chunks_for_one_pair_collapse(self) -> None:
+        chunk = self.chunks[0]
+        resolver = VectorStoreLawSourceResolver(FakeExactLawStore((chunk, chunk)))
+
+        self.assertEqual(
+            resolver.resolve(chunk.metadata["law_name"]),
+            {
+                "law_type": chunk.metadata["law_type"],
+                "source_id": chunk.metadata["source_id"],
+            },
+        )
+
+    def test_one_exact_name_with_distinct_pairs_fails_closed(self) -> None:
+        first, second = self.chunks[:2]
+        law_name = first.metadata["law_name"]
+        _, _, body = second.text.partition("\n")
+        conflicting = replace(
+            second,
+            text=f"{law_name}\n{body}",
+            metadata={**second.metadata, "law_name": law_name},
+        )
+        resolver = VectorStoreLawSourceResolver(
+            FakeExactLawStore((first, conflicting))
+        )
+
+        with self.assertRaisesRegex(ValueError, "multiple source identities"):
+            resolver.resolve(law_name)
+
+    def test_mismatched_title_and_invalid_identity_fail_closed(self) -> None:
+        chunk = self.chunks[0]
+        law_name = chunk.metadata["law_name"]
+        wrong_title = replace(chunk, text=f"다른 이름\n{chunk.text}")
+        invalid_id = replace(
+            chunk,
+            metadata={**chunk.metadata, "source_id": "not-numeric"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "canonical name"):
+            VectorStoreLawSourceResolver(FakeExactLawStore((wrong_title,))).resolve(
+                law_name
+            )
+        with self.assertRaisesRegex(ValueError, "source_id"):
+            VectorStoreLawSourceResolver(FakeExactLawStore((invalid_id,))).resolve(
+                law_name
+            )
 
 
 if __name__ == "__main__":
