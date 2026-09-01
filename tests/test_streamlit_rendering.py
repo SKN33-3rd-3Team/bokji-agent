@@ -88,6 +88,36 @@ def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
     assert "AI 분석 적용" in captions
 
 
+def test_multiple_policy_metrics_use_unique_keys() -> None:
+    app = _render(
+        {
+            "status": "answered",
+            "session_id": "session-1",
+            "answer_status": "complete",
+            "final_answer": "두 정책을 확인했습니다.",
+            "final_citations": [],
+            "policies": [
+                {
+                    "policy_id": "p1",
+                    "title": "정책 1",
+                    "amount_label": "10만원",
+                    "duplicate_status": "가능",
+                },
+                {
+                    "policy_id": "p2",
+                    "title": "정책 2",
+                    "amount_label": "20만원",
+                    "duplicate_status": "확인 필요",
+                },
+            ],
+            "llm_status": {"enabled": False},
+        }
+    )
+
+    assert not app.exception
+    assert len(app.metric) == 4
+
+
 def test_abstained_answer_uses_warning_without_inventing_policy() -> None:
     app = _render(
         {

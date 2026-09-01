@@ -92,7 +92,7 @@ def _render_policy_detail(policy: Mapping[str, Any]) -> None:
             )
 
 
-def _render_policy(policy: Mapping[str, Any]) -> None:
+def _render_policy(policy: Mapping[str, Any], *, metric_key: str) -> None:
     verdict = str(policy.get("eligibility_status") or "미확인")
     style = VERDICT_STYLE.get(verdict, VERDICT_STYLE["미확인"])
     title = str(policy.get("title") or policy.get("policy_id") or "정책")
@@ -130,7 +130,8 @@ def _render_policy(policy: Mapping[str, Any]) -> None:
             border=True,
             icon=":material/payments:",
         )
-        metrics.metric(
+        duplicate_metric = metrics.container(key=metric_key)
+        duplicate_metric.metric(
             "중복수급",
             str(policy.get("duplicate_status") or "미확인"),
             border=True,
@@ -174,8 +175,18 @@ def _render_answer(result: Mapping[str, Any]) -> None:
     policies = [item for item in result.get("policies") or [] if isinstance(item, Mapping)]
     if policies:
         st.markdown(f"#### 확인한 정책 {len(policies)}건")
-        for policy in policies:
-            _render_policy(policy)
+        st.html(
+            "<style>"
+            "[class*='st-key-dup-metric-'] [data-testid='stMetricLabel'],"
+            "[class*='st-key-dup-metric-'] [data-testid='stMetricValue']"
+            "{font-size:0.875rem;font-weight:500;line-height:1.4}</style>"
+        )
+        session_id = str(result.get("session_id") or "response")
+        for position, policy in enumerate(policies):
+            _render_policy(
+                policy,
+                metric_key=f"dup-metric-{session_id}-{position}",
+            )
     elif answer_status != "abstained":
         st.info("확인된 정책 카드가 없습니다.", icon=":material/search_off:")
 

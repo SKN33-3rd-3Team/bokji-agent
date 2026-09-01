@@ -16,7 +16,7 @@ from ..constants import (
 from ..nav import goto
 from ..pipeline import run_pipeline
 from ..rendering import render_result
-from ..session import new_conversation
+from ..session import clear_conversation_state, escape_md, logout, new_conversation
 
 _GENERIC_ERROR_MESSAGE = (
     "상담 처리 중 오류가 발생했습니다. 잠시 후 다시 시도하거나 대화를 초기화해 주세요."
@@ -25,7 +25,7 @@ _SETUP_ERROR_MESSAGE = "서비스 실행 설정을 확인할 수 없습니다. �
 
 
 def _reset_conversation() -> None:
-    new_conversation(st.session_state, clear_messages=True)
+    clear_conversation_state()
 
 
 def _render_intro() -> None:
@@ -70,22 +70,43 @@ def _render_sidebar() -> int:
             st.rerun()
 
         st.markdown(":material/account_circle: **계정**")
+        auth_user = st.session_state.get("auth_user")
+        if auth_user:
+            name = auth_user.get("display_name") or auth_user.get("username", "")
+            st.caption(f":material/check_circle: {escape_md(name)} 님으로 로그인됨")
         account = st.container(horizontal=True)
-        if account.button(
-            "로그인", icon=":material/login:", width="stretch", key="sb_login"
-        ):
-            goto("login")
-        if account.button(
-            "회원가입",
-            icon=":material/person_add:",
-            width="stretch",
-            key="sb_signup",
-        ):
-            goto("signup")
+        if not auth_user:
+            if account.button(
+                "로그인",
+                icon=":material/login:",
+                width="stretch",
+                key="sb_login",
+            ):
+                goto("login")
+            if account.button(
+                "회원가입",
+                icon=":material/person_add:",
+                width="stretch",
+                key="sb_signup",
+            ):
+                goto("signup")
         if st.button(
-            "마이페이지", icon=":material/person:", width="stretch", key="sb_mypage"
+            "마이페이지",
+            icon=":material/person:",
+            width="stretch",
+            key="sb_mypage",
         ):
             goto("mypage")
+        if auth_user:
+            if st.button(
+                "로그아웃",
+                icon=":material/logout:",
+                width="stretch",
+                key="sb_logout",
+                type="secondary",
+            ):
+                logout()
+                st.rerun()
 
     return top_k
 
