@@ -1,0 +1,115 @@
+# 복지 에이전트 서비스 테마
+# ------------------------------------------------------------------
+# 컨셉: "믿음직한 공공서비스" — 포인트 컬러는 인디고 하나.
+#   메인 캔버스는 중립색으로 두고, 사이드바에만 옅은 인디고 틴트를 깔아
+#   포인트를 준다. 글자 대비는 그대로 유지.
+# 한글 본문 가독성을 위해 Noto Sans KR, 코드에는 JetBrains Mono.
+# light / dark 두 벌을 모두 정의해 앱 우측 상단 메뉴에서 전환 가능.
+# (커스텀 CSS 없이 config.toml 만으로 스타일링 — Streamlit 권장 방식)
+
+[theme]
+base = "light"
+
+# 타이포그래피
+font = "'Noto Sans KR':https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap"
+headingFont = "'Noto Sans KR':https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@500;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+baseFontWeight = 400
+codeFontSize = "0.85rem"
+headingFontSizes = ["32px", "25px", "20px", "17px", "15px", "13px"]
+headingFontWeights = [700, 700, 600, 600, 600, 500]
+linkUnderline = false
+
+# 형태
+baseRadius = "12px"
+buttonRadius = "10px"
+showWidgetBorder = true
+showSidebarBorder = true
+
+# 차트 색 (모드별 지정 불가 — 라이트/다크 양쪽에서 읽히는 팔레트)
+chartCategoricalColors = ["#6366F1", "#10B981", "#F59E0B", "#EC4899", "#06B6D4", "#8B5CF6", "#94A3B8"]
+chartSequentialColors = ["#EEF2FF", "#E0E7FF", "#C7D2FE", "#A5B4FC", "#818CF8", "#6366F1", "#4F46E5", "#4338CA", "#3730A3", "#312E81"]
+
+# ── Light ─────────────────────────────────────────────────────────
+[theme.light]
+primaryColor = "#4F46E5"            # 인디고 600 — 흰 버튼 글자와 대비 충분
+backgroundColor = "#FCFCFD"         # 메인 캔버스는 중립(사이드바에만 포인트 틴트)
+secondaryBackgroundColor = "#F3F4F8"
+textColor = "#1E2233"
+linkColor = "#4338CA"
+borderColor = "#E4E6EF"
+codeBackgroundColor = "#F3F4F8"
+codeTextColor = "#3730A3"
+dataframeBorderColor = "#E4E6EF"
+dataframeHeaderBackgroundColor = "#F3F4F8"
+
+# 판정/상태 색 (배지 배경·글자 변형까지 지정해 또렷하게)
+greenColor = "#059669"
+greenBackgroundColor = "#D1FAE5"
+greenTextColor = "#065F46"
+redColor = "#DC2626"
+redBackgroundColor = "#FEE2E2"
+redTextColor = "#991B1B"
+orangeColor = "#D97706"
+orangeBackgroundColor = "#FEF3C7"
+orangeTextColor = "#92400E"
+blueColor = "#2563EB"
+blueBackgroundColor = "#DBEAFE"
+blueTextColor = "#1E40AF"
+violetColor = "#7C3AED"
+violetBackgroundColor = "#EDE9FE"
+violetTextColor = "#5B21B6"
+grayColor = "#64748B"
+grayBackgroundColor = "#EEF1F6"
+grayTextColor = "#475569"
+yellowColor = "#CA8A04"
+
+[theme.light.sidebar]
+backgroundColor = "#EEEEFC"          # 사이드바: 인디고 틴트 패널
+secondaryBackgroundColor = "#E3E3F9"
+codeBackgroundColor = "#E3E3F9"
+textColor = "#1E2233"
+borderColor = "#E2E1F4"
+primaryColor = "#4F46E5"
+
+# ── Dark ──────────────────────────────────────────────────────────
+[theme.dark]
+primaryColor = "#6366F1"
+backgroundColor = "#0D1117"          # 메인 캔버스는 중립(사이드바에만 포인트 틴트)
+secondaryBackgroundColor = "#171B26"
+textColor = "#E6E9F2"
+linkColor = "#A5B4FC"
+borderColor = "#2A2F3C"
+codeBackgroundColor = "#171B26"
+codeTextColor = "#C7D2FE"
+dataframeBorderColor = "#2A2F3C"
+dataframeHeaderBackgroundColor = "#171B26"
+
+greenColor = "#34D399"
+greenBackgroundColor = "#0C2E24"
+greenTextColor = "#6EE7B7"
+redColor = "#F87171"
+redBackgroundColor = "#3B1A1A"
+redTextColor = "#FCA5A5"
+orangeColor = "#FBBF24"
+orangeBackgroundColor = "#3A2A0E"
+orangeTextColor = "#FCD34D"
+blueColor = "#60A5FA"
+blueBackgroundColor = "#132133"
+blueTextColor = "#93C5FD"
+violetColor = "#A78BFA"
+violetBackgroundColor = "#241C3B"
+violetTextColor = "#C4B5FD"
+grayColor = "#94A3B8"
+grayBackgroundColor = "#1E232E"
+grayTextColor = "#CBD5E1"
+yellowColor = "#FACC15"
+
+[theme.dark.sidebar]
+backgroundColor = "#0B0C1A"          # 사이드바: 인디고 틴트 패널
+secondaryBackgroundColor = "#17182E"
+codeBackgroundColor = "#17182E"
+textColor = "#E6E9F2"
+borderColor = "#2A2A45"
+primaryColor = "#818CF8"
