@@ -13,6 +13,17 @@ metadata(age_start/age_end 등)를 slots와 직접 대조해서, "근거 문장�
 
 - 충족: 관련 eligibility claim이 모두 SUPPORTED이고, 재검색한 chunk의 구조화
   조건(age_start/age_end)과 slots 사이에 위반이 없음.
+
+  **중요(2026-08-31 추가): "충족"은 "모든 자격 조건을 만족한다"는 뜻이 아니다.**
+  이 노드가 실제로 대조할 수 있는 조건은 문서 metadata에 구조화되어 있는
+  것뿐인데, 지금 색인된 문서에는 ``age_start``/``age_end``밖에 없다. 장애
+  여부·성별·소득·취업 상태는 문서 본문 텍스트에만 있어서 **비교 자체를 하지
+  못한다**. 그래서 비장애인에게 장애인 정책이 "충족"으로 나오는 일이 실제로
+  있었다. 판정 결과에 ``checked``/``unchecked``를 함께 담아, 무엇을 확인했고
+  무엇을 확인하지 못했는지 답변과 화면이 그대로 드러내게 한다
+  (docs/PROJECT_COMPLIANCE.md - 확인하지 않은 것을 확인한 것처럼 말하지 않는다).
+  조건 자체를 실제로 대조하려면 문서 metadata 확장 + 재색인이나 LLM 본문
+  대조가 필요하다(별도 작업).
 - 미충족: 재검색한 chunk의 구조화 조건과 slots가 명백히 어긋남
   (예: age_start/age_end 범위를 벗어남). 이 경우만 "위반이 확인됐다"고 본다.
 - 미확인: 그 외 전부 - claim 근거가 없거나(UNSUPPORTED/PARTIAL/CONFLICT),
@@ -55,6 +66,25 @@ _UNCERTAIN_STATUSES = {
 }
 
 _RECHECK_TOP_K = 3
+
+# 이 노드가 사용자 슬롯과 대조할 수 있는 조건과, 그 한국어 이름.
+# "가능"의 기준은 **문서 쪽에 구조화된 metadata가 있는가**이다. 색인된 SUBSIDY
+# chunk의 metadata에는 age_start/age_end만 있고 장애·성별·소득·취업 기준은
+# 없어서(2026-08-31 실측), 나머지는 슬롯이 채워져 있어도 비교할 수 없다.
+_ASPECT_LABELS = {
+    "age": "연령",
+    "disability_status": "장애 여부",
+    "gender": "성별",
+    "income_bracket": "소득 수준",
+    "employment_status": "취업 상태",
+}
+# 문서 metadata가 있어 실제 대조가 가능한 조건.
+_VERIFIABLE_ASPECTS = ("age",)
+# 사용자에게 물어봐서 슬롯로는 갖고 있지만 문서 쪽 기준이 없어 대조하지
+# 못하는 조건. 이걸 "확인 안 함"으로 정직하게 노출한다.
+_UNVERIFIABLE_ASPECTS = tuple(
+    aspect for aspect in _ASPECT_LABELS if aspect not in _VERIFIABLE_ASPECTS
+)
 
 
 def determine_eligibility(
@@ -125,7 +155,7 @@ def determine_eligibility(
                 f"{policy_id} 지원자격",
                 query_id=f"{state.get('query_id', 'n9')}-{policy_id}-recheck",
                 top_k=_RECHECK_TOP_K,
-                search_filter=VectorSearchFilter(metadata_equals={"doc_id": policy_id}),
+                search_filter=VectorSearchFilter(metadata_equals={"source_id": policy_id}),
             )
         except CollectionNotFoundError:
             # 아직 어떤 정책도 색인되지 않은 상태 (컬렉션 자체가 없음) - 근거를
@@ -142,23 +172,43 @@ def determine_eligibility(
             )
             continue
 
-        violations = _find_structured_violations(recheck_chunks, slots)
+        violations, checked = _find_structured_violations(recheck_chunks, slots)
+        scope = _verification_scope(checked)
         if violations:
             reasons = _naturalize_reasons(violations, llm_client)
             verdicts.append(
-                {"policy_id": policy_id, "verdict": "미충족", "reasons": reasons}
+                {
+                    "policy_id": policy_id,
+                    "verdict": "미충족",
+                    "reasons": reasons,
+                    **scope,
+                }
             )
             continue
 
         reasons = [reason for claim in relevant for reason in claim.get("reasons", [])]
-        verdicts.append({"policy_id": policy_id, "verdict": "충족", "reasons": reasons})
+        verdicts.append(
+            {"policy_id": policy_id, "verdict": "충족", "reasons": reasons, **scope}
+        )
 
     return {"eligibility_verdicts": verdicts}
 
 
+def _verification_scope(checked: list[str]) -> dict:
+    """무엇을 확인했고 무엇을 확인하지 못했는지 사람이 읽을 이름으로 만든다."""
+
+    checked_labels = [_ASPECT_LABELS[aspect] for aspect in checked]
+    unchecked_labels = [
+        _ASPECT_LABELS[aspect]
+        for aspect in _ASPECT_LABELS
+        if aspect not in checked
+    ]
+    return {"checked": checked_labels, "unchecked": unchecked_labels}
+
+
 def _find_structured_violations(
     chunks: Iterable[RetrievedChunk], slots: dict
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """age_start/age_end 등 구조화 metadata와 사용자 slots를 대조해, 문서에
     명시적으로 적힌 조건과 명백히 어긋나는 경우만 위반으로 판단한다. 슬롯이나
     metadata 어느 한쪽이 없으면 비교하지 않는다 (애매한 경우 위반으로 단정하지
@@ -167,12 +217,20 @@ def _find_structured_violations(
     """
     age = slots.get("age")
     violations: list[str] = []
+    checked: list[str] = []
     if age is None:
-        return violations
+        # 사용자 나이를 모르면 연령 조건도 "확인했다"고 말할 수 없다.
+        return violations, checked
     for retrieved in chunks:
         metadata = retrieved.chunk.metadata
         age_start = metadata.get("age_start")
         age_end = metadata.get("age_end")
+        if age_start is None and age_end is None:
+            # 문서에 연령 기준 자체가 없으면 비교한 것이 아니다. 이걸 "확인함"
+            # 으로 세면 아무 조건도 대조하지 않고 "충족"이라고 말하게 된다.
+            continue
+        if "age" not in checked:
+            checked.append("age")
         if age_start is not None and age < age_start:
             violations.append(
                 f"연령 조건 미충족: 최소 {age_start}세부터 지원 (사용자 age={age})"
@@ -181,7 +239,7 @@ def _find_structured_violations(
             violations.append(
                 f"연령 조건 미충족: 최대 {age_end}세까지 지원 (사용자 age={age})"
             )
-    return violations
+    return violations, checked
 
 
 def _naturalize_reasons(rule_reasons: list[str], llm_client: LLMClient | None) -> list[str]:

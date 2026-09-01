@@ -43,7 +43,8 @@ data/processed/*
 *_log.txt
 *.bin
 
-# Persistent vector indexes
+# Persistent vector indexes (재생성 가능 - scripts/reindex_korean.py)
+data/vector_db/
 .runtime/vector_db/
 .runtime/vector_db-smoke/
 

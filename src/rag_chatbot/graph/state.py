@@ -1,9 +1,8 @@
+"""답변 그래프 State 계약 (N1~N14 범위).
 
-"""답변 그래프 State 계약 (N1~N12 범위).
-
-이 파일은 N1~N12 노드가 주고받는 필드만 정의한다. N1~N3, N13~N14가
-쓰는 필드는
-해당 노드를 만드는 Issue에서 이 파일에 이어서 추가한다.
+이 파일은 N1~N14 노드가 주고받는 필드를 정의한다. N1~N3(슬롯 파싱/적합성
+체크/추가 정보 요청) 필드는 Issue #21에서, N13~N14(답변 생성/최종 검증)
+필드는 Issue #25(graph builder 조립)에서 이어서 추가했다.
 
 공용 파일이므로 변경 시 담당자 1인이 제안 -> 리뷰 -> 반영 순서로만 수정한다.
 """
@@ -13,6 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal, TypedDict
 
+from rag_design.contracts import Citation, RetrievedChunk
 from rag_design.contracts import Citation, RetrievedChunk
 from rag_design.contracts import RetrievedChunk
 from rag_design.policy import AbstentionDecision
@@ -94,6 +94,12 @@ class EligibilityVerdict(TypedDict, total=False):
     policy_id: str
     verdict: str
     reasons: list[str]
+    # N9가 실제로 대조한 조건과, 대조하지 못한 조건(한국어 이름).
+    # "충족"이 "모든 자격 조건 만족"으로 읽히지 않게 하려고 함께 싣는다 -
+    # 지금 문서 metadata에는 연령 기준밖에 없어서, 장애·성별·소득·취업은
+    # 슬롯이 있어도 비교 자체를 못 한다(eligibility_verdict.py 참고).
+    checked: list[str]
+    unchecked: list[str]
 
 
 class BenefitAmount(TypedDict, total=False):
@@ -101,6 +107,17 @@ class BenefitAmount(TypedDict, total=False):
     amount: float | None
     rule_chunk_id: str
     calculation_note: str
+    # 금액의 성격. amount만 화면에 띄우면 "200,000원"이 월인지 연인지 1회인지,
+    # 확정인지 상한인지 알 수 없어서 사용자가 그만큼 받는다고 읽는다.
+    # period: "month" | "year" | "once" | None
+    period: str | None
+    # 원문이 "최대"/"한도"/"이내"로 적은 금액인지. 원천 데이터의 42.5%가 이렇다.
+    is_maximum: bool
+    # per_unit: "person"(1인당) | "household"(가구당) | None
+    per_unit: str | None
+    # 원문에 근거가 있을 때만 계산한 총액(월 단가 x 개월수, 1인당 x 가구원수).
+    # 근거가 없으면 None - 기간을 모르는데 12를 곱하지 않는다.
+    total_amount: float | None
 
 
 class DuplicateVerdict(TypedDict, total=False):
@@ -110,9 +127,40 @@ class DuplicateVerdict(TypedDict, total=False):
     condition_note: str
 
 
+class CitationEntry(TypedDict, total=False):
+    """N13/N14가 사용자에게 노출하는 인용 한 건.
+
+    LLM 출력에서 직접 만들지 않는다 - state["claim_plan"]의 evidence_chunk_ids
+    (N7이 이미 검증한 근거)와 subsidy_chunks/law_chunks의
+    chunk.metadata["source_url"]만으로 조립한다 (answer_generation.py 참고).
+    """
+
+    policy_id: str
+    chunk_id: str
+    source_url: str | None
+    label: str
+
+
+AnswerStatus = Literal["complete", "partial", "abstained"]
+"""N14 최종 검증 결과.
+
+complete: 모든 인용이 검증됐고 assembled_result에 "정보 부족" 표시가 없음.
+partial: 답변은 나가지만 일부 인용이 걸러졌거나 일부 정책이 정보 부족임 -
+    사용자에게 부분 응답임을 알려야 한다.
+abstained: 검증된 근거가 아예 없어 답변 자체를 노출하지 않음 (확인 불가).
+"""
+
+
 class GraphState(TypedDict, total=False):
     query_id: str
+    # N4가 반환할 정책 후보 수. 프론트엔드의 "정책 후보 수" 설정을 첫 요청에
+    # 받아 체크포인터에 보존한다. 값 검증은 run_graph/search_policies가 맡는다.
+    policy_top_k: int
     user_input: str
+    # 이번 턴 발화(user_input)는 되묻기에 답할 때마다 덮어써진다
+    # ("서울, 2000-03-26, 여성..."). 그래서 N4 검색에 쓸 **원래 질문**을
+    # 따로 보존한다 - N1이 첫 턴에 한 번만 채우고 이후 턴에는 건드리지 않는다.
+    initial_user_input: str
     # 이번 그래프 실행 전체의 공통 기준일. N4(검색 필터)와 N7(시행일 검증)이
     # 각자 date.today()를 따로 계산하면 자정 경계 등에서 어긋날 수 있어서,
     # 그래프 시작 시점에 한 번 정해서 모든 노드가 이 값을 공유한다.
@@ -142,3 +190,10 @@ class GraphState(TypedDict, total=False):
     missing_law_claim_ids: list[str]
     doc_retry_count: int
     law_retry_count: int
+    # --- N13 (답변 생성) ---
+    draft_answer: str
+    citations: list[CitationEntry]
+    # --- N14 (최종 Claim-Citation 검증) ---
+    final_answer: str
+    final_citations: list[CitationEntry]
+    answer_status: AnswerStatus

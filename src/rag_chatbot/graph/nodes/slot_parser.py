@@ -7,8 +7,18 @@
 검증 가능한 ``region_scope``/``region_names``로 정규화해서 저장한다
 (참고자료 "노드_Agent" 시트 N1 "연결 rag_design 모듈" 참고).
 
+``llm_client``가 주입되면 슬롯 추출에 LLM을 함께 쓴다(2026-08-31 추가).
+규칙 기반 추출기만으로는 "1955년 3월생이에요"(일자 없음), "모름",
+"형편이 어려워요" 같은 실제 표현을 못 알아들어 슬롯이 끝까지 안 채워졌고,
+그러면 N2가 되묻기 상한에 닿아 전부 ``unknown`` 센티넬로 확정해버린다 -
+사용자는 답을 다 했는데 아무것도 반영되지 않는 상태가 된다. 실제 병합
+규칙과 개인정보 처리(생년월일은 마스킹하지 않고 LLM에 보낸다)는
+``llm_gateway.extract_slots`` docstring 참고.
+
 State 계약(참고자료 "State_연결부" 시트 E1/E2/E6):
-- 입력: ``user_input``, ``slots``(재입력 시 기존값)
+- 입력: ``user_input``, ``slots``(재입력 시 기존값), ``missing_slots``
+  (직전 턴에 N3가 되물은 항목 - "모름" 답변을 어느 슬롯에 붙일지 판단하는
+  맥락으로만 쓴다)
 - 출력: ``slots``
 """
 
@@ -19,6 +29,7 @@ from datetime import date
 
 from rag_design.contracts import NATIONAL_REGION_NAME, RegionScope, validate_region_name
 
+from ...llm import LLMClient
 from ..llm_gateway import extract_slots
 from ..slot_schema import (
     SLOT_ENUMS,
@@ -78,13 +89,22 @@ _SIDO_SUFFIX_WORDS = frozenset(
 )
 
 
-def parse_slots(state: GraphState) -> dict:
-    """``user_input``에서 슬롯을 추출해 기존 ``slots``와 병합한다."""
+def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
+    """``user_input``에서 슬롯을 추출해 기존 ``slots``와 병합한다.
+
+    ``llm_client``는 그래프 조립 시 ``functools.partial``로 주입한다. 없으면
+    규칙 기반으로만 동작한다(그래프는 LLM 없이도 끝까지 돈다).
+    """
 
     user_input = state.get("user_input", "")
     existing_slots: SlotState = state.get("slots", {})
 
-    extracted = extract_slots(user_input, existing_slots)
+    extracted = extract_slots(
+        user_input,
+        existing_slots,
+        llm_client=llm_client,
+        asked_slots=state.get("missing_slots"),
+    )
 
     # dict()는 얕은 복사라 리스트 필드는 입력 state와 같은 객체를 가리킨다.
     # 그대로 반환하면 이후 노드의 in-place 변경이 checkpointer가 들고 있는
@@ -136,7 +156,14 @@ def parse_slots(state: GraphState) -> dict:
         merged["region_scope"] = RegionScope.UNKNOWN.value
         merged["region_names"] = []
 
-    return {"slots": merged}
+    result: dict = {"slots": merged}
+    # 첫 턴 질문을 한 번만 보존한다. user_input은 되묻기에 답할 때마다
+    # 덮어써지는데, N4 검색에는 "무엇을 알고 싶은지"가 담긴 원래 질문이
+    # 필요하다(되묻기 답변 "서울, 2000-03-26, 여성..."을 검색어로 쓰면
+    # 검색이 망가진다).
+    if not state.get("initial_user_input") and user_input.strip():
+        result["initial_user_input"] = user_input.strip()
+    return result
 
 
 def _apply_age_subject(merged: SlotState, signals: dict[str, bool]) -> None:

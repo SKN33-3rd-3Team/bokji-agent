@@ -31,11 +31,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from rag_chatbot.graph.nodes.law_source_resolver import (
+from .law_source_resolver import (
     LawSourceResolver,
     resolve_required_law_sources,
 )
-from rag_chatbot.graph.state import ClaimDraft, GraphState, RetrievedChunk
+from ..state import ClaimDraft, GraphState, RetrievedChunk
 
 CLAIM_TYPES = ("eligibility", "amount", "duplicate")
 
@@ -107,6 +107,25 @@ def plan_claims(
             required_law_sources_by_policy[policy_id] = resolve_required_law_sources(
                 legal_basis_text, law_resolver
             )
+
+    # 청크별 claim 추출은 서로 완전히 독립이라 순서대로 기다릴 이유가 없다.
+    # 추출기가 prefetch를 지원하면(LLM 기반) 먼저 동시에 뽑아 캐시를 채우고,
+    # 아래 루프는 캐시된 결과만 꺼내 쓴다.
+    #
+    # 실측(2026-08-31): 청크 5개를 순차로 부르면 292초. 호출 하나가 ~58초라
+    # 동시에 부르면 가장 느린 하나만 기다리면 된다.
+    #
+    # 아래 루프와 **같은 조건으로 걸러야** 한다. legal_basis 청크는 claim을
+    # 만들지 않으므로 미리 뽑아봐야 버리는 호출이 된다.
+    prefetch = getattr(extractor, "prefetch", None)
+    if prefetch is not None:
+        prefetch(
+            [
+                (chunk.chunk.metadata["source_id"], chunk.chunk.text)
+                for chunk in subsidy_chunks
+                if chunk.chunk.metadata.get("section_type") != "legal_basis"
+            ]
+        )
 
     claim_plan: list[ClaimDraft] = []
     for chunk in subsidy_chunks:

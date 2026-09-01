@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from rag_design.contracts import EvidenceStatus, RetrievedChunk, SourceType
 
-from rag_chatbot.graph.state import ClaimDraft, GraphState
+from ..state import ClaimDraft, GraphState
 
 DEFAULT_WIDEN_TOP_K = 20
 

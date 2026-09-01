@@ -35,14 +35,17 @@ def _retrieved_chunk(policy_id: str, metadata: dict) -> RetrievedChunk:
     chunk = Chunk(
         schema_version=SCHEMA_VERSION,
         chunk_id=f"{policy_id}-chunk-1",
-        doc_id=policy_id,
+        # doc_id는 일부러 policy_id와 다르게 만든다 (실제 프로덕션처럼
+        # doc_id != source_id인 상황을 재현해서, N9/N10/N11이 doc_id로
+        # 잘못 필터링하는 버그를 이 테스트가 실제로 잡아낼 수 있도록 한다).
+        doc_id=f"subsidy:{policy_id}:v1",
         source_type=SourceType.SUBSIDY,
         text=text,
         heading_path=("지원자격",),
         ordinal=0,
         citation_locator="지원자격",
         content_hash=compute_content_hash(text),
-        metadata=metadata,
+        metadata={"source_id": policy_id, **metadata},
     )
     return RetrievedChunk(
         query_id=f"{policy_id}-recheck",
@@ -71,11 +74,11 @@ class FakeStore:
                 "query": query,
                 "query_id": query_id,
                 "top_k": top_k,
-                "doc_id": search_filter.metadata_equals.get("doc_id"),
+                "source_id": search_filter.metadata_equals.get("source_id"),
             }
         )
-        doc_id = search_filter.metadata_equals.get("doc_id")
-        return tuple(self._chunks_by_policy.get(doc_id, ()))
+        source_id = search_filter.metadata_equals.get("source_id")
+        return tuple(self._chunks_by_policy.get(source_id, ()))
 
 
 def test_supported_claim_and_matching_age_yields_충족():
@@ -89,13 +92,63 @@ def test_supported_claim_and_matching_age_yields_충족():
 
     result = determine_eligibility(state, store)
 
+    # 판정에는 "무엇을 실제로 대조했고 무엇을 못 했는지"가 함께 담긴다.
+    # 이게 없으면 "충족"이 "모든 자격 조건 만족"으로 읽힌다.
     assert result == {
         "eligibility_verdicts": [
-            {"policy_id": "policy-a", "verdict": "충족", "reasons": ["근거 문장"]}
+            {
+                "policy_id": "policy-a",
+                "verdict": "충족",
+                "reasons": ["근거 문장"],
+                "checked": ["연령"],
+                "unchecked": ["장애 여부", "성별", "소득 수준", "취업 상태"],
+            }
         ]
     }
-    assert store.calls[0]["doc_id"] == "policy-a"
+    assert store.calls[0]["source_id"] == "policy-a"
     assert store.calls[0]["source_type"] is SourceType.SUBSIDY
+
+
+def test_충족_records_nothing_checked_when_document_has_no_structured_criteria():
+    """실제로 겪은 상황의 회귀 테스트.
+
+    장애인 정책 문서에는 age_start/age_end가 둘 다 없어서 N9가 대조할 수 있는
+    조건이 하나도 없다. 그런데도 판정은 "충족"으로 나왔고, 화면에는 "자격
+    충족"이라고 표시돼 비장애인 사용자에게 장애인 정책이 추천됐다.
+    이제 checked가 비어 있다는 사실이 판정에 그대로 남아, 답변과 화면이
+    "확인한 조건 없음"을 드러낼 수 있다.
+    """
+
+    state = {
+        "slots": {"age": 26},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": None, "age_end": None})]}
+    )
+
+    verdict = determine_eligibility(state, store)["eligibility_verdicts"][0]
+
+    assert verdict["verdict"] == "충족"
+    assert verdict["checked"] == []
+    assert "장애 여부" in verdict["unchecked"]
+    assert "연령" in verdict["unchecked"]
+
+
+def test_충족_without_user_age_checks_nothing():
+    # 사용자 나이를 모르면 연령 조건도 "확인했다"고 말할 수 없다.
+    state = {
+        "slots": {},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})]}
+    )
+
+    verdict = determine_eligibility(state, store)["eligibility_verdicts"][0]
+
+    assert verdict["verdict"] == "충족"
+    assert verdict["checked"] == []
 
 
 def test_supported_claim_but_age_below_range_yields_미충족():
@@ -222,7 +275,7 @@ def test_multiple_policies_are_judged_independently():
 
     by_policy = {v["policy_id"]: v["verdict"] for v in result["eligibility_verdicts"]}
     assert by_policy == {"policy-a": "충족", "policy-b": "미확인"}
-    assert [c["doc_id"] for c in store.calls] == ["policy-a"]  # policy-b는 재검색 안 함
+    assert [c["source_id"] for c in store.calls] == ["policy-a"]  # policy-b는 재검색 안 함
 
 
 def test_llm_client_none_leaves_rule_reasons_unchanged():

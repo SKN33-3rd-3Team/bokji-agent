@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from datetime import date
@@ -23,7 +24,9 @@ from rag_chatbot.graph.nodes.slot_completeness_gate import (  # noqa: E402
     needs_general_law_reference,
     route_after_slot_completeness,
 )
+from rag_chatbot.llm import FailingLLMClient, FakeLLMClient  # noqa: E402
 from rag_chatbot.graph.slot_schema import (  # noqa: E402
+    EmploymentStatus,
     HARD_GATE_SLOTS,
     SKIP_NOT_CONFIRMED,
     SKIP_SUBJECT_NOT_SELF,
@@ -84,6 +87,226 @@ class LlmGatewayExtractSlotsTests(unittest.TestCase):
         self.assertIsNone(result["birth_date"])
 
 
+class LlmGatewayAnswerContextTests(unittest.TestCase):
+    """N3가 되물은 직후의 단답을 알아듣는지 (2026-08-31 추가).
+
+    실제 사용자 테스트에서 "서울, 2000-03-26, 여성, 모름, 비장애인, 무직"
+    이라고 답했는데 gender/income_bracket/employment_status가 하나도 안
+    채워졌다. 자기서술 마커("입니다"/"이에요")를 요구하는 규칙 때문인데,
+    되묻기에 대한 답은 원래 단답이라 마커가 붙을 자리가 없다.
+    """
+
+    ASKED_ALL = [
+        "region",
+        "birth_date",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status",
+    ]
+
+    def test_comma_separated_answer_fills_every_asked_slot(self) -> None:
+        result = llm_gateway.extract_slots(
+            "서울, 2000-03-26, 여성, 모름, 비장애인, 무직, ",
+            {},
+            asked_slots=self.ASKED_ALL,
+        )
+        self.assertEqual(result["region_raw"], "서울")
+        self.assertEqual(result["birth_date"], "2000-03-26")
+        self.assertEqual(result["gender"], "female")
+        self.assertEqual(result["disability_status"], "not_registered")
+        self.assertEqual(result["employment_status"], "not_working")
+        # "모름"이라고 답한 항목은 센티넬로 확정해서 되묻기를 끝낸다.
+        self.assertEqual(result["income_bracket"], "unknown")
+
+    def test_short_answers_with_typos_and_particles(self) -> None:
+        # "여자", "무직임"처럼 조사/오타가 섞인 단답도 알아들어야 한다.
+        result = llm_gateway.extract_slots(
+            "여자, 소둑수준 모름, 무직임",
+            {},
+            asked_slots=["gender", "income_bracket", "employment_status"],
+        )
+        self.assertEqual(result["gender"], "female")
+        self.assertEqual(result["employment_status"], "not_working")
+        self.assertEqual(result["income_bracket"], "unknown")
+
+    def test_non_disabled_answer_is_not_read_as_registered(self) -> None:
+        # "비장애인"이 장애인으로 읽히면 정반대 판정이 된다 - 회귀 테스트.
+        for text in ("비장애인", "장애 없어요", "장애는 없습니다"):
+            with self.subTest(text=text):
+                result = llm_gateway.extract_slots(
+                    text, {}, asked_slots=["disability_status"]
+                )
+                self.assertEqual(result["disability_status"], "not_registered")
+
+    def test_negated_keywords_never_become_search_interests(self) -> None:
+        # 실제 버그: "비장애인"이라고 답했더니 관심사에 "장애인"이 잡히고,
+        # N4 검색 질의가 관심사만으로 만들어지는 탓에 질의가 그대로
+        # "장애인"이 되어 장애인 정책만 5건 추천됐다. 사용자가 아니라고 말한
+        # 조건으로 검색이 돌면 안 된다 - 회귀 테스트.
+        for text in ("비장애인", "장애인 아니에요", "장애인이 아녜요", "노인 아닙니다"):
+            with self.subTest(text=text):
+                self.assertEqual(llm_gateway.extract_slots(text, {})["interests"], [])
+
+    def test_positive_keyword_mentions_are_still_interests(self) -> None:
+        # 부정 처리가 과해서 정상적인 관심사까지 지워버리면 검색이 넓어진다.
+        self.assertEqual(
+            llm_gateway.extract_slots("장애인 지원 알려줘", {})["interests"], ["장애인"]
+        )
+        self.assertEqual(
+            llm_gateway.extract_slots("등록장애인입니다", {})["interests"], ["장애인"]
+        )
+        self.assertIn("육아", llm_gateway.extract_slots("육아랑 주거 지원", {})["interests"])
+
+    def test_marker_requirement_still_protects_free_form_questions(self) -> None:
+        # 되묻기 맥락이 아닐 때(asked_slots 없음)는 예전 보호가 그대로다.
+        # "주거급여 얼마 받나요"는 질문이지 수급 사실이 아니다.
+        self.assertIsNone(llm_gateway.extract_slots("주거급여 얼마 받나요?", {})["income_bracket"])
+        self.assertIsNone(
+            llm_gateway.extract_slots("여성 대상 지원 제도 뭐 있나요?", {})["gender"]
+        )
+
+    def test_dont_know_is_ignored_without_an_asked_slot_context(self) -> None:
+        # 되묻지도 않았는데 "모르겠는데"가 나왔다고 슬롯을 센티넬로 확정하면
+        # 사용자가 답할 기회를 잃는다.
+        result = llm_gateway.extract_slots("잘 모르겠는데 지원 뭐 있어요?", {})
+        for field in ("gender", "income_bracket", "disability_status", "employment_status"):
+            self.assertIsNone(result[field], field)
+
+    def test_dont_know_only_fills_slots_that_were_not_answered(self) -> None:
+        # "모름"이 어느 항목인지 규칙으로는 모르지만, 다른 항목이 정상적으로
+        # 뽑혔다면 그 값은 덮어쓰지 않는다.
+        result = llm_gateway.extract_slots(
+            "여자, 나머지는 모름", {}, asked_slots=["gender", "employment_status"]
+        )
+        self.assertEqual(result["gender"], "female")
+        self.assertEqual(result["employment_status"], "unknown")
+
+
+class LlmGatewayLlmSlotExtractionTests(unittest.TestCase):
+    """N1이 LLM으로 슬롯을 채우는 경로 (2026-08-31 추가)."""
+
+    def test_llm_fills_what_the_rule_based_extractor_cannot_understand(self) -> None:
+        # "1955년 3월생"은 일자가 없어서 규칙 정규식이 못 잡는다. 실제로
+        # 사용자가 이렇게 답했는데 슬롯이 안 채워져서, N2가 되묻기 상한에
+        # 닿아 birth_date를 unknown으로 확정해버리는 문제가 있었다.
+        text = "1955년 3월생이에요"
+        self.assertIsNone(llm_gateway.extract_slots(text, {})["birth_date"])
+
+        client = FakeLLMClient(json.dumps({"birth_date": "1955-03-01"}))
+        result = llm_gateway.extract_slots(text, {}, llm_client=client)
+        self.assertEqual(result["birth_date"], "1955-03-01")
+
+    def test_llm_failure_falls_back_to_the_rule_based_result(self) -> None:
+        # LLM이 죽어도 그래프는 끝까지 돌아야 한다.
+        result = llm_gateway.extract_slots(
+            "1990년 3월 15일생이고 서울 살아요", {}, llm_client=FailingLLMClient()
+        )
+        self.assertEqual(result["birth_date"], "1990-03-15")
+        self.assertEqual(result["region_raw"], "서울")
+
+    def test_values_outside_the_contract_are_dropped_fail_closed(self) -> None:
+        # 계약에 없는 값을 그대로 저장하면 N2 게이트가 "채워졌음"으로 읽고
+        # 검증되지 않은 값으로 판정이 진행된다.
+        client = FakeLLMClient(
+            json.dumps(
+                {
+                    "gender": "female_maybe",  # 계약에 없는 값
+                    "birth_date": "3000-01-01",  # 미래 날짜
+                    "employment_status": "student",  # 유효
+                }
+            )
+        )
+        result = llm_gateway.extract_slots("학생이에요", {}, llm_client=client)
+        self.assertIsNone(result["gender"])
+        self.assertIsNone(result["birth_date"])
+        self.assertEqual(result["employment_status"], "student")
+
+    def test_json_wrapped_in_prose_or_code_fence_is_still_parsed(self) -> None:
+        # 모델이 코드펜스나 앞뒤 설명을 붙여 답하는 건 흔한 일이라, 그것만으로
+        # 슬롯을 통째로 잃으면 안 된다.
+        client = FakeLLMClient('설명입니다.\n```json\n{"region_raw": "부산"}\n```\n끝')
+        result = llm_gateway.extract_slots("어디 사는지 물으셨죠", {}, llm_client=client)
+        self.assertEqual(result["region_raw"], "부산")
+
+    def test_llm_is_not_called_when_rules_already_answered_everything(self) -> None:
+        """규칙이 물어본 항목을 다 채웠으면 LLM을 부르지 않는다.
+
+        되묻기 답변은 규칙만으로 다 잡히는 경우가 많은데, 그런 턴에도 LLM을
+        부르면 아무것도 더 얻지 못하면서 호출 시간만 그대로 든다.
+        실측에서 N1 한 번이 50초였다(추론형 모델 호출 1회).
+        """
+
+        client = FakeLLMClient(json.dumps({"gender": "male"}))
+        result = llm_gateway.extract_slots(
+            "그건 잘 모르겠어요", {}, llm_client=client, asked_slots=["income_bracket"]
+        )
+        # 규칙이 "모름"을 센티넬로 확정했으므로 LLM은 부르지 않는다.
+        self.assertEqual(result["income_bracket"], "unknown")
+        self.assertEqual(client.calls, [])
+
+    def test_llm_is_still_called_when_rules_fell_short(self) -> None:
+        # 규칙이 못 채운 항목이 남아 있으면 LLM에게 맡긴다. 이때 직전에
+        # 물어본 항목이 프롬프트에 들어가야 "모름"이 어느 슬롯에 대한
+        # 답인지 LLM이 판단할 수 있다.
+        client = FakeLLMClient(json.dumps({"income_bracket": "unknown"}))
+        # "글쎄"는 규칙의 '모름' 표현 목록에 있어서 규칙이 처리해버린다.
+        # 규칙이 아무것도 못 잡는 발화를 써야 LLM 경로를 검증할 수 있다.
+        result = llm_gateway.extract_slots(
+            "네 그렇습니다", {}, llm_client=client, asked_slots=["income_bracket"]
+        )
+        self.assertEqual(len(client.calls), 1)
+        self.assertIn("income_bracket", client.calls[0]["prompt"])
+        self.assertEqual(result["income_bracket"], "unknown")
+
+    def test_first_free_form_turn_always_asks_the_llm(self) -> None:
+        # 되묻기 맥락이 없는 첫 발화는 규칙이 뭘 잡았든 LLM에게 물어본다.
+        # 규칙이 못 읽는 문장을 이해하는 것이 LLM을 붙인 이유다.
+        client = FakeLLMClient("{}")
+        llm_gateway.extract_slots("혼자 사는데 월세가 부담돼요", {}, llm_client=client)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_prompt_never_carries_email_phone_or_resident_id(self) -> None:
+        # 외부 LLM provider로 나가는 텍스트에 PII가 실리면 안 된다.
+        client = FakeLLMClient("{}")
+        llm_gateway.extract_slots(
+            "제 번호는 010-1234-5678, 이메일 a@b.com, 주민번호 990101-1234567입니다",
+            {},
+            llm_client=client,
+        )
+        prompt = client.calls[0]["prompt"]
+        self.assertNotIn("010-1234-5678", prompt)
+        self.assertNotIn("a@b.com", prompt)
+        self.assertNotIn("990101-1234567", prompt)
+
+    def test_prompt_enum_choices_are_generated_from_the_contract(self) -> None:
+        # 프롬프트에 값 목록을 손으로 적어두면 계약이 바뀔 때 조용히 어긋나고,
+        # LLM이 계약에 없는 값만 내놓아 전부 버려진다 - 회귀 테스트.
+        prompt = llm_gateway.build_slot_extraction_prompt("테스트 발화")
+        for member in EmploymentStatus:
+            self.assertIn(f'"{member.value}"', prompt)
+
+    def test_age_subject_signals_are_merged_not_replaced(self) -> None:
+        # 규칙이 잡은 신호를 LLM 응답이 덮어써서 없애면, 41세 학부모의
+        # "우리 아이 지원" 질문에 본인 나이로 필터가 걸려 아동 제도가 전부
+        # 탈락한다(참고자료 §8). 어느 한쪽만 감지해도 살린다.
+        client = FakeLLMClient(
+            json.dumps({"age_subject_signals": {"self": False, "child": False, "other": True}})
+        )
+        result = llm_gateway.extract_slots(
+            "우리 아이 지원 뭐 있나요", {}, llm_client=client
+        )
+        signals = result["age_subject_signals"]
+        self.assertTrue(signals["child"])  # 규칙이 잡은 신호가 살아있다
+        self.assertTrue(signals["other"])  # LLM이 준 신호도 함께 반영된다
+
+    def test_multi_value_fields_are_merged_as_a_union(self) -> None:
+        client = FakeLLMClient(json.dumps({"interests": ["주거"]}))
+        result = llm_gateway.extract_slots("육아 지원 알려줘", {}, llm_client=client)
+        self.assertIn("육아", result["interests"])  # 규칙이 뽑은 값
+        self.assertIn("주거", result["interests"])  # LLM이 뽑은 값
+
+
 class LlmGatewayFollowupQuestionTests(unittest.TestCase):
     def test_mentions_reference_links_only_when_present(self) -> None:
         without_refs = llm_gateway.generate_followup_question(0)
@@ -125,6 +348,47 @@ class ParseSlotsNodeTests(unittest.TestCase):
         result = parse_slots(state)
         self.assertEqual(result["slots"]["region_scope"], "national")
         self.assertEqual(result["slots"]["region_names"], ["전국"])
+
+    def test_llm_client_is_threaded_through_and_derives_age(self) -> None:
+        # N1이 llm_client를 실제로 gateway까지 넘기는지, 그리고 LLM이 채운
+        # 생년월일에서 만 나이 파생까지 정상적으로 이어지는지 확인한다.
+        client = FakeLLMClient(json.dumps({"birth_date": "1955-03-01"}))
+        state = {
+            "user_input": "1955년 3월생이에요",
+            "slots": {},
+            "missing_slots": ["birth_date"],
+        }
+
+        slots = parse_slots(state, llm_client=client)["slots"]
+
+        self.assertEqual(slots["birth_date"], "1955-03-01")
+        # 나이는 사용자가 말한 숫자가 아니라 생년월일에서 파생된 값이다.
+        expected_age, _ = calculate_ages(date(1955, 3, 1), date.today())
+        self.assertEqual(slots["age"], expected_age)
+        # 직전에 물어본 슬롯이 프롬프트 맥락으로 전달됐는지도 확인한다.
+        self.assertIn("birth_date", client.calls[0]["prompt"])
+
+    def test_first_question_is_preserved_for_the_search_query(self) -> None:
+        # user_input은 되묻기에 답할 때마다 덮어써진다. N4 검색에 쓸 원래
+        # 질문을 첫 턴에 한 번만 보존하고, 이후 턴에는 건드리지 않는다.
+        first = parse_slots({"user_input": "아이 키우는데 지원 뭐 있나요", "slots": {}})
+        self.assertEqual(first["initial_user_input"], "아이 키우는데 지원 뭐 있나요")
+
+        later = parse_slots(
+            {
+                "user_input": "서울, 2000-03-26, 여성",
+                "slots": {},
+                "initial_user_input": "아이 키우는데 지원 뭐 있나요",
+            }
+        )
+        self.assertNotIn("initial_user_input", later)
+
+    def test_without_llm_client_behaves_exactly_as_before(self) -> None:
+        # LLM을 안 붙여도 규칙 기반으로 그대로 동작해야 한다(기존 배포 경로).
+        state = {"user_input": "1990년 3월 15일생 서울 살아요", "slots": {}}
+        slots = parse_slots(state)["slots"]
+        self.assertEqual(slots["birth_date"], "1990-03-15")
+        self.assertEqual(slots["region_names"], ["서울특별시"])
 
     def test_reentry_keeps_existing_region_when_new_turn_omits_it(self) -> None:
         state = {
@@ -380,14 +644,27 @@ class RequestMissingSlotNodeTests(unittest.TestCase):
         result = request_missing_slot_input(state)
         self.assertIn("법령 참고 링크", result["followup_question"])
 
-    def test_asks_only_for_region_when_region_is_among_the_missing_slots(self) -> None:
-        # 지역과 프로필 슬롯이 함께 비어 있어도 한 번에 여섯 가지를 몰아 묻지
-        # 않는다. 지역이 확정돼야 검색 자체가 성립한다.
+    def test_asks_every_missing_slot_at_once_including_region(self) -> None:
+        # 2026-08-31 변경: 예전에는 지역이 섞여 있으면 지역만 먼저 물었다.
+        # 되묻기 왕복이 두 배로 늘어 대화가 길어지고, 슬롯별 상한
+        # (MAX_SLOT_ASKS)에 먼저 닿아 값이 unknown으로 확정돼버리는 문제가
+        # 더 커서 한 번에 모아 묻도록 바꿨다 - 회귀 테스트.
         state = {"missing_slots": ["region", "gender", "birth_date"]}
         result = request_missing_slot_input(state)
-        self.assertIn("지역", result["followup_question"])
-        self.assertNotIn("성별", result["followup_question"])
-        self.assertEqual(result["slot_ask_counts"], {"region": 1})
+        question = result["followup_question"]
+        self.assertIn("지역", question)
+        self.assertIn("성별", question)
+        self.assertIn("생년월일", question)
+        self.assertEqual(
+            result["slot_ask_counts"], {"region": 1, "gender": 1, "birth_date": 1}
+        )
+
+    def test_question_orders_slots_by_contract_not_by_caller_order(self) -> None:
+        # 호출자가 어떤 순서로 넘기든 지역 -> 프로필 순서로 묻는다.
+        state = {"missing_slots": ["employment_status", "birth_date", "region"]}
+        question = request_missing_slot_input(state)["followup_question"]
+        self.assertLess(question.index("거주 지역"), question.index("생년월일"))
+        self.assertLess(question.index("생년월일"), question.index("취업 상태"))
 
     def test_asks_profile_slots_together_once_region_is_settled(self) -> None:
         state = {"missing_slots": ["birth_date", "gender", "income_bracket"]}
@@ -514,6 +791,23 @@ class ProfileSlotExtractionTests(unittest.TestCase):
         result = llm_gateway.extract_slots("출산 지원금이랑 육아 지원 궁금해요", {})
         self.assertIsNone(result["pregnancy_status"])
         self.assertIn("출산", result["interests"])
+
+    def test_extracts_requested_benefit_names_as_soft_interests(self) -> None:
+        cases = (
+            ("지원금제도 받고 싶어", "지원금제도"),
+            ("실업급여 관련 제도 알아봐줘", "실업급여"),
+            ("청년수당 받을 수 있나요?", "청년수당"),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                result = llm_gateway.extract_slots(text, {})
+                self.assertIn(expected, result["interests"])
+
+    def test_llm_prompt_explains_open_ended_interest_intent(self) -> None:
+        prompt = llm_gateway.build_slot_extraction_prompt("문화예술비 받고 싶어")
+        self.assertIn("OOO 받고 싶어", prompt)
+        self.assertIn("OOO 관련 제도 알아봐줘", prompt)
+        self.assertIn("실업급여", prompt)
 
     def test_out_of_contract_enum_values_are_not_stored(self) -> None:
         # 계약에 없는 값이 슬롯에 들어가면 하드 게이트가 "채워졌음"으로 읽고
