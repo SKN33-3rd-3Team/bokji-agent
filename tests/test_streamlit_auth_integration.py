@@ -35,8 +35,13 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         self._tmp.cleanup()
 
     # -- 공통 헬퍼 --------------------------------------------------------
+    # 로그아웃/탈퇴 흐름은 마지막에 ``goto("chat")`` 로 상담 화면을 한 번
+    # 렌더링한다. 그 첫 렌더가 ``get_store("korean")`` 에서 multilingual-e5
+    # 모델 로딩 + 샘플 색인을 수행해 수십 초가 걸릴 수 있다(프로세스당 1회).
+    # 전체 스위트를 함께 돌릴 때 CPU 경합으로 30초를 넘겨 타임아웃 나던 것을
+    # 막으려고 넉넉히 잡는다.
     def _app(self, view: str) -> AppTest:
-        at = AppTest.from_file(_APP, default_timeout=30)
+        at = AppTest.from_file(_APP, default_timeout=90)
         at.session_state["view"] = view
         return at.run()
 
