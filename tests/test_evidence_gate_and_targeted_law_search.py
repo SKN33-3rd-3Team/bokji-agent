@@ -207,8 +207,8 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
         self.assertTrue(result["abstention_decision"].abstain)
         self.assertIs(result["abstention_decision"].reason, reason)
 
-    def test_t0_claim_plan_must_be_a_nonempty_list(self) -> None:
-        for value in (None, {}, []):
+    def test_t0_empty_claim_plan_abstains_and_invalid_values_raise(self) -> None:
+        for value in (None, {}):
             with self.subTest(value=value):
                 state = self._state()
                 if value is None:
@@ -217,6 +217,12 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
                     state["claim_plan"] = value
                 with self.assertRaises(ValueError):
                     evaluate_evidence(state)
+
+        state = self._state()
+        state["claim_plan"] = []
+        self.assertFailReason(
+            evaluate_evidence(state), AbstentionReason.NO_EVIDENCE
+        )
 
         for claim_type in (None, "other", 1):
             with self.subTest(claim_type=claim_type):
