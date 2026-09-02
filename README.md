@@ -66,7 +66,9 @@ bokji-agent/
 
 사용자 질문이 들어오면, 아래 순서로 처리한다 (N1~N14):
 
-<img width="2360" height="4494" alt="image" src="https://github.com/user-attachments/assets/c6631c21-f20a-4d68-94c7-a5d4bbdea55c" />
+<p align="center">
+  <img width="600" alt="파이프라인 아키텍처" src="https://github.com/user-attachments/assets/c6631c21-f20a-4d68-94c7-a5d4bbdea55c" />
+</p>
 
 <!-- 위 이미지 경로는 실제 다이어그램 파일을 저장소에 올린 뒤 경로 맞춰서 수정 -->
 
