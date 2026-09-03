@@ -706,6 +706,15 @@ def evaluate_evidence(state: GraphState) -> dict[str, Any]:
         )
 
     query_id = _query_id(state)
+    if state.get("claim_plan") == []:
+        return _output(
+            "fail",
+            decide_abstention(EvidenceState(evidence_chunk_ids=())),
+            missing_document_claim_ids=[],
+            missing_law_claim_ids=[],
+            doc_retry_count=doc_retry_count,
+            law_retry_count=law_retry_count,
+        )
     claims = _claim_plan(state)
     subsidy_chunks = _retrieved_chunks(state, "subsidy_chunks")
     law_chunks = _retrieved_chunks(state, "law_chunks")
