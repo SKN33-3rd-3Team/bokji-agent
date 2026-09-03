@@ -77,7 +77,7 @@
 
 온라인 상담 런타임과 오프라인 데이터 수집·색인 경로를 분리한 전체 시스템 구성입니다.
 
-![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture.png)
+![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture_fixed.png)
 
 > 세부적인 N1~N14 제어 흐름은 아래의
 > [에이전트 파이프라인](#-에이전트-파이프라인-langgraph-n1-n14-pipeline)을 참고하세요.
