@@ -390,6 +390,14 @@ class PolicyView(TypedDict, total=False):
     amount_total: float | None
     duplicate_status: str
     duplicate_note: str | None
+    # 조항의 성격("other"/"household"/"header"/None)과, 그에 따라 화면에
+    # 어떤 안내를 낼지 정하는 재료. 셋을 한 문구로 뭉뚱그리면 "1가구 1회"가
+    # "다른 제도와 중복 불가"로 읽힌다(N11 duplicate_benefit.py 참고).
+    duplicate_clause_kind: str | None
+    # 같은 답변에 함께 나온 정책 중 중복수급이 안 되는 것들.
+    duplicate_conflicts: list[dict]
+    # 신청 횟수·가구 단위 제한 원문. 중복수급과는 별개 안내로 낸다.
+    household_limit_clauses: list[str]
     needs_confirmation: list[str]
     related_law: list[dict]
     detail: PolicyDetail
@@ -581,9 +589,13 @@ def _build_policy_view(
     amount = benefit.get("amount") if benefit else None
     amount_label = _format_amount_label(amount, entry.get("status_note"), benefit)
 
-    duplicate = entry.get("duplicate")
+    duplicate = entry.get("duplicate") or {}
     duplicate_status = duplicate.get("status") if duplicate else "미확인"
     duplicate_note = duplicate.get("condition_note") if duplicate else entry.get("status_note")
+    duplicate_clause_kind = duplicate.get("clause_kind")
+    household_limit_clauses = [
+        str(item) for item in duplicate.get("household_clauses") or []
+    ]
 
     needs_confirmation: list[str] = []
     if verdict == "미확인":
@@ -634,6 +646,13 @@ def _build_policy_view(
         "amount_total": (benefit or {}).get("total_amount"),
         "duplicate_status": duplicate_status,
         "duplicate_note": duplicate_note,
+        "duplicate_clause_kind": duplicate_clause_kind,
+        # 상대 정책의 "제목"은 다른 뷰가 만들어져야 알 수 있어서 여기서는
+        # id만 담고, 뷰를 전부 만든 뒤 _attach_duplicate_conflicts가 채운다.
+        "duplicate_conflicts": [
+            {"policy_id": str(pid)} for pid in duplicate.get("conflicts_with") or []
+        ],
+        "household_limit_clauses": household_limit_clauses,
         "needs_confirmation": needs_confirmation,
         "related_law": entry.get("related_law", []),
         "detail": {
@@ -653,6 +672,24 @@ def _build_policy_view(
             "source_name": detail_raw.get("source_name"),
         },
     }
+
+
+def _attach_duplicate_conflicts(views: list[PolicyView]) -> None:
+    """``duplicate_conflicts``의 각 항목에 상대 정책의 제목을 채운다.
+
+    N11은 policy_id만 알고 제목은 모른다(제목은 chunk 본문에서 뽑는다).
+    화면에는 id가 아니라 이름이 나가야 하므로, 같은 응답 안의 뷰들끼리
+    id -> title 로 이어 붙인다. 이번 답변에 없는 정책은 id를 그대로 둔다.
+    """
+
+    titles = {
+        str(view.get("policy_id")): str(view.get("title") or view.get("policy_id"))
+        for view in views
+    }
+    for view in views:
+        for conflict in view.get("duplicate_conflicts") or []:
+            policy_id = conflict.get("policy_id")
+            conflict["title"] = titles.get(policy_id, policy_id)
 
 
 def _rank_policies(policies: dict[str, dict]) -> list[tuple[str, dict]]:
@@ -838,6 +875,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         )
         for i, (policy_id, entry) in enumerate(ranked)
     ]
+    _attach_duplicate_conflicts(policy_views)
 
     output_json = {
         "status": "answered",
