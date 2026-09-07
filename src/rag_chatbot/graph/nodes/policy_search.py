@@ -91,6 +91,85 @@ def _load_legal_basis_chunks(
     return legal_basis_chunks
 
 
+def _select_top_policies(
+    candidates: list[RetrievedChunk], top_k: int
+) -> list[RetrievedChunk]:
+    """정책(document) 단위로 상위 ``top_k``개를 고른다.
+
+    예전에는 ``candidates[:top_k]``로 **청크**를 잘랐다. 한 정책은 여러 섹션
+    청크로 쪼개져 있고 같은 정책의 섹션들은 서로 텍스트가 비슷해서 유사도
+    순위에서 나란히 붙는다. 그래서 "정책 후보 수 5"로 검색해도 상위 5청크가
+    전부 한 정책이면 결과가 1건만 나왔다(실측으로 확인된 증상).
+
+    candidates는 이미 유사도순이므로, 정책마다 **가장 잘 맞은 청크 하나**를
+    대표로 잡고 서로 다른 정책이 top_k개 찰 때까지 내려간다. rank도 청크
+    순위가 아니라 정책 순위가 된다.
+    """
+
+    selected: list[RetrievedChunk] = []
+    seen_policies: set[str] = set()
+    for candidate in candidates:
+        policy_id = candidate.chunk.metadata.get("source_id")
+        if not isinstance(policy_id, str) or not policy_id:
+            raise ValueError("subsidy chunk must have a non-empty source_id")
+        if policy_id in seen_policies:
+            continue
+        seen_policies.add(policy_id)
+        selected.append(replace(candidate, rank=len(selected) + 1))
+        if len(selected) >= top_k:
+            break
+    return selected
+
+
+def _load_full_policy_chunks(
+    store: ChromaVectorStore, selected: list[RetrievedChunk]
+) -> list[RetrievedChunk]:
+    """선택된 정책들의 **모든 섹션 청크**를 metadata 조회로 가져온다.
+
+    유사도 검색이 아니라 ``get_chunks_by_metadata``를 쓴다 - 어떤 섹션이
+    질의와 비슷한지는 여기서 중요하지 않고, 그 정책의 전부가 필요하다.
+    임베딩을 돌리지 않으므로 검색보다 싸다.
+
+    N9~N11이 각자 top_k를 정해 재검색하던 것을 대체한다. 그쪽 방식은
+    top_k에 걸려 조항이 있는 섹션을 아예 못 가져오는 경우가 있었다
+    (N11의 ``_RECHECK_TOP_K = 8`` < 긴 문서의 청크 수).
+
+    RetrievedChunk로 감싸 돌려주는 이유는 N9~N11이 이미 그 형태를 기대하기
+    때문이다. score는 유사도가 아니므로 0.0으로 두고, 유사도로 정렬하거나
+    비교하는 데 쓰지 않는다.
+    """
+
+    if not selected:
+        return []
+
+    query_id = selected[0].query_id
+    full: list[RetrievedChunk] = []
+    seen_chunk_ids: set[str] = set()
+    for candidate in selected:
+        policy_id = candidate.chunk.metadata["source_id"]
+        matches = store.get_chunks_by_metadata(
+            SourceType.SUBSIDY, metadata_equals={"source_id": policy_id}
+        )
+        for rank, chunk in enumerate(
+            sorted(matches, key=lambda item: (item.ordinal, item.chunk_id)), start=1
+        ):
+            if chunk.chunk_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(chunk.chunk_id)
+            full.append(
+                RetrievedChunk(
+                    query_id=query_id,
+                    chunk=chunk,
+                    rank=rank,
+                    score=0.0,
+                    score_type="not_ranked",
+                    retriever_version="metadata:full_document",
+                    index_name="subsidy",
+                )
+            )
+    return full
+
+
 def _build_query(slots: dict, question: str | None = None) -> str:
     """검색 질의를 만든다: 관심사 키워드 + 사용자의 원래 질문.
 
@@ -178,11 +257,9 @@ def search_policies(
         search_filter=search_filter,
     )
     filtered = filter_candidates(results, support_conditions, filter_plan)
-    selected = [
-        replace(candidate, rank=rank)
-        for rank, candidate in enumerate(filtered[:resolved_top_k], start=1)
-    ]
+    selected = _select_top_policies(filtered, resolved_top_k)
     return {
         "subsidy_chunks": selected,
         "subsidy_legal_basis_chunks": _load_legal_basis_chunks(store, selected),
+        "subsidy_full_chunks": _load_full_policy_chunks(store, selected),
     }
