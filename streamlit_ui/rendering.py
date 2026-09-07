@@ -92,6 +92,67 @@ def _render_policy_detail(policy: Mapping[str, Any]) -> None:
             )
 
 
+def _render_duplicate_detail(policy: Mapping[str, Any]) -> None:
+    """중복수급 판정의 근거를 성격에 맞는 문구로 보여준다.
+
+    원천 문서의 "중복" 표현은 세 종류가 섞여 있어서(N11 duplicate_benefit.py
+    참고) 한 문구로 뭉뚱그리면 오해를 부른다. "1가구 1회"를 "다른 제도와
+    중복 불가"로 읽게 두지 않는 것이 이 함수의 목적이다.
+
+      other + 상대 확인   -> 상대 정책 이름을 그대로 보여준다
+      other + 상대 미상   -> "다른 제도와 제한 있음, 확인 필요"
+      household           -> 중복수급이 아니라 신청 횟수 제한으로 따로 안내
+      header              -> 조건이 안 적혀 있으니 공식 문서로 안내
+    """
+
+    kind = policy.get("duplicate_clause_kind")
+    conflicts = [
+        item for item in policy.get("duplicate_conflicts") or [] if isinstance(item, Mapping)
+    ]
+
+    if conflicts:
+        names = ", ".join(
+            str(item.get("title") or item.get("policy_id")) for item in conflicts
+        )
+        st.error(
+            f"아래 제도와 함께 받을 수 없습니다 — {names}",
+            icon=":material/block:",
+        )
+    elif kind == "other":
+        st.warning(
+            "다른 제도와 중복수급이 제한됩니다. 어떤 제도인지는 문서에 특정돼 있지 "
+            "않으니 신청 기관에 확인해 주세요.",
+            icon=":material/help:",
+        )
+    elif kind == "header":
+        st.info(
+            "문서에 중복수혜 제한 항목이 표시돼 있으나 구체적인 조건이 적혀 있지 "
+            "않습니다. 공식 문서에서 직접 확인해 주세요.",
+            icon=":material/description:",
+        )
+        _render_official_link(policy)
+
+    for clause in policy.get("household_limit_clauses") or []:
+        st.caption(f":material/counter_1: 신청 횟수·가구 제한: {clause}")
+
+    duplicate_note = policy.get("duplicate_note")
+    # 위에서 이미 같은 내용을 문구로 냈으면 원문을 두 번 보여주지 않는다.
+    if duplicate_note and not conflicts and kind not in ("other", "header"):
+        st.caption(str(duplicate_note))
+
+
+def _render_official_link(policy: Mapping[str, Any]) -> None:
+    """정책 공식 원문 링크. (c) 안내에서 "직접 확인"의 실제 경로를 준다."""
+
+    source_url = (policy.get("detail") or {}).get("source_url")
+    if source_url:
+        st.link_button(
+            "공식 문서에서 중복수혜 조건 확인",
+            str(source_url),
+            icon=":material/open_in_new:",
+        )
+
+
 def _render_policy(policy: Mapping[str, Any], *, metric_key: str) -> None:
     verdict = str(policy.get("eligibility_status") or "미확인")
     style = VERDICT_STYLE.get(verdict, VERDICT_STYLE["미확인"])
@@ -137,9 +198,7 @@ def _render_policy(policy: Mapping[str, Any], *, metric_key: str) -> None:
             border=True,
             icon=":material/join_inner:",
         )
-        duplicate_note = policy.get("duplicate_note")
-        if duplicate_note:
-            st.caption(str(duplicate_note))
+        _render_duplicate_detail(policy)
 
         confirmations = [str(item) for item in policy.get("needs_confirmation") or []]
         if confirmations:
