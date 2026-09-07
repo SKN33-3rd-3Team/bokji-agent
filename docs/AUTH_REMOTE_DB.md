@@ -39,6 +39,17 @@
 
 ## 1. RunPod 에서 해야 하는 것
 
+> **이미지를 반드시 `mariadb:11` 로.** PyTorch/Ubuntu 같은 일반 이미지로 Pod 를
+> 만들면 MariaDB 가 아예 없고, 손으로 `apt install` 해도 컨테이너 디스크라
+> **Pod 를 재시작할 때마다 사라진다.** `mariadb:11` 이미지는 MariaDB 가
+> 들어있고 부팅 시 자동 기동 + `MARIADB_*` env 로 DB/계정 자동 생성한다 —
+> 설치 스크립트가 필요 없다.
+>
+> 이미 일반 Ubuntu Pod 를 띄워버려서 재배포가 어렵다면
+> `scripts/runpod_mariadb_bootstrap.sh` (멱등: 설치→기동→DB/계정 보장, 데이터는
+> 영속 볼륨 `/workspace/mariadb` 에)를 접속 후 실행하거나 Pod 의 "Container
+> Start Command" 로 등록한다. 그래도 정석은 `mariadb:11` 재배포다.
+
 ### 1-1. Network Volume 먼저 만든다 (필수)
 
 Pod 의 컨테이너 디스크는 **Pod 를 Stop/삭제하면 사라진다.** 회원 데이터를
@@ -136,8 +147,15 @@ FLUSH PRIVILEGES;
    python src/rag_chatbot/auth/__main__.py keygen
    ```
 
-3. 연결·스키마 생성 확인 — 아무 회원가입 한 번이면 `users` 테이블이
-   자동으로 만들어진다:
+3. **연결 진단** — 앱을 띄우기 전에 이 스크립트로 포트→서버→로그인→DB→
+   테이블을 단계별로 확인한다(어디서 막히는지 바로 나온다):
+   ```
+   python scripts/check_auth_db.py
+   ```
+   (`AUTH_DB_URL` 을 읽는다. `--url mysql://...` 로 직접 넘겨도 된다.)
+
+4. 스키마 생성 확인 — 아무 회원가입 한 번이면 `users` 테이블이 자동으로
+   만들어진다:
    ```
    streamlit run app.py
    ```
@@ -147,7 +165,7 @@ FLUSH PRIVILEGES;
    없습니다" 안내가 뜬다(앱이 죽지는 않는다 —
    `AuthBackendUnavailableError`).
 
-4. (선택) DBeaver / `mysql` CLI 로 확인:
+5. (선택) DBeaver / `mysql` CLI 로 확인:
    ```sql
    USE bokji;
    SELECT id, username, created_at FROM users;   -- 비번 해시/암호문은 굳이 안 봄
