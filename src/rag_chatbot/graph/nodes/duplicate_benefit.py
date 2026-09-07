@@ -97,6 +97,90 @@ _CLAUSE_MAX_CHARS = 200
 # 한 정책에서 인용할 조항 수 상한.
 _MAX_CLAUSES = 3
 
+# ── 조항 성격 분류 ──────────────────────────────────────────────────
+# 원천 문서의 "중복" 표현은 한 가지가 아니다. 247개 조항을 전수 분류한 결과:
+#   other     164건(66%)  "에너지바우처와 중복지원 불가", "참전명예수당과 중복지급 안됨"
+#   household  65건(26%)  "1가구당 중복지원 불가", "기수혜자 중복 수혜 불가"
+#   header     18건( 7%)  "※ 중복수혜불가 조건" (조건 내용이 안 적혀 있음)
+# 이걸 전부 "중복수급 제한 조항이 있습니다"로 보여주면, 신청 횟수 제한일 뿐인
+# household를 사용자가 "다른 제도와 못 받는다"로 읽는다.
+
+# 같은 제도 재신청 / 가구·세대 단위 제한을 가리키는 표현.
+_HOUSEHOLD_MARKERS = re.compile(
+    r"가구당|세대당|1인\s*1회|1회에\s*한|본인에\s*한|기수혜|이미\s*(지원|수혜)"
+    r"|동일\s*(주소지|세대|가구|인)|재신청|중복\s*신청"
+)
+# 다른 제도를 가리키는 표현. 상대가 문장 안에 등장한다는 신호.
+_OTHER_PROGRAM_MARKERS = re.compile(
+    r"타\s*(기관|사업|지자체|공공기관|시도|부처|법인|단체)|다른\s*(사업|제도|기관)"
+    r"|중앙부처|중앙정부|유사\s*사업|와\s*중복|과\s*중복"
+    r"|바우처|수급자|장학금|수당|이용권|지원사업|지원금|보조금|급여|공제|연금"
+    # "○ 중복불가서비스 : 유아학비(누리과정) 지원, 영유아보육료 지원" 처럼
+    # 콜론 뒤에 상대를 나열하는 형태. 나열되는 이름이 "OOO 지원"이면 위의
+    # 어휘 목록에 하나도 안 걸려서 이 패턴이 없으면 통째로 놓친다.
+    r"|중복\s*불가\s*서비스"
+    r"|중복[가-힣\s]{0,8}(불가|제한|배제)\s*[::]\s*\S"
+)
+# 조건 내용 없이 제목만 있는 조항("※ 중복수혜불가 조건").
+# 길이로만 자르면 "1가구당 중복지원 불가"(12자)처럼 뜻이 분명한 조항까지
+# 헤더로 잘못 분류된다. 그래서 **제한 표현 자체를 지우고 남는 게 있는지**로
+# 판단한다 - 남는 게 "조건"뿐이면 헤더, "1가구당"이 남으면 헤더가 아니다.
+_BULLET_PREFIX = re.compile(r"^[※○◦*\-·ㆍ□■●\s]+")
+_HEADER_RESIDUE_WORDS = frozenset({"", "조건", "대상", "항목", "여부", "사항"})
+
+CLAUSE_KIND_OTHER = "other"
+CLAUSE_KIND_HOUSEHOLD = "household"
+CLAUSE_KIND_HEADER = "header"
+
+
+def classify_clause(clause: str) -> str:
+    """중복 조항 한 문장을 other / household / header 로 분류한다."""
+
+    body = _BULLET_PREFIX.sub("", clause).strip()
+    residue = _RESTRICTION_PATTERN.sub(" ", body)
+    residue = re.sub(r"[\s:：·,、/()]+", "", residue)
+    if residue in _HEADER_RESIDUE_WORDS:
+        return CLAUSE_KIND_HEADER
+    has_other = bool(_OTHER_PROGRAM_MARKERS.search(clause))
+    has_household = bool(_HOUSEHOLD_MARKERS.search(clause))
+    if has_household and not has_other:
+        return CLAUSE_KIND_HOUSEHOLD
+    if has_other:
+        return CLAUSE_KIND_OTHER
+    # 상대도 가구 표현도 없으면 "다른 제도"라고 단정하지 않는다.
+    return CLAUSE_KIND_HOUSEHOLD
+
+
+def find_named_conflicts(
+    clauses: list[str], titles_by_policy_id: dict[str, str], self_policy_id: str
+) -> dict[str, str]:
+    """조항 문장 안에 **같은 답변에 함께 나온 다른 정책의 제목**이 있으면 찾는다.
+
+    전체 10,968건과 대조하지 않고 이번 답변의 정책들(보통 5개)하고만 맞춰본다.
+    이유가 둘이다.
+
+    1. 정확하다. 전체 제목 사전과 대조하면 "보훈명예수당"처럼 지자체마다 같은
+       이름을 쓰는 정책이 엉뚱하게 걸린다(실측: 전체 대조 시 관계쌍 177건 중
+       133건이 서로 다른 지역이었다). 같은 답변에 뜬 정책끼리는 지역 조건이
+       이미 맞춰져 있어서 이 오답이 생기지 않는다.
+    2. 싸다. 5x5 문자열 비교라 비용이 사실상 0이다.
+
+    돌려주는 값은 ``{policy_id: 근거 문장}``이다 - 어느 문장 때문에 충돌로
+    판정했는지 화면에서 보여줄 수 있어야 한다.
+    """
+
+    found: dict[str, str] = {}
+    for clause in clauses:
+        for policy_id, title in titles_by_policy_id.items():
+            if policy_id == self_policy_id or policy_id in found:
+                continue
+            name = (title or "").strip()
+            # 너무 짧은 제목은 우연히 걸린다("지원", "수당" 같은 것).
+            if len(name) < 4 or name not in clause:
+                continue
+            found[policy_id] = clause
+    return found
+
 
 def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict:
     """state["eligibility_verdicts"]와 state["claim_plan"](duplicate claim,
@@ -125,6 +209,14 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
             continue
         claims_by_policy[claim["policy_id"]].append(claim)
 
+    # N4가 실어 보낸 전체 섹션을 쓴다. 없으면(예전 계약·단위 테스트) 정책마다
+    # 재검색하는 기존 경로로 떨어진다.
+    full_by_policy: dict[str, list] = defaultdict(list)
+    for retrieved in state.get("subsidy_full_chunks") or []:
+        full_by_policy[retrieved.chunk.metadata.get("source_id")].append(retrieved)
+
+    titles_by_policy_id = _policy_titles(state)
+
     verdicts: list[DuplicateVerdict] = []
     for policy_id, claims in claims_by_policy.items():
         relevant = [
@@ -138,34 +230,45 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
                     "policy_id": policy_id,
                     "status": "미확인",
                     "conflicts_with": [],
+                    "clause_kind": None,
+                    "restriction_clauses": [],
+                    "household_clauses": [],
                     "condition_note": "중복수급 근거가 없거나 불확실함 (재검색 생략)",
                 }
             )
             continue
 
-        try:
-            recheck_chunks = store.search(
-                SourceType.SUBSIDY,
-                f"{policy_id} 중복수급 병급 제한",
-                query_id=f"{state.get('query_id', 'n11')}-{policy_id}-recheck",
-                top_k=_RECHECK_TOP_K,
-                search_filter=VectorSearchFilter(metadata_equals={"source_id": policy_id}),
-            )
-        except CollectionNotFoundError:
-            # 아직 정책이 하나도 색인되지 않은 상태 - 근거를 못 찾은 것과 동일하게
-            # 취급한다 (여기서 예외를 흘려보내면 그래프 전체가 죽는다).
-            recheck_chunks = ()
+        recheck_chunks = full_by_policy.get(policy_id) or ()
+        if not recheck_chunks:
+            try:
+                recheck_chunks = store.search(
+                    SourceType.SUBSIDY,
+                    f"{policy_id} 중복수급 병급 제한",
+                    query_id=f"{state.get('query_id', 'n11')}-{policy_id}-recheck",
+                    top_k=_RECHECK_TOP_K,
+                    search_filter=VectorSearchFilter(metadata_equals={"source_id": policy_id}),
+                )
+            except CollectionNotFoundError:
+                # 아직 정책이 하나도 색인되지 않은 상태 - 근거를 못 찾은 것과 동일하게
+                # 취급한다 (여기서 예외를 흘려보내면 그래프 전체가 죽는다).
+                recheck_chunks = ()
         if not recheck_chunks:
             verdicts.append(
                 {
                     "policy_id": policy_id,
                     "status": "미확인",
                     "conflicts_with": [],
+                    "clause_kind": None,
+                    "restriction_clauses": [],
+                    "household_clauses": [],
                     "condition_note": "재검색에서 해당 정책 근거를 다시 찾지 못함",
                 }
             )
             continue
 
+        # metadata 경로(mutually_exclusive_with)는 가장 강한 근거라 먼저 본다.
+        # 다만 정부24 원천에 이 필드가 한 건도 없어서 실제로는 거의 안 걸린다
+        # (실측 0/10,968). 나중에 계약이 확장될 때를 위해 남겨둔다.
         conflicts = _find_confirmed_conflicts(
             recheck_chunks, eligible_policy_ids - {policy_id}
         )
@@ -175,34 +278,111 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
                     "policy_id": policy_id,
                     "status": "불가",
                     "conflicts_with": sorted(conflicts),
+                    "clause_kind": CLAUSE_KIND_OTHER,
+                    "restriction_clauses": [],
+                    "household_clauses": [],
                     "condition_note": "재검색한 문서의 상호배타 metadata에 명시된 정책과 충돌",
                 }
             )
             continue
 
-        # metadata 경로에서 못 걸렀으면 원문 조항을 본다.
-        clauses = _find_restriction_clauses(recheck_chunks)
-        if clauses:
+        # 원문 조항을 성격별로 나눈다. 셋을 한 덩어리로 보여주면
+        # "1가구 1회"가 "다른 제도와 중복 불가"로 읽힌다.
+        buckets: dict[str, list[str]] = defaultdict(list)
+        for clause in _find_restriction_clauses(recheck_chunks):
+            buckets[classify_clause(clause)].append(clause)
+        other_clauses = buckets[CLAUSE_KIND_OTHER]
+        household_clauses = buckets[CLAUSE_KIND_HOUSEHOLD]
+        header_clauses = buckets[CLAUSE_KIND_HEADER]
+
+        # (a) 다른 제도 제한이고, 상대가 이번 답변 안에 실제로 있는 경우.
+        named = find_named_conflicts(other_clauses, titles_by_policy_id, policy_id)
+        if named:
+            names = ", ".join(
+                titles_by_policy_id.get(pid, pid) for pid in sorted(named)
+            )
+            verdicts.append(
+                {
+                    "policy_id": policy_id,
+                    "status": "불가",
+                    "conflicts_with": sorted(named),
+                    "clause_kind": CLAUSE_KIND_OTHER,
+                    "restriction_clauses": sorted(set(named.values())),
+                    "household_clauses": household_clauses,
+                    "condition_note": (
+                        f"{names}와(과) 중복수급이 불가합니다 - 원문: "
+                        + " / ".join(sorted(set(named.values())))
+                    ),
+                }
+            )
+            continue
+
+        # (a) 다른 제도 제한이지만 상대를 특정하지 못한 경우.
+        if other_clauses:
             verdicts.append(
                 {
                     "policy_id": policy_id,
                     "status": "조건부",
                     "conflicts_with": [],
+                    "clause_kind": CLAUSE_KIND_OTHER,
+                    "restriction_clauses": other_clauses,
+                    "household_clauses": household_clauses,
                     "condition_note": (
-                        "이 제도에 중복수급 제한 조항이 있습니다. 해당되는지 "
-                        "확인이 필요합니다 - 원문: " + " / ".join(clauses)
+                        "다른 제도와 중복수급이 제한되는 조항이 있습니다. 어떤 제도인지는 "
+                        "문서에 특정돼 있지 않아 신청 기관에 확인이 필요합니다 - 원문: "
+                        + " / ".join(other_clauses)
+                    ),
+                }
+            )
+            continue
+
+        # (b) 같은 제도 재신청·가구 단위 제한. 중복수급 판정이 아니다.
+        if household_clauses:
+            verdicts.append(
+                {
+                    "policy_id": policy_id,
+                    "status": "미확인",
+                    "conflicts_with": [],
+                    "clause_kind": CLAUSE_KIND_HOUSEHOLD,
+                    "restriction_clauses": [],
+                    "household_clauses": household_clauses,
+                    "condition_note": (
+                        "다른 제도와의 중복 제한은 문서에서 찾지 못했습니다. 다만 신청 "
+                        "횟수·가구 단위 제한이 있습니다 - 원문: "
+                        + " / ".join(household_clauses)
+                    ),
+                }
+            )
+            continue
+
+        # (c) "※ 중복수혜불가 조건"처럼 제목만 있고 내용이 없는 경우.
+        if header_clauses:
+            verdicts.append(
+                {
+                    "policy_id": policy_id,
+                    "status": "미확인",
+                    "conflicts_with": [],
+                    "clause_kind": CLAUSE_KIND_HEADER,
+                    "restriction_clauses": [],
+                    "household_clauses": [],
+                    "condition_note": (
+                        "문서에 중복수혜 제한 항목이 표시돼 있으나 구체적인 조건이 "
+                        "적혀 있지 않습니다. 공식 문서에서 직접 확인해 주세요."
                     ),
                 }
             )
             continue
 
         # 조항이 없다고 "가능"이라고 하지 않는다. 안 적혀 있는 것과 허용되는
-        # 것은 다르다(원천 데이터의 99%에는 애초에 언급이 없다).
+        # 것은 다르다(원천 데이터의 98%에는 애초에 언급이 없다).
         verdicts.append(
             {
                 "policy_id": policy_id,
                 "status": "미확인",
                 "conflicts_with": [],
+                "clause_kind": None,
+                "restriction_clauses": [],
+                "household_clauses": [],
                 "condition_note": (
                     "이 제도 문서에서 중복수급 제한 조항을 찾지 못했습니다. "
                     "다만 문서에 적혀 있지 않을 뿐일 수 있어 '중복 가능'으로 "
@@ -212,6 +392,26 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
         )
 
     return {"duplicate_verdicts": verdicts}
+
+
+def _policy_titles(state: GraphState) -> dict[str, str]:
+    """이번 답변에 나온 정책들의 ``{policy_id: 제목}``.
+
+    제목은 chunk 본문 첫 줄이다(chunking.py가 ``f"{제목}\n지역: ...\n{heading}"``
+    형태로 prefix를 붙인다). 전체 섹션이 있으면 그걸, 없으면 N4가 고른 대표
+    청크를 쓴다.
+    """
+
+    titles: dict[str, str] = {}
+    for field in ("subsidy_full_chunks", "subsidy_chunks"):
+        for retrieved in state.get(field) or []:
+            policy_id = retrieved.chunk.metadata.get("source_id")
+            if not policy_id or policy_id in titles:
+                continue
+            first_line = (retrieved.chunk.text or "").split("\n", 1)[0].strip()
+            if first_line:
+                titles[policy_id] = first_line
+    return titles
 
 
 def _find_restriction_clauses(recheck_chunks) -> list[str]:
