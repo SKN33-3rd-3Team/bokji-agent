@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -92,6 +91,14 @@ class UserNotFoundError(AuthError):
     """대상 사용자가 없음 (로그인 이후 흐름에서만 사용)."""
 
 
+class AuthBackendUnavailableError(AuthError):
+    """회원 DB(원격 MySQL/MariaDB 등)에 연결할 수 없음.
+
+    ``AUTH_DB_URL`` 로 원격 DB 를 쓰는데 RunPod Pod 가 꺼져 있거나 주소/계정이
+    틀렸을 때. 화면단은 ``except AuthError`` 로 잡아 안내만 하면 된다.
+    """
+
+
 class AccountLockedError(AuthError):
     """연속 로그인 실패로 계정이 일시적으로 잠김. ``retry_after_seconds`` 참고."""
 
@@ -139,13 +146,28 @@ def _normalize_username(username: object) -> str:
 
 
 def _open(db_path):
-    conn = repo.connect(db_path)
+    """``(backend, conn)`` 를 돌려준다.
+
+    ``AUTH_DB_URL`` 이 있으면 원격 MySQL/MariaDB, 없으면(또는 ``db_path`` 를
+    명시하면) SQLite. 백엔드 선택 규칙은 ``repository.get_backend`` 참고.
+
+    ``AUTH_DB_URL`` 형식 오류(``ValueError``)는 화면단이 다루기 쉽도록
+    :class:`AuthBackendUnavailableError` 로 감싼다.
+    """
+
     try:
-        repo.init_schema(conn)
+        backend = repo.get_backend(db_path)
+    except ValueError as exc:
+        raise AuthBackendUnavailableError(
+            f"회원 DB 설정(AUTH_DB_URL)이 올바르지 않습니다: {exc}"
+        ) from exc
+    conn = backend.connect()
+    try:
+        backend.init_schema(conn)
     except Exception:
         conn.close()
         raise
-    return conn
+    return backend, conn
 
 
 def _utcnow() -> datetime:
@@ -231,10 +253,10 @@ def sign_up(
         str(x).strip() for x in (interests or []) if str(x).strip()
     )
 
-    conn = _open(db_path)
+    backend, conn = _open(db_path)
     try:
         try:
-            user_id, created_at = repo.insert_user(
+            user_id, created_at = backend.insert_user(
                 conn,
                 username=uname,
                 password_hash=hash_password(password),
@@ -243,7 +265,7 @@ def sign_up(
                 interests_enc=_encrypt_interests(interest_items),
                 marketing_opt_in=marketing_opt_in,
             )
-        except sqlite3.IntegrityError as exc:
+        except repo.DuplicateUsername as exc:
             raise UsernameTakenError("이미 가입된 아이디(이메일)입니다.") from exc
     finally:
         conn.close()
@@ -263,9 +285,9 @@ def sign_up(
 def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
     uname = _normalize_username(username)
 
-    conn = _open(db_path)
+    backend, conn = _open(db_path)
     try:
-        row = repo.get_user_by_username(conn, uname)
+        row = backend.get_user_by_username(conn, uname)
 
         if row is None:
             # 계정 존재 여부를 응답 시간으로 알아내지 못하게 같은 검증 시간을 쓴다.
@@ -292,7 +314,7 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
             if fails >= limit:
                 secs = lockout.lockout_seconds()
                 new_lock = (now + timedelta(seconds=secs)).isoformat(timespec="seconds")
-                repo.set_login_security(
+                backend.set_login_security(
                     conn, user_id, failed_login_count=fails, locked_until=new_lock
                 )
                 _log.info(
@@ -300,7 +322,7 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
                     mask_email(uname), fails,
                 )
                 raise AccountLockedError(secs)
-            repo.set_login_security(
+            backend.set_login_security(
                 conn, user_id, failed_login_count=fails, locked_until=None
             )
             _log.info(
@@ -311,7 +333,7 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
 
         # 성공: 이전 실패 흔적이 있으면 초기화한다.
         if row["failed_login_count"] or row["locked_until"]:
-            repo.set_login_security(
+            backend.set_login_security(
                 conn, user_id, failed_login_count=0, locked_until=None
             )
 
@@ -327,9 +349,9 @@ def get_profile(username: str, *, db_path=None) -> AuthUser:
     """비밀번호 검증 없이 프로필을 읽어 복호화한다 (호출 전 세션으로 인증 확인)."""
 
     uname = _normalize_username(username)
-    conn = _open(db_path)
+    backend, conn = _open(db_path)
     try:
-        row = repo.get_user_by_username(conn, uname)
+        row = backend.get_user_by_username(conn, uname)
     finally:
         conn.close()
     if row is None:
@@ -353,9 +375,9 @@ def update_profile(
     """
 
     uname = _normalize_username(username)
-    conn = _open(db_path)
+    backend, conn = _open(db_path)
     try:
-        row = repo.get_user_by_username(conn, uname)
+        row = backend.get_user_by_username(conn, uname)
         if row is None:
             raise UserNotFoundError("존재하지 않는 사용자입니다.")
 
@@ -369,8 +391,8 @@ def update_profile(
         if interests is not None:
             changes["interests_enc"] = _encrypt_interests(interests)
 
-        repo.update_profile_fields(conn, int(row["id"]), **changes)
-        fresh = repo.get_user_by_username(conn, uname)
+        backend.update_profile_fields(conn, int(row["id"]), **changes)
+        fresh = backend.get_user_by_username(conn, uname)
     finally:
         conn.close()
 
@@ -389,9 +411,9 @@ def change_password(
 ) -> None:
     uname = _normalize_username(username)
 
-    conn = _open(db_path)
+    backend, conn = _open(db_path)
     try:
-        row = repo.get_user_by_username(conn, uname)
+        row = backend.get_user_by_username(conn, uname)
         if row is None:
             raise UserNotFoundError("존재하지 않는 사용자입니다.")
         if not verify_password(current_password, row["password_hash"]):
@@ -404,7 +426,7 @@ def change_password(
         if verify_password(new_password, row["password_hash"]):
             raise PasswordPolicyError(["새 비밀번호는 현재 비밀번호와 달라야 합니다."])
 
-        repo.set_password_hash(conn, int(row["id"]), hash_password(new_password))
+        backend.set_password_hash(conn, int(row["id"]), hash_password(new_password))
     finally:
         conn.close()
 
@@ -414,22 +436,23 @@ def change_password(
 def delete_account(username: str, password: str, *, db_path=None) -> None:
     """비밀번호를 확인한 뒤 회원 행과 그 내용을 삭제한다(되돌릴 수 없음).
 
-    ``repo.delete_user`` 가 ``secure_delete`` 로 삭제 페이지를 0으로 덮고 WAL 을
-    체크포인트한다. 다만 파일 크기 축소나 디스크 물리 소거까지는 보장하지
-    않는다(포렌식 수준 완전 삭제 아님).
+    SQLite 백엔드에서는 ``delete_user`` 가 ``secure_delete`` 로 삭제 페이지를
+    0으로 덮고 WAL 을 체크포인트한다(파일 크기 축소·디스크 물리 소거까지는
+    보장하지 않음). 원격 MySQL/MariaDB 에서는 평범한 ``DELETE`` 이며, 저장소
+    수준의 잔재 제거는 그쪽 DB 운영 정책에 달려 있다.
     """
 
     uname = _normalize_username(username)
 
-    conn = _open(db_path)
+    backend, conn = _open(db_path)
     try:
-        row = repo.get_user_by_username(conn, uname)
+        row = backend.get_user_by_username(conn, uname)
         if row is None:
             raise UserNotFoundError("존재하지 않는 사용자입니다.")
         if not verify_password(password, row["password_hash"]):
             _log.info("account delete fail (bad password) username=%s", mask_email(uname))
             raise InvalidCredentialsError("비밀번호가 올바르지 않습니다.")
-        repo.delete_user(conn, int(row["id"]))
+        backend.delete_user(conn, int(row["id"]))
     finally:
         conn.close()
 
