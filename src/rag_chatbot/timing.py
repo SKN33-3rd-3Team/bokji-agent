@@ -39,6 +39,10 @@ class PhaseTimer:
         # 노드가 실제로 돈 순서. 그래프가 조건부 분기를 타기 때문에
         # "어떤 경로로 갔는지"는 실행해봐야만 알 수 있다.
         self._trace: list[tuple[str, float]] = []
+        # 지금 돌고 있는 노드. 끝난 노드만 기록하면 "가장 오래 걸리는 노드를
+        # 기다리는 동안"이 통째로 안 보인다 - 진행 상황을 보여주려면 아직
+        # 안 끝난 노드의 이름이 필요하다.
+        self._current: str | None = None
         self._lock = threading.Lock()
 
     def reset(self) -> None:
@@ -46,6 +50,21 @@ class PhaseTimer:
             self._totals.clear()
             self._counts.clear()
             self._trace.clear()
+            self._current = None
+
+    def begin(self, node_name: str) -> None:
+        with self._lock:
+            self._current = node_name
+
+    def finish(self) -> None:
+        with self._lock:
+            self._current = None
+
+    def current(self) -> str | None:
+        """지금 돌고 있는 노드 이름. 없으면 ``None``."""
+
+        with self._lock:
+            return self._current
 
     def trace(self, node_name: str, seconds: float) -> None:
         with self._lock:
@@ -150,6 +169,13 @@ NODE_LABELS = {
 }
 
 
+# 답변까지 가는 일반 경로의 노드 수(어림값).
+# 실제 경로는 조건부 분기에 따라 달라진다 - N3에서 되묻고 멈추면 3개뿐이고,
+# N2a(참고 법령)나 N8(정조준 법령 검색)을 타면 늘어난다. 진행률 막대를 그리기
+# 위한 분모일 뿐, "몇 %가 끝났다"를 정확히 아는 값이 아니다(끝나봐야 안다).
+EXPECTED_NODE_COUNT = 14
+
+
 def node_title(name: str) -> str:
     """``N9 eligibility_verdict - 자격 충족/미충족/미확인 판정`` 형태."""
 
@@ -171,6 +197,7 @@ def timed_node(name: str, func):
 
     def _wrapped(*args, **kwargs):
         started = time.perf_counter()
+        TIMER.begin(name)
         if os.environ.get("BOKJI_TRACE") == "1":
             print(f"  -> {node_title(name)} ...", flush=True)
         try:
@@ -179,6 +206,7 @@ def timed_node(name: str, func):
             elapsed = time.perf_counter() - started
             TIMER.record(f"node:{name}", elapsed)
             TIMER.trace(name, elapsed)
+            TIMER.finish()
             if os.environ.get("BOKJI_TRACE") == "1":
                 print(f"     {node_title(name)} 완료 ({elapsed:.2f}초)", flush=True)
 
@@ -188,6 +216,7 @@ def timed_node(name: str, func):
 __all__ = [
     "TIMER",
     "PhaseTimer",
+    "EXPECTED_NODE_COUNT",
     "timed_node",
     "node_title",
     "NODE_NUMBERS",

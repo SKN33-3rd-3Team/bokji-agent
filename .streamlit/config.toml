@@ -7,6 +7,29 @@
 # light / dark 두 벌을 모두 정의해 앱 우측 상단 메뉴에서 전환 가능.
 # (커스텀 CSS 없이 config.toml 만으로 스타일링 — Streamlit 권장 방식)
 
+[server]
+# fileWatcherType = "none" 인 이유 (2026-09-02)
+# ------------------------------------------------------------------
+# EMBEDDING_PROVIDER=korean 으로 바꾼 뒤부터 sentence-transformers ->
+# transformers 가 import 된다. Streamlit 은 스크립트 실행이 끝날 때마다
+# LocalSourcesWatcher.update_watched_modules() 로 sys.modules 를 전부 훑으며
+# hasattr(m, "__path__") 를 호출하는데, transformers 의 lazy 모듈은 이
+# hasattr 하나에 실제 import 가 일어난다. 그래서 답변 생성이 끝난 직후
+#   "Examining the path of transformers.models.*.image_processing_*_fast raised
+#    ModuleNotFoundError: No module named 'torchvision'"
+# 경고가 수백 줄 쏟아진다(사용자 로그 실측: a~g 구간만 5.2초, 전체 알파벳이면
+# 수십 초). 이 작업은 ScriptRunner 스레드가 아니라 Tornado **이벤트 루프**에서
+# 돌기 때문에, 그동안 브라우저로 나가야 할 결과 메시지가 전송되지 않고
+# websocket 도 응답하지 못한다. 터미널에는 N14까지 정상 완료로 찍히는데 화면에는
+# 아무것도 안 뜨는(연결이 끊긴 듯한) 증상의 원인이 이것이다.
+#
+# 대가: 소스 파일을 저장해도 자동 rerun 되지 않는다. 코드를 고쳤으면 브라우저에서
+# 직접 새로고침(R)하거나 streamlit 을 재시작해야 한다. 어차피 한 번 질문에
+# 수 분이 걸리므로, 저장할 때마다 진행 중인 상담이 취소되는 편이 더 나쁘다.
+# 개발 중 자동 리로드가 꼭 필요하면 이 값을 "auto" 로 되돌리되, 위 증상이
+# 그대로 재현된다는 점을 기억할 것.
+fileWatcherType = "none"
+
 [theme]
 base = "light"
 
