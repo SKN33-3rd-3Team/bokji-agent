@@ -1153,8 +1153,10 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
 
         state.update(search_targeted_laws(state, search=search))
 
+        # N4는 전체 섹션 로드를 위해 section_type 없는 조회도 한다(이 테스트의
+        # 관심사는 근거법령/법령 조회라 그것만 골라 본다).
         self.assertEqual(
-            store.exact_calls,
+            [call for call in store.exact_calls if call[1].keys() != {"source_id"}],
             [
                 (
                     SourceType.SUBSIDY,
@@ -1234,7 +1236,7 @@ class EvidenceGateAndTargetedLawSearchTests(unittest.TestCase):
         self.assertEqual(state["law_retry_count"], 0)
         self.assertEqual(state["missing_law_claim_ids"], [])
         self.assertEqual(
-            store.exact_calls,
+            [call for call in store.exact_calls if call[1].keys() != {"source_id"}],
             [
                 (
                     SourceType.SUBSIDY,

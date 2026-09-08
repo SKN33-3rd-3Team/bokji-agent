@@ -61,16 +61,43 @@ SOURCE_DATASET_URL = "https://www.data.go.kr/data/15113968/openapi.do"
 LICENSE = "공공데이터포털 이용조건 확인"
 
 # (JSON 필드명, 섹션 제목, section_type 태그) — 전부 serviceDetail 응답 소속.
+
 SECTION_FIELDS = [
     ("서비스목적", "목적", "purpose"),
+    ("서비스목적요약", "목적 요약", "purpose_summary"),
     ("지원대상", "지원대상", "support_target"),
     ("선정기준", "선정기준", "eligibility_criteria"),
     ("지원내용", "지원내용", "support_details"),
     ("신청방법", "신청방법", "application_method"),
     ("신청기한", "신청기한", "application_period"),
+    ("구비서류", "구비서류", "required_documents"),
+    ("본인확인필요구비서류", "본인확인 필요 구비서류", "required_documents_self"),
+    ("공무원확인구비서류", "공무원 확인 구비서류", "required_documents_official"),
 ]
 
 LEGAL_BASIS_FIELDS = ("법령", "행정규칙", "자치법규")
+
+# 문의·접수 창구. 개별 필드는 짧아서 섹션으로 따로 두면 청크만 늘어나므로
+# 하나의 섹션으로 합친다("어디에 문의하나요" 질문에 답할 수 있게 임베딩 대상).
+CONTACT_FIELDS = [
+    ("문의처", "문의처"),
+    ("전화문의", "전화문의"),
+    ("접수기관명", "접수기관"),
+    ("접수기관", "접수기관"),
+    ("부서명", "담당부서"),
+]
+
+# 분류값·URL·집계값 — 임베딩하지 않고 metadata로만 보존한다.
+PASSTHROUGH_METADATA_FIELDS = [
+    ("지원유형", "support_type"),
+    ("사용자구분", "user_type"),
+    ("소관기관유형", "organization_type"),
+    ("소관기관코드", "organization_code"),
+    ("온라인신청사이트URL", "online_application_url"),
+    ("등록일시", "registered_at"),
+    ("수정일시", "updated_at_raw"),
+    ("조회수", "view_count"),
+]
 
 
 class FieldStatus(str, Enum):
@@ -282,11 +309,76 @@ def extract_age_metadata(item: dict) -> tuple[int | None, int | None, str | None
     return extracted[0], extracted[1], "support_target_text"
 
 
+# 값이 있긴 한데 아무 정보도 없는 표기. 정부24 원천에서 실제로 쓰인 것만 모았다.
+# 이걸 걸러내지 않으면 "해당없음"만 담긴 청크가 수만 개 색인된다 — 실측으로
+# 본인확인구비서류의 96.8%, 공무원확인구비서류의 93.3%가 이 값이다. 검색
+# 결과에 뜨면 사용자에게 아무 도움이 안 되면서 임베딩 비용만 늘린다.
+_PLACEHOLDER_VALUES = frozenset(
+    {
+        "해당없음", "해당 없음", "해당사항없음", "해당사항 없음",
+        "없음", "없슴", "무", "-", "N/A", "n/a", ".", "0",
+    }
+)
+
+
+def _is_placeholder(text: str) -> bool:
+    return text.strip().replace(" ", "") in {
+        value.replace(" ", "") for value in _PLACEHOLDER_VALUES
+    }
+
+
+def collect_support_conditions(item: dict) -> tuple[dict, list[str]]:
+    """지원조건조회(supportConditions) 응답의 **JA 코드 전체**를 거둔다.
+
+    예전에는 JA0110/JA0111(연령)만 뽑아 쓰고 나머지 46개는 문서에 남기지
+    않았다. 그 값들은 별도 사이드카 파일로만 존재해서, 문서를 JSONL로 받아
+    쓰는 쪽(평가·분석·재색인)에서는 조건을 전혀 볼 수 없었다.
+
+    두 가지 형태로 저장한다.
+
+    - ``support_conditions``: 받은 그대로의 전체 딕셔너리. 값이 비어 있는
+      코드까지 포함해 원본을 손실 없이 보존한다(무엇이 "없음"인지도 정보다).
+    - ``support_condition_codes``: 실제로 켜진(Y) 코드만 정렬한 목록. chunk
+      metadata로 넘겨 검색 시점에 쓸 수 있게 하려는 값이다. 전체 딕셔너리를
+      청크마다 싣지 않는 이유는 크기다 - 청크 8.9만 개에 48개 키를 다 넣으면
+      색인이 수십 MB 불어나는데, 실제로 쓸모 있는 건 켜진 코드뿐이다.
+
+    JA 코드의 한글 의미는 공식 코드표가 저장소에 없어서 만들지 않는다.
+    임의로 라벨을 지어내면 틀린 조건을 사용자에게 보여주게 된다
+    (일부 코드의 의미만 graph/policy_conditions.py 가 알고 있다).
+    """
+
+    conditions = {
+        key: value for key, value in item.items() if _JA_FIELD_PATTERN.fullmatch(key)
+    }
+    active = sorted(
+        key
+        for key, value in conditions.items()
+        if isinstance(value, str) and value.strip().upper() == "Y"
+    )
+    return conditions, active
+
+
+def _passthrough_value(value: object) -> object | None:
+    """metadata로 그대로 보존하는 값. 문자열은 시크릿 제거를 한 번 거친다.
+
+    URL 필드에 API 키가 쿼리파라미터로 붙어 오는 경우가 실제로 있어서,
+    본문과 같은 정화 규칙(_sanitize_embedded_urls)을 적용한다.
+    """
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        cleaned = _clean_text(value)
+        return cleaned or None
+    return value
+
+
 def _build_sections(item: dict) -> list[dict]:
     sections = []
     for field, heading, section_type in SECTION_FIELDS:
         value = item.get(field)
-        if value:
+        if value and not _is_placeholder(_clean_text(value)):
             sections.append(
                 {
                     "heading_path": [heading],
@@ -294,6 +386,27 @@ def _build_sections(item: dict) -> list[dict]:
                     "metadata": {"section_type": section_type},
                 }
             )
+
+    contact_lines = []
+    seen_contact: set[str] = set()
+    for field, label in CONTACT_FIELDS:
+        value = item.get(field)
+        if not value:
+            continue
+        text = _clean_text(value)
+        # "접수기관"과 "접수기관명"처럼 같은 값이 두 필드에 들어오는 경우가 있다.
+        if not text or _is_placeholder(text) or text in seen_contact:
+            continue
+        seen_contact.add(text)
+        contact_lines.append(f"{label}: {text}")
+    if contact_lines:
+        sections.append(
+            {
+                "heading_path": ["문의·접수"],
+                "content": "\n".join(contact_lines),
+                "metadata": {"section_type": "contact"},
+            }
+        )
 
     basis = [item.get(k) for k in LEGAL_BASIS_FIELDS if item.get(k)]
     if basis:
@@ -334,7 +447,16 @@ def build_field_statuses(
     statuses: dict[str, str] = {}
 
     for field, _, section_type in SECTION_FIELDS:
-        statuses[section_type] = _field_status(bool(item.get(field)), service_id, detail_failed_ids)
+        value = item.get(field)
+        has_value = bool(value) and not _is_placeholder(_clean_text(str(value)))
+        statuses[section_type] = _field_status(has_value, service_id, detail_failed_ids)
+
+    if service_id in detail_failed_ids:
+        statuses["contact"] = FieldStatus.FETCH_FAILED.value
+    elif any(item.get(field) for field, _ in CONTACT_FIELDS):
+        statuses["contact"] = FieldStatus.PRESENT.value
+    else:
+        statuses["contact"] = FieldStatus.MISSING_SOURCE.value
 
     if service_id in detail_failed_ids:
         statuses["legal_basis"] = FieldStatus.FETCH_FAILED.value
@@ -407,6 +529,7 @@ def convert_one(
         )
 
     age_start, age_end, age_source = extract_age_metadata(item)
+    support_conditions, support_condition_codes = collect_support_conditions(item)
 
     return {
         "schema_version": "1.0",
@@ -447,6 +570,14 @@ def convert_one(
             "age_basis": "international_age" if age_source else None,
             "age_source": age_source,
             "field_status": field_statuses,
+            # 분류값·URL·집계값. 임베딩하지 않고 그대로 보존한다.
+            **{
+                key: _passthrough_value(item.get(field))
+                for field, key in PASSTHROUGH_METADATA_FIELDS
+            },
+            # 지원조건조회(supportConditions) JA 코드 전체 + 켜진 코드 목록.
+            "support_conditions": support_conditions,
+            "support_condition_codes": support_condition_codes,
         },
         "parse_warnings": doc_parse_warnings,
         "sensitive_data_status": "clear",

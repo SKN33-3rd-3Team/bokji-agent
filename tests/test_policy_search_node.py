@@ -350,13 +350,22 @@ class ConfigurableTopKTests(unittest.TestCase):
             ["unknown-service", "female-1", "female-2"],
         )
         self.assertEqual([item.rank for item in kept], [1, 2, 3])
+        # 근거법령 조회는 선택된 정책마다 정확히 한 번씩.
         self.assertEqual(
-            store.exact_calls,
+            [call for call in store.exact_calls if "section_type" in call[1]],
             [
                 (
                     SourceType.SUBSIDY,
                     {"source_id": source_id, "section_type": "legal_basis"},
                 )
+                for source_id in ("unknown-service", "female-1", "female-2")
+            ],
+        )
+        # 전체 섹션 조회도 선택된 정책마다 한 번씩(section_type 없이).
+        self.assertEqual(
+            [call for call in store.exact_calls if "section_type" not in call[1]],
+            [
+                (SourceType.SUBSIDY, {"source_id": source_id})
                 for source_id in ("unknown-service", "female-1", "female-2")
             ],
         )
@@ -383,13 +392,16 @@ class ConfigurableTopKTests(unittest.TestCase):
 
         result = search_policies(self._state(3), store)
 
+        # top_k=3이지만 후보 3개 중 둘(candidates[0], [1])이 같은 service-a라
+        # 정책 단위로는 2건이다. 예전에는 청크를 잘라서 service-a가 두 번
+        # 들어갔고, 그래서 "정책 후보 수 3"인데 실제로는 2개 정책만 나왔다.
         self.assertEqual(
             result["subsidy_chunks"],
-            [
-                replace(candidates[0], rank=1),
-                replace(candidates[1], rank=2),
-                replace(candidates[2], rank=3),
-            ],
+            [replace(candidates[0], rank=1), replace(candidates[2], rank=2)],
+        )
+        self.assertEqual(
+            [item.chunk.metadata["source_id"] for item in result["subsidy_chunks"]],
+            ["service-a", "service-b"],
         )
         self.assertEqual([item.rank for item in candidates], [7, 8, 9])
         self.assertEqual(
@@ -397,7 +409,7 @@ class ConfigurableTopKTests(unittest.TestCase):
             ["basis-a-0", "basis-a-1", "basis-b-0"],
         )
         self.assertEqual(
-            store.exact_calls,
+            [call for call in store.exact_calls if "section_type" in call[1]],
             [
                 (
                     SourceType.SUBSIDY,
@@ -409,6 +421,46 @@ class ConfigurableTopKTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_top_k_counts_policies_not_chunks(self) -> None:
+        """같은 정책의 섹션이 여러 개 올라와도 정책 하나로 센다."""
+
+        candidates = (
+            self._candidate("service-a", 1, chunk_suffix="-one"),
+            self._candidate("service-a", 2, chunk_suffix="-two"),
+            self._candidate("service-a", 3, chunk_suffix="-three"),
+            self._candidate("service-b", 4),
+            self._candidate("service-c", 5),
+        )
+        store = self._Store(candidates)
+
+        result = search_policies(self._state(3), store)
+
+        self.assertEqual(
+            [item.chunk.metadata["source_id"] for item in result["subsidy_chunks"]],
+            ["service-a", "service-b", "service-c"],
+        )
+        self.assertEqual([item.rank for item in result["subsidy_chunks"]], [1, 2, 3])
+
+    def test_full_policy_chunks_are_loaded_for_every_selected_policy(self) -> None:
+        """N9~N11이 문서 전체를 볼 수 있도록 선택된 정책의 모든 섹션을 싣는다."""
+
+        candidates = (
+            self._candidate("service-a", 1),
+            self._candidate("service-b", 2),
+        )
+        store = self._Store(candidates)
+
+        result = search_policies(self._state(2), store)
+
+        self.assertEqual(
+            [call for call in store.exact_calls if "section_type" not in call[1]],
+            [
+                (SourceType.SUBSIDY, {"source_id": "service-a"}),
+                (SourceType.SUBSIDY, {"source_id": "service-b"}),
+            ],
+        )
+        self.assertIn("subsidy_full_chunks", result)
 
 if __name__ == "__main__":
     unittest.main()

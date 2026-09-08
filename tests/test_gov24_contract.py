@@ -629,5 +629,95 @@ class PackageEntrypointTests(unittest.TestCase):
         self.assertIn("--limit", result.stdout)
 
 
+class SupportConditionsStorageTests(unittest.TestCase):
+    """supportConditions(JA 코드)를 문서에 전부 남기는지 확인한다.
+
+    예전에는 JA0110/JA0111(연령)만 쓰고 나머지 46개는 문서에 남기지 않아서,
+    JSONL을 받아 쓰는 쪽에서는 지원조건을 전혀 볼 수 없었다.
+    """
+
+    def test_all_ja_codes_are_preserved_with_active_ones_listed(self) -> None:
+        from src.rag_chatbot.collectors.gov_24.to_document import (
+            collect_support_conditions,
+        )
+
+        item = {
+            "서비스ID": "svc-1",
+            "JA0101": "Y",
+            "JA0102": None,
+            "JA0201": "y",
+            "JA0328": "N",
+            "JA0110": 3,
+            "지원대상": "대상입니다",
+        }
+
+        conditions, active = collect_support_conditions(item)
+
+        # 값이 비어 있는 코드도 버리지 않는다 - "없음"인 것도 정보다.
+        self.assertEqual(
+            conditions,
+            {"JA0101": "Y", "JA0102": None, "JA0201": "y", "JA0328": "N", "JA0110": 3},
+        )
+        # 켜진 코드만, 대소문자 구분 없이, 정렬해서.
+        self.assertEqual(active, ["JA0101", "JA0201"])
+        # JA 형식이 아닌 키는 섞이지 않는다.
+        self.assertNotIn("지원대상", conditions)
+
+    def test_document_metadata_carries_conditions_and_active_codes(self) -> None:
+        from src.rag_chatbot.collectors.gov_24.to_document import convert_one
+
+        item = {
+            "서비스ID": "svc-2",
+            "상세조회URL": "https://www.gov.kr/portal/service-2",
+            "서비스명": "테스트 지원",
+            "소관기관명": "교육부",
+            "서비스분야": "생활안정",
+            "지원대상": "지원 대상입니다.",
+            "JA0102": "Y",
+            "JA0201": None,
+        }
+        document = convert_one(item, "2026-09-07T00:00:00+09:00", [], set(), set(), {})
+
+        self.assertIsNotNone(document)
+        metadata = document["metadata"]
+        self.assertEqual(metadata["support_conditions"], {"JA0102": "Y", "JA0201": None})
+        self.assertEqual(metadata["support_condition_codes"], ["JA0102"])
+
+
+class PlaceholderSectionTests(unittest.TestCase):
+    """"해당없음"만 든 섹션은 만들지 않는다.
+
+    본인확인구비서류의 96.8%, 공무원확인구비서류의 93.3%가 이 값이라
+    그대로 두면 아무 정보 없는 청크가 2만 개 넘게 색인된다.
+    """
+
+    def test_placeholder_only_fields_do_not_become_sections(self) -> None:
+        from src.rag_chatbot.collectors.gov_24.to_document import convert_one
+
+        item = {
+            "서비스ID": "svc-3",
+            "상세조회URL": "https://www.gov.kr/portal/service-3",
+            "서비스명": "테스트 지원",
+            "소관기관명": "교육부",
+            "서비스분야": "생활안정",
+            "지원대상": "지원 대상입니다.",
+            "구비서류": "신청서 1부",
+            "본인확인필요구비서류": "해당없음",
+            "공무원확인구비서류": "해당 없음",
+        }
+        document = convert_one(item, "2026-09-07T00:00:00+09:00", [], set(), set(), {})
+
+        section_types = {
+            section["metadata"]["section_type"] for section in document["sections"]
+        }
+        self.assertIn("required_documents", section_types)
+        self.assertNotIn("required_documents_self", section_types)
+        self.assertNotIn("required_documents_official", section_types)
+        self.assertEqual(
+            document["metadata"]["field_status"]["required_documents_self"],
+            "missing_source",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

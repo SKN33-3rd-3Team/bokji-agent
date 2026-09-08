@@ -118,8 +118,19 @@ class BenefitAmount(TypedDict, total=False):
 class DuplicateVerdict(TypedDict, total=False):
     policy_id: str
     status: str
+    # 같은 답변에 함께 나온 정책 중 이 정책과 중복수급이 안 되는 것들의 id.
     conflicts_with: list[str]
     condition_note: str
+    # 조항의 성격. 원천 문서의 "중복" 표현은 세 가지가 섞여 있어서
+    # (실측 247개 조항: other 66% / household 26% / header 7%),
+    # 하나로 뭉뚱그리면 "1가구 1회"를 "다른 제도와 중복 불가"로 오해한다.
+    #   other     : 다른 제도와의 중복 제한 (중복수급 판정 대상)
+    #   household : 같은 제도 재신청·가구/세대 단위 제한 (신청 횟수 안내)
+    #   header    : "※ 중복수혜불가 조건"처럼 조건 내용이 비어 있는 제목
+    clause_kind: str | None
+    # 사용자에게 그대로 보여줄 근거 원문(other/household 각각).
+    restriction_clauses: list[str]
+    household_clauses: list[str]
 
 
 class CitationEntry(TypedDict, total=False):
@@ -174,6 +185,16 @@ class GraphState(TypedDict, total=False):
     # N4 semantic 후보의 rank/score/provenance를 건드리지 않고 N5에 넘기는
     # canonical exact legal_basis parts. source_id/ordinal/chunk_part 순서로 보존한다.
     subsidy_legal_basis_chunks: list[Chunk]
+    # N4가 고른 정책들의 **전체 섹션**. subsidy_chunks가 정책마다 대표 청크
+    # 하나만 담는 것과 달리, 이쪽은 그 정책 문서의 모든 청크를 담는다.
+    #
+    # 왜 나눠 두는가: N5(claim_plan)는 청크 하나당 LLM을 한 번씩 부르므로
+    # subsidy_chunks가 커지면 응답 시간이 그대로 배수로 늘어난다. 반면
+    # N9~N11은 판정을 위해 문서 전체를 봐야 한다(중복수급 제한 조항이
+    # 지원대상/지원내용/선정기준 어디에 있을지 모른다 - 실측 분포가 103/102/22).
+    # 그래서 LLM 입력(subsidy_chunks)과 판정 입력(subsidy_full_chunks)을
+    # 분리한다. 이 필드를 쓰면 N9~N11이 각자 하던 재검색도 없앨 수 있다.
+    subsidy_full_chunks: list[RetrievedChunk]
     law_chunks: list[RetrievedChunk]
     claim_plan: list[ClaimDraft]
     eligibility_verdicts: list[EligibilityVerdict]
