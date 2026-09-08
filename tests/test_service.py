@@ -29,6 +29,8 @@ from src.rag_chatbot.llm import (
 from src.rag_chatbot.service import (
     _build_output_markdown,
     _build_output_text,
+    _build_profile,
+    _build_summary,
     _build_policy_view,
     _extract_title,
     _fetch_policy_detail,
@@ -771,3 +773,250 @@ def test_build_policy_view_omits_verification_note_for_legacy_verdicts():
     view = _build_policy_view("policy-d", entry, store=store, query_id="q1", rank=1, is_top=True)
 
     assert view["verification_note"] is None
+
+
+# ── output_json 구조 (첨부 화면과 같은 항목) ────────────────────────
+
+
+def test_build_profile_uses_korean_labels_and_never_leaks_birth_date():
+    """N1 슬롯 -> "파악한 정보". 생년월일 원문은 절대 실리지 않는다
+    (docs/PII_LOGGING.md). 만 나이 파생값만 나간다."""
+
+    profile = _build_profile(
+        {
+            "region_names": ["서울특별시"],
+            "birth_date": "2021-03-05",
+            "age": 5,
+            "gender": "male",
+            "income_bracket": "under_30",
+            "disability_status": "not_registered",
+            "employment_status": "not_working",
+        }
+    )
+
+    assert profile == [
+        {"key": "region", "label": "지역", "value": "서울특별시"},
+        {"key": "age", "label": "나이", "value": "만 5세"},
+        {"key": "gender", "label": "성별", "value": "남성"},
+        {"key": "income_bracket", "label": "소득", "value": "기초생활수급 수준(중위소득 30% 이하)"},
+        {"key": "disability_status", "label": "장애", "value": "장애 없음"},
+        {"key": "employment_status", "label": "취업 상태", "value": "무직"},
+    ]
+    assert "2021-03-05" not in str(profile)
+
+
+def test_build_profile_omits_age_when_only_birth_date_is_known():
+    """생년월일은 있는데 만 나이 파생이 없으면 나이 항목을 그냥 비운다 -
+    원본을 대신 노출하지 않는다."""
+
+    assert _build_profile({"birth_date": "2021-03-05"}) == []
+
+
+def test_build_profile_skips_unknown_sentinel_and_handles_non_mapping():
+    assert _build_profile({"gender": "unknown", "employment_status": "unknown"}) == []
+    assert _build_profile(None) == []
+
+
+def test_build_summary_merges_unmet_and_unknown():
+    """미충족과 미확인은 한 칸으로 합친다 - 둘 다 "받을 수 있다고 말할 수
+    없는" 상태라서 따로 세면 사용자가 미확인을 통과로 읽는다."""
+
+    summary = _build_summary(
+        [
+            {"eligibility_status": "충족"},
+            {"eligibility_status": "미충족"},
+            {"eligibility_status": "미확인"},
+            {},  # eligibility_status가 없으면 미확인으로 센다
+        ]
+    )
+    assert summary == {"checked": 4, "eligible": 1, "not_eligible_or_unknown": 3}
+
+
+def test_to_chat_response_output_json_carries_summary_profile_and_evidence_count():
+    result = {
+        "answer_status": "complete",
+        "final_answer": "확인된 범위의 안내입니다.",
+        "final_citations": [
+            {"label": "정책 공식 페이지", "source_url": "https://gov.example/p1"},
+            {"label": "근거 법령", "source_url": "https://law.go.kr/x"},
+        ],
+        "slots": {"region_names": ["서울특별시"], "age": 5, "gender": "male"},
+        "assembled_result": {"policies": {}},
+    }
+
+    response = _to_chat_response(result, session_id="s1", store=FakeDetailStore({}))
+    output_json = response["output_json"]
+
+    assert output_json["summary"] == {
+        "checked": 0,
+        "eligible": 0,
+        "not_eligible_or_unknown": 0,
+    }
+    assert output_json["profile"] == [
+        {"key": "region", "label": "지역", "value": "서울특별시"},
+        {"key": "age", "label": "나이", "value": "만 5세"},
+        {"key": "gender", "label": "성별", "value": "남성"},
+    ]
+    assert output_json["evidence_count"] == 2
+    # 최상위 final_citations와 output_json 안의 값이 같은 목록이어야 한다.
+    assert output_json["final_citations"] == response["final_citations"]
+
+
+def test_to_chat_response_needs_input_output_json_carries_profile():
+    class _Interrupt:
+        def __init__(self, value):
+            self.value = value
+
+    result = {
+        "__interrupt__": (_Interrupt("소득 수준을 알려주세요."),),
+        "missing_slots": ["income_bracket"],
+        "slots": {"region_names": ["부산광역시"]},
+    }
+
+    response = _to_chat_response(result, session_id="s1", store=FakeDetailStore({}))
+
+    assert response["output_json"]["profile"] == [
+        {"key": "region", "label": "지역", "value": "부산광역시"}
+    ]
+
+
+def test_build_output_markdown_prefixes_summary_line():
+    markdown = _build_output_markdown(
+        [
+            {
+                "rank": 1,
+                "title": "유아학비 지원",
+                "eligibility_status": "미확인",
+                "amount_label": "지원금액 확인 필요",
+                "duplicate_status": "미확인",
+                "detail": {},
+            }
+        ]
+    )
+
+    assert markdown.startswith("**확인한 제도 1건** · 자격 충족 0건 · 미충족·미확인 1건")
+    assert "| 순위 | 정책명 | 자격 확인 | 지원금 | 중복수급 | 출처 |" in markdown
+
+
+def test_build_output_markdown_summary_line_when_no_policies():
+    markdown = _build_output_markdown([])
+    assert markdown.startswith("**확인한 제도 0건** · 자격 충족 0건 · 미충족·미확인 0건")
+    assert "확인된 정책 없음" in markdown
+
+
+# ── 화면에서 고른 지원조건·관심 분야(extra_interests) ────────────────
+
+
+def _ask_capturing_run_graph(*args, **kwargs):
+    """``ask``를 그래프 없이 호출하고 run_graph 가 받은 인자를 돌려준다."""
+
+    class Interrupt:
+        value = "추가 정보가 필요합니다."
+
+    captured: dict = {}
+
+    def fake_run_graph(graph, **graph_kwargs):
+        captured.update(graph_kwargs)
+        return {"__interrupt__": (Interrupt(),), "missing_slots": []}
+
+    with (
+        patch.object(
+            service_module,
+            "_runtime_cache",
+            {
+                "store": object(),
+                "llm_client": None,
+                "support_conditions": {},
+                "graph": object(),
+            },
+        ),
+        patch.object(service_module, "TIMER", PhaseTimer()),
+        patch.object(service_module, "run_graph", side_effect=fake_run_graph),
+    ):
+        service_module.ask(*args, **kwargs)
+    return captured
+
+
+def test_ask_seeds_selected_interests_as_initial_slots():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, extra_interests=["청년", "주거"]
+    )
+    assert captured["slots"] == {"interests": ["청년", "주거"]}
+
+
+def test_ask_passes_no_slots_when_nothing_selected():
+    """아무것도 안 고르면 빈 interests 를 억지로 넣지 않는다 - 슬롯이
+    "채워졌다"고 오해될 여지를 만들지 않는다."""
+
+    assert _ask_capturing_run_graph("질문", "s1", top_k=5)["slots"] is None
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, extra_interests=[]
+    )["slots"] is None
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, extra_interests=["", None]
+    )["slots"] is None
+
+
+# ── 토큰 한도로 잘린 LLM 응답 ───────────────────────────────────────
+
+
+class _StubChoice:
+    def __init__(self, content, finish_reason):
+        self.message = type("_M", (), {"content": content})()
+        self.finish_reason = finish_reason
+
+
+class _StubResponse:
+    def __init__(self, content, finish_reason):
+        self.choices = [_StubChoice(content, finish_reason)]
+
+
+def _complete_with(content, finish_reason):
+    """HuggingFaceInferenceClient.complete()를 네트워크 없이 한 번 돌린다."""
+
+    import huggingface_hub
+
+    from src.rag_chatbot.llm.client import HuggingFaceInferenceClient
+
+    client = HuggingFaceInferenceClient(
+        model="test/model", token="t", max_new_tokens=1024
+    )
+
+    class _StubInferenceClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def chat_completion(self, **_kwargs):
+            return _StubResponse(content, finish_reason)
+
+    with patch.object(huggingface_hub, "InferenceClient", _StubInferenceClient):
+        return client.complete("prompt")
+
+
+def test_truncated_llm_answer_is_treated_as_a_failure_not_returned():
+    """``finish_reason="length"``면 문장 중간에서 끊긴 출력이다.
+
+    예전에는 content가 비었을 때만 실패로 봤다. 그래서 반쯤 찬 응답이 그대로
+    화면까지 올라가 "근거 법령: 부모성" 처럼 문장이 뚝 끊긴 답이 보였다
+    (2026-09-02 실측). 실패로 올려야 노드가 규칙 기반으로 폴백해 짧더라도
+    완결된 답이 나가고, llm_status에 실패로 남아 화면에도 표시된다.
+    """
+
+    with pytest.raises(LLMCallError) as caught:
+        _complete_with("3. 부모성장을 위한 심리지원서비스\n근거 법령: 부모성", "length")
+
+    message = str(caught.value)
+    assert "잘림" in message
+    assert "max_new_tokens=1024" in message
+    assert "다 못 씀" in message
+
+
+def test_empty_llm_answer_from_length_limit_still_explains_reasoning_tokens():
+    with pytest.raises(LLMCallError) as caught:
+        _complete_with("", "length")
+
+    assert "시작도 못 함" in str(caught.value)
+
+
+def test_completed_llm_answer_is_returned_as_is():
+    assert _complete_with("완결된 답변입니다.", "stop") == "완결된 답변입니다."

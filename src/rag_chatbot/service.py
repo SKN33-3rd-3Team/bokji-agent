@@ -142,6 +142,7 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack, nullcontext
 import sys
 from pathlib import Path
@@ -174,6 +175,7 @@ from rag_design.vector_store import (
 
 from .graph import build_graph, resume_graph, run_graph
 from .graph.policy_conditions import load_support_conditions
+from .graph.slot_schema import UNKNOWN
 from .llm import HuggingFaceInferenceClient, RecordingLLMClient
 from .timing import TIMER, node_title
 
@@ -729,23 +731,150 @@ def _timing_report() -> dict:
     }
 
 
+# ── output_json "파악한 정보"용 슬롯값 -> 한글 라벨 ──────────────────
+# 화면(streamlit_ui)이 쓰는 라벨과 같은 어휘다. 슬롯 코드값("under_30")을
+# 그대로 JSON에 노출하면 이 응답을 받는 쪽이 매핑을 또 만들어야 하므로,
+# 사람이 읽는 문자열까지 여기서 만들어 준다.
+_GENDER_KO = {"male": "남성", "female": "여성"}
+_INCOME_KO = {
+    "under_30": "기초생활수급 수준(중위소득 30% 이하)",
+    "pct_30_50": "차상위 수준(중위소득 30~50%)",
+    "pct_50_75": "중위소득 50~75%",
+    "pct_75_100": "중위소득 75~100%",
+    "pct_100_150": "중위소득 100~150%",
+    "over_150": "중위소득 150% 초과",
+}
+_DISABILITY_KO = {"registered": "장애 등록", "not_registered": "장애 없음"}
+_EMPLOYMENT_KO = {
+    "employed": "재직",
+    "job_seeking": "구직",
+    "self_employed": "자영업",
+    "student": "학생",
+    "not_working": "무직",
+}
+_MARITAL_KO = {
+    "single": "미혼", "married": "기혼", "divorced": "이혼", "bereaved": "사별",
+}
+_PREGNANCY_KO = {"pregnant": "임신 중", "postpartum": "산후", "none": "해당 없음"}
+_HOUSEHOLD_KO = {
+    "single_parent": "한부모", "multi_child": "다자녀", "multicultural": "다문화",
+    "grandparent": "조손", "single_person": "1인 가구",
+    "north_korean_defector": "북한이탈주민", "care_leaver": "자립준비청년",
+    "facility_leaver": "시설퇴소",
+}
+
+
+def _build_profile(slots: Any) -> list[dict]:
+    """N1이 파악한 슬롯을 ``[{"key","label","value"}...]``로 만든다.
+
+    **생년월일 원문은 넣지 않는다.** N1이 파생한 만 나이만 싣는다
+    (``docs/PII_LOGGING.md`` - 식별 가능한 원본 값은 응답에 담지 않는다).
+    birth_date만 있고 age 파생이 실패한 경우에도 나이 항목을 생략한다 -
+    "모른다"를 정직하게 비워 두는 편이 원본을 흘리는 것보다 낫다.
+    """
+
+    if not isinstance(slots, Mapping):
+        return []
+
+    items: list[dict] = []
+
+    def add(key: str, label: str, value: object) -> None:
+        if value:
+            items.append({"key": key, "label": label, "value": str(value)})
+
+    names = [str(x) for x in (slots.get("region_names") or []) if x]
+    if names:
+        if slots.get("region_scope") == "national" or names == ["전국"]:
+            add("region", "지역", "전국 단위")
+        else:
+            add("region", "지역", ", ".join(names))
+
+    age = slots.get("age")
+    if isinstance(age, int):
+        add("age", "나이", f"만 {age}세")
+
+    for key, mapping, label in (
+        ("gender", _GENDER_KO, "성별"),
+        ("income_bracket", _INCOME_KO, "소득"),
+        ("disability_status", _DISABILITY_KO, "장애"),
+        ("employment_status", _EMPLOYMENT_KO, "취업 상태"),
+        ("marital_status", _MARITAL_KO, "혼인"),
+        ("pregnancy_status", _PREGNANCY_KO, "임신"),
+    ):
+        value = slots.get(key)
+        if isinstance(value, str) and value != UNKNOWN and value in mapping:
+            add(key, label, mapping[value])
+
+    household = [
+        _HOUSEHOLD_KO[x] for x in (slots.get("household_types") or []) if x in _HOUSEHOLD_KO
+    ]
+    if household:
+        add("household_types", "가구 유형", ", ".join(household))
+
+    if isinstance(slots.get("children_count"), int):
+        add("children_count", "자녀 수", f"{slots['children_count']}명")
+    if isinstance(slots.get("household_size"), int):
+        add("household_size", "가구원 수", f"{slots['household_size']}명")
+
+    interests = [str(x) for x in (slots.get("interests") or []) if x]
+    if interests:
+        add("interests", "관심 분야", ", ".join(interests))
+
+    return items
+
+
+def _build_summary(policies: list[PolicyView]) -> dict:
+    """화면 상단 요약 카드 3개와 같은 수치.
+
+    "미충족"과 "미확인"을 한 칸에 합치는 이유: 둘 다 *받을 수 있다고 말할 수
+    없는* 상태이고, 미확인을 따로 작게 표시하면 사용자가 미충족만 보고
+    "나머지는 되는구나"로 읽는다(docs/PROJECT_COMPLIANCE.md - 한계를 숨기지
+    않는다).
+    """
+
+    statuses = [str(policy.get("eligibility_status") or "미확인") for policy in policies]
+    return {
+        "checked": len(policies),
+        "eligible": statuses.count("충족"),
+        "not_eligible_or_unknown": statuses.count("미충족") + statuses.count("미확인"),
+    }
+
+
 def _markdown_cell(value: object) -> str:
-    """Markdown 표 셀을 깨뜨리는 구분자와 줄바꿈을 이스케이프한다."""
+    """Markdown 표 셀을 깨뜨리는 구분자와 줄바꿈을 이스케이프한다.
+
+    ``~``는 이스케이프가 아니라 ``-``로 바꾼다. GFM 취소선(``~~``)과 겹쳐서
+    "중위소득 30~50%" 같은 범위 표기가 취소선으로 그려지기 때문이다.
+    """
 
     if value is None:
         return "-"
-    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("~", "-")
+        .replace("\n", "<br>")
+    )
 
 
 def _build_output_markdown(policies: list[PolicyView]) -> str:
     """최종 정책 목록을 렌더링 가능한 Markdown 표로 만든다."""
 
+    counts = _build_summary(policies)
+    # 표만 있으면 "충족 0건"이라는 사실이 행을 하나하나 읽어야 보인다.
+    # 화면 상단 요약 카드와 같은 수치를 한 줄로 먼저 적는다.
+    summary_line = (
+        f"**확인한 제도 {counts['checked']}건** · "
+        f"자격 충족 {counts['eligible']}건 · "
+        f"미충족·미확인 {counts['not_eligible_or_unknown']}건\n"
+    )
     header = (
         "| 순위 | 정책명 | 자격 확인 | 지원금 | 중복수급 | 출처 |\n"
         "|---:|---|---|---|---|---|"
     )
     if not policies:
-        return header + "\n| - | 확인된 정책 없음 | - | - | - | - |"
+        return summary_line + "\n" + header + "\n| - | 확인된 정책 없음 | - | - | - | - |"
 
     rows: list[str] = []
     for policy in policies:
@@ -766,7 +895,7 @@ def _build_output_markdown(policies: list[PolicyView]) -> str:
             )
             + " |"
         )
-    return header + "\n" + "\n".join(rows)
+    return summary_line + "\n" + header + "\n" + "\n".join(rows)
 
 
 def _build_output_text(
@@ -814,6 +943,8 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
                 "session_id": session_id,
                 "question": question,
                 "missing_slots": missing_slots,
+                # 되묻는 중에도 "지금까지 파악한 정보"를 함께 준다.
+                "profile": _build_profile(result.get("slots")),
             },
             "output_text": (
                 f"추가 정보가 필요합니다.\n{question}\n"
@@ -839,12 +970,21 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         for i, (policy_id, entry) in enumerate(ranked)
     ]
 
+    citations = result.get("final_citations", [])
+    # 화면(첨부 이미지)에 보이는 항목을 그대로 담는다:
+    #   summary  -> 상단 요약 카드 3개(확인한 제도 / 자격 충족 / 미충족·미확인)
+    #   profile  -> 사이드바 "파악한 정보"
+    #   policies -> 정책 카드(배지·제목·자격 근거·중복수급·관련 법령·상세)
+    #   evidence_count -> "근거 문서 확인 (N건)"
     output_json = {
         "status": "answered",
         "session_id": session_id,
         "answer_status": result.get("answer_status"),
         "final_answer": result.get("final_answer"),
-        "final_citations": result.get("final_citations", []),
+        "summary": _build_summary(policy_views),
+        "profile": _build_profile(result.get("slots")),
+        "evidence_count": len(citations),
+        "final_citations": citations,
         "policies": policy_views,
     }
     final_answer = result.get("final_answer")
@@ -854,7 +994,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "session_id": session_id,
         "answer_status": result.get("answer_status"),
         "final_answer": final_answer,
-        "final_citations": result.get("final_citations", []),
+        "final_citations": citations,
         "policies": policy_views,
         "output_json": output_json,
         "output_text": _build_output_text(policy_views, final_answer),
@@ -864,13 +1004,29 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
     }
 
 
-def ask(user_input: str, session_id: str, *, top_k: int = 5) -> ChatResponse:
+def ask(
+    user_input: str,
+    session_id: str,
+    *,
+    top_k: int = 5,
+    extra_interests: list[str] | None = None,
+) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
     질문을 입력했을 때 호출한다.
 
     ``top_k``는 화면의 "정책 후보 수" 설정값이다. 기본값은 기존과 같은 5이고,
     그래프가 1~20 범위를 검증한다. 후속 답변에서는 첫 요청의 값이 LangGraph
     체크포인터에 보존되므로 다시 전달하지 않는다.
+
+    ``extra_interests``는 화면에서 직접 고른 "지원조건"·"관심 분야"다. N1이
+    발화에서 뽑은 interests와 **합집합**으로 누적돼 N4 검색 질의에 들어간다
+    (slot_parser._MULTI_VALUE_FIELDS). 사용자가 말로 표현하지 못한 범주를
+    체크박스로 보완하는 용도이고, 자격 판정에는 쓰이지 않는다 - interests는
+    소프트 슬롯이라 하드 게이트/필터에 관여하지 않는다.
+
+    ``answer_followup()``에는 이 인자가 없다. 재개 시점에는 이미 체크포인터에
+    슬롯이 있고, 중간에 초기 슬롯을 갈아끼우면 이전 턴의 판정 근거와
+    어긋나기 때문이다 - 화면에서 선택을 바꿨다면 새 상담으로 물어야 한다.
     """
 
     TIMER.reset()
@@ -879,8 +1035,13 @@ def ask(user_input: str, session_id: str, *, top_k: int = 5) -> ChatResponse:
         graph = get_graph()
         store = get_store()
         with _llm_request_scope():
+            interests = [str(item) for item in (extra_interests or []) if item]
             result = run_graph(
-                graph, user_input=user_input, session_id=session_id, top_k=top_k
+                graph,
+                user_input=user_input,
+                session_id=session_id,
+                top_k=top_k,
+                slots={"interests": interests} if interests else None,
             )
             # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
             request_timer.close()

@@ -546,17 +546,27 @@ class HuggingFaceInferenceClient:
             content = choice.message.content
         except (AttributeError, IndexError, TypeError) as exc:
             raise LLMCallError(f"HuggingFace 응답을 파싱하지 못함: {response!r}") from exc
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason == "length":
+            # 토큰 한도에 걸려 **문장 중간에서 끊긴** 출력이다. 내용이 비었든
+            # 반쯤 찼든 쓸 수 없기는 마찬가지라 둘 다 실패로 처리한다.
+            #
+            # 예전에는 content가 비었을 때만 실패로 봤다. 그 결과 잘린 답변이
+            # 그대로 화면까지 올라가서, 사용자에게 "근거 법령: 부모성" 처럼
+            # 문장이 뚝 끊긴 답이 보였다(2026-09-02 실측). 노드들은 LLM 실패
+            # 시 규칙 기반으로 폴백하므로, 여기서 실패로 올리면 짧더라도
+            # 완결된 답이 나가고 llm_status에 실패로 기록돼 화면에도 표시된다.
+            detail = (
+                "답을 다 못 씀"
+                if content
+                else "답을 시작도 못 함(추론형 모델이면 사고 과정에 토큰을 다 썼을 수 있음)"
+            )
+            raise LLMCallError(
+                f"HuggingFace 응답이 잘림(모델={self.model!r}) - "
+                f"finish_reason='length'로 max_new_tokens={self.max_new_tokens} 안에 "
+                f"{detail}. max_new_tokens를 늘려보세요."
+            )
         if not content:
-            finish_reason = getattr(choice, "finish_reason", None)
-            if finish_reason == "length":
-                # "추론형" 모델이 사고 과정에 max_new_tokens를 다 써버리고
-                # 정작 최종 답은 못 쓴 경우가 흔하다 - 위 클래스 docstring 참고.
-                raise LLMCallError(
-                    f"HuggingFace 응답이 비어 있음(모델={self.model!r}) - "
-                    f"finish_reason='length'로 max_new_tokens={self.max_new_tokens} 안에 "
-                    "답을 다 못 씀(추론형 모델이면 사고 과정에 토큰을 다 썼을 수 있음). "
-                    "max_new_tokens를 늘려보세요."
-                )
             raise LLMCallError(f"HuggingFace 응답이 비어 있음: {response!r}")
         return content
 
