@@ -17,6 +17,19 @@ _TRANSIENT_AUTH_PREFIXES = ("login_", "su_", "pe_", "pc_", "da_")
 _MD_SPECIAL_RE = re.compile(r"([\\`*_\[\]()#>~|$])")
 
 
+def md_text(value: object) -> str:
+    """Markdown 으로 그릴 문자열에서 ``~``를 ``-``로 바꾼다.
+
+    ``~``는 GFM 취소선(``~~``) 문법과 겹친다. 한 줄에 두 번 나오면
+    ("중위소득 30~50% ... 75~100%") 그 사이가 통째로 취소선으로 그려지고,
+    한 번만 나와도 렌더러에 따라 문자가 사라진다. 정책 원문에는
+    "만 3~5세", "30~50%" 같은 범위 표기가 흔해서 실제로 자주 깨진다.
+    범위를 뜻하는 ``-``는 의미가 같고 Markdown 특수문자도 아니다.
+    """
+
+    return str(value if value is not None else "").replace("~", "-")
+
+
 def escape_md(text: object) -> str:
     """사용자 입력 문자열을 Markdown 안에 넣기 전에 특수문자를 이스케이프한다."""
 
@@ -34,6 +47,9 @@ def new_conversation(
     # 공식 서비스가 소유하지 않는 이전 UI 계약의 민감 슬롯도 남기지 않는다.
     state["slots"] = {}
     state["slot_ask_counts"] = {}
+    # 사이드바 "파악한 정보"에 쓰는 값(서비스 응답의 output_json["profile"]).
+    # 소득·장애 같은 값이 들어 있으므로 새 상담에서는 반드시 비운다.
+    state["profile"] = []
     if clear_messages:
         state["messages"] = []
 
@@ -42,6 +58,7 @@ def init_session() -> None:
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("pending_prompt", None)
     st.session_state.setdefault("awaiting_followup", False)
+    st.session_state.setdefault("profile", [])
     if "conversation_id" not in st.session_state:
         new_conversation(st.session_state, clear_messages=False)
     st.session_state.setdefault("view", "chat")
