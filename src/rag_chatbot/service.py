@@ -171,6 +171,7 @@ from rag_design.vector_store import (
     CollectionNotFoundError,
     VectorSearchFilter,
     VectorStoreConfig,
+    VectorStoreError,
 )
 
 from .graph import build_graph, resume_graph, run_graph
@@ -463,28 +464,44 @@ def _fetch_policy_detail(policy_id: str, store: Any, query_id: str) -> dict:
 
     state["subsidy_chunks"]는 N4가 의미 검색으로 찾은 청크 몇 개뿐이라
     (질문과 관련된 섹션만), 상세 화면에 필요한 7개 섹션을 전부 보장하지
-    못한다. 그래서 정책 하나당 section_type별로 직접 재검색한다
-    (``result_assembly.py``의 ``_find_related_law``와 같은 패턴, 다만
-    필터 키는 ``"source_id"``를 쓴다 - 위 모듈 docstring "한계" 절 참고).
+    못한다. 정책의 검증된 청크를 한 번 읽고 섹션 후보가 유일할 때만 쓴다.
+    후보가 없거나 여러 개면 기존 의미 검색의 순위·누락 처리를 유지한다.
     """
     sections: dict[str, str] = {}
     meta: dict = {}
+    try:
+        detail_chunks = store.get_chunks_by_metadata(
+            SourceType.SUBSIDY, metadata_equals={"source_id": policy_id}
+        )
+    except (AttributeError, VectorStoreError):
+        # Optional fast path: legacy stores or failed batch reads use the same
+        # searches below, including their original error handling.
+        detail_chunks = ()
     for section_type, label in _DETAIL_SECTION_TYPES:
-        try:
-            hits = store.search(
-                SourceType.SUBSIDY,
-                f"{policy_id} {label}",
-                query_id=f"{query_id}-{policy_id}-detail-{section_type}",
-                top_k=1,
-                search_filter=VectorSearchFilter(
-                    metadata_equals={"source_id": policy_id, "section_type": section_type}
-                ),
-            )
-        except CollectionNotFoundError:
-            hits = ()
-        if not hits:
-            continue
-        chunk = hits[0].chunk
+        candidates = [
+            chunk for chunk in detail_chunks
+            if chunk.source_type is SourceType.SUBSIDY
+            and chunk.metadata.get("source_id") == policy_id
+            and chunk.metadata.get("section_type") == section_type
+        ]
+        if len(candidates) == 1:
+            chunk = candidates[0]
+        else:
+            try:
+                hits = store.search(
+                    SourceType.SUBSIDY,
+                    f"{policy_id} {label}",
+                    query_id=f"{query_id}-{policy_id}-detail-{section_type}",
+                    top_k=1,
+                    search_filter=VectorSearchFilter(
+                        metadata_equals={"source_id": policy_id, "section_type": section_type}
+                    ),
+                )
+            except CollectionNotFoundError:
+                hits = ()
+            if not hits:
+                continue
+            chunk = hits[0].chunk
         sections[section_type] = _strip_prefix(chunk.text)
         if not meta:
             meta = {
