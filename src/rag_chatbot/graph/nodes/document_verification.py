@@ -1,10 +1,10 @@
 """N6 공식 정책문서 확인.
 
 Issue #16 (N4~N6): claim_plan 중 doc_check_required=True인 claim만, N4가 이미
-검색해둔 subsidy_chunks(같은 정책의 원문)와 대조해서 claim_plan을 갱신한다
+검색해둔 subsidy_full_chunks(없으면 같은 정책의 subsidy_chunks)와 대조해서 claim_plan을 갱신한다
 (evidence_chunk_ids, status).
 
-입력: GraphState["claim_plan"], GraphState["subsidy_chunks"]
+입력: GraphState["claim_plan"], GraphState["subsidy_full_chunks"], GraphState["subsidy_chunks"]
 출력: {"claim_plan": list[ClaimDraft]}  (doc_check_required=False인 claim은
       그대로 통과시키고, True인 것만 검증해서 갱신)
 
@@ -110,6 +110,7 @@ def verify_official_documents(
     subsidy_chunks = state.get("subsidy_chunks") or []
     query_id = state.get("query_id", "")
     chunks_by_policy = _group_chunks_by_policy(subsidy_chunks)
+    full_chunks_by_policy = _group_chunks_by_policy(state.get("subsidy_full_chunks") or [])
 
     updated_plan: list[ClaimDraft] = []
     for claim in claim_plan:
@@ -120,7 +121,7 @@ def verify_official_documents(
             continue
 
         policy_id = claim["policy_id"]
-        policy_chunks = chunks_by_policy.get(policy_id, [])
+        policy_chunks = full_chunks_by_policy.get(policy_id) or chunks_by_policy.get(policy_id, [])
 
         is_retry = claim.get("doc_retry_count", 0) > 0
         if is_retry and store is not None:
