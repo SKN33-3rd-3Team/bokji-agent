@@ -7,6 +7,7 @@ Issue #25(graph builder 조립)에서 추가했다.
 
 - state["citations"]는 이미 N13이 claim_plan의 evidence_chunk_ids로만
   조립했지만, 이 노드는 각 chunk_id가 실제로 state["subsidy_chunks"] /
+  state["subsidy_full_chunks"] /
   state["law_chunks"]에 존재하는지 다시 한 번 확인한다 - 두 노드 사이에서
   값이 조용히 섞이거나 잘못 전달되는 걸 막는 마지막 방어선이다. 검증에
   실패한 인용은 조용히 버린다(모델이 지어냈다고 가정하지, 사용자에게
@@ -22,6 +23,7 @@ Issue #25(graph builder 조립)에서 추가했다.
 from __future__ import annotations
 
 from ..state import AnswerStatus, CitationEntry, GraphState
+from .document_verification import merge_evidence_chunks
 
 _ABSTAIN_MESSAGE = (
     "죄송합니다. 확인된 근거가 부족해 답변을 제공할 수 없습니다. "
@@ -31,7 +33,9 @@ _ABSTAIN_MESSAGE = (
 
 def _known_chunk_ids(state: GraphState) -> set[str]:
     ids: set[str] = set()
-    for retrieved in state.get("subsidy_chunks", []) or []:
+    for retrieved in merge_evidence_chunks(
+        state.get("subsidy_chunks") or [], state.get("subsidy_full_chunks") or []
+    ):
         ids.add(retrieved.chunk.chunk_id)
     for retrieved in state.get("law_chunks", []) or []:
         ids.add(retrieved.chunk.chunk_id)

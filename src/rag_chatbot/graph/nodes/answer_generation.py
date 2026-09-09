@@ -1,7 +1,8 @@
 """N13 답변 생성 노드.
 
 N12(assemble_result)가 만든 state["assembled_result"]와, 그 근거를 추적하기
-위한 state["claim_plan"] / state["subsidy_chunks"] / state["law_chunks"]를
+위한 state["claim_plan"] / state["subsidy_chunks"] /
+state["subsidy_full_chunks"] / state["law_chunks"]를
 바탕으로 사용자에게 보여줄 답변 초안(state["draft_answer"])과 인용 목록
 (state["citations"])을 만든다. Issue #25(graph builder 조립)에서 추가했다.
 
@@ -12,6 +13,7 @@ N12(assemble_result)가 만든 state["assembled_result"]와, 그 근거를 추�
   유무와 무관하게 동일해야 한다).
 - 인용(citations)은 LLM 출력에서 뽑지 않는다. state["claim_plan"]의
   evidence_chunk_ids(N7이 이미 검증한 근거)와 state["subsidy_chunks"] /
+  state["subsidy_full_chunks"] /
   state["law_chunks"]의 chunk.metadata["source_url"]만으로 조립한다 - LLM이
   "이 출처를 봤다"고 말해도 그 자체를 근거로 인용을 만들지 않는다
   (document_verification_llm_judge.py의 "후보 밖 chunk_id는 지어낸 것으로
@@ -26,6 +28,7 @@ from rag_design.contracts import RetrievedChunk
 
 from ...llm import LLMCallError, LLMClient
 from ..state import CitationEntry, GraphState
+from .document_verification import merge_evidence_chunks
 
 # "지원 가능"은 과대 주장이었다. N9가 실제로 대조하는 조건은 문서 metadata에
 # 있는 연령 기준뿐이고, 장애·성별·소득·취업은 비교조차 못 한다. 그래서 라벨을
@@ -57,7 +60,9 @@ def _resolve_source_url(
 
 def _chunks_by_id(state: GraphState) -> dict[str, RetrievedChunk]:
     chunks_by_id: dict[str, RetrievedChunk] = {}
-    for retrieved in state.get("subsidy_chunks", []) or []:
+    for retrieved in merge_evidence_chunks(
+        state.get("subsidy_chunks") or [], state.get("subsidy_full_chunks") or []
+    ):
         chunks_by_id[retrieved.chunk.chunk_id] = retrieved
     for retrieved in state.get("law_chunks", []) or []:
         chunks_by_id.setdefault(retrieved.chunk.chunk_id, retrieved)

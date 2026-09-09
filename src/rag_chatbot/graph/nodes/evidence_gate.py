@@ -31,6 +31,7 @@ from rag_design.policy import (
 )
 
 from ..state import ClaimDraft, EvidenceGateVerdict, GraphState
+from .document_verification import merge_evidence_chunks
 
 
 _CLAIM_TYPES = frozenset({"eligibility", "amount", "duplicate"})
@@ -716,7 +717,10 @@ def evaluate_evidence(state: GraphState) -> dict[str, Any]:
             law_retry_count=law_retry_count,
         )
     claims = _claim_plan(state)
-    subsidy_chunks = _retrieved_chunks(state, "subsidy_chunks")
+    subsidy_chunks = merge_evidence_chunks(
+        _retrieved_chunks(state, "subsidy_chunks"),
+        _retrieved_chunks(state, "subsidy_full_chunks"),
+    )
     law_chunks = _retrieved_chunks(state, "law_chunks")
 
     if any(_claim_status(claim) is EvidenceStatus.CONFLICT for claim in claims):
