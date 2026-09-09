@@ -1228,8 +1228,8 @@ class ChromaVectorStore:
                 return False
         if not subsidy_regions_match(chunk.metadata, search_filter.region_names):
             return False
-        if search_filter.age is not None:
-            age = search_filter.age_for_basis(chunk.metadata.get("age_basis"))
+        age = search_filter.age_for_basis(chunk.metadata.get("age_basis"))
+        if age is not None:
             age_start = chunk.metadata.get("age_start")
             age_end = chunk.metadata.get("age_end")
             has_age_condition = isinstance(age_start, int) or isinstance(age_end, int)
