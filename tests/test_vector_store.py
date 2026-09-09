@@ -378,6 +378,27 @@ class ChromaVectorStoreTests(unittest.TestCase):
         self.assertEqual(before, ())
         self.assertEqual(len(effective), 1)
 
+    def test_unknown_region_candidate_preserves_age_date_and_metadata_filters(self) -> None:
+        store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
+        document = replace(self.subsidy, metadata={**self.subsidy.metadata,
+                           "region_scope": "unknown", "region_names": []})
+        original = chunk_document(document)[0]
+        chunk = replace(original, metadata={**original.metadata, "age_start": 19, "age_end": 35,
+                        "effective_from": "2026-01-01", "effective_to": "2027-01-01"})
+        store.sync_snapshot(SourceType.SUBSIDY, (chunk,), snapshot_id="unknown-region")
+        base = VectorSearchFilter(region_names=("서울특별시",), age=19, as_of=date(2026, 1, 1))
+        for search_filter, expected in ((base, 1), (replace(base, age=18), 0),
+                (replace(base, age=36), 0), (replace(base, as_of=date(2025, 12, 31)), 0),
+                (replace(base, as_of=date(2027, 1, 1)), 0),
+                (replace(base, metadata_equals={"source_id": "not-the-policy"}), 0)):
+            with self.subTest(search_filter=search_filter):
+                results = store.search(SourceType.SUBSIDY, chunk.text, query_id="q-unknown",
+                                       search_filter=search_filter)
+                self.assertEqual(len(results), expected)
+                if results:
+                    self.assertEqual(results[0].chunk.metadata["region_scope"], "unknown")
+                    self.assertEqual(results[0].chunk.metadata["region_names"], [])
+
     def test_legal_subtypes_keep_metadata_only_index_contract(self) -> None:
         store = ChromaVectorStore(HashEmbeddingProvider(64), self.config)
         synced = store.sync_snapshot(

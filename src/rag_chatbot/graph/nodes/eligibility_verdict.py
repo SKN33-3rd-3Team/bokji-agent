@@ -12,7 +12,8 @@ metadata(age_start/age_end 등)를 slots와 직접 대조해서, "근거 문장�
 다시 확인하는 것이므로 새로운 근거를 만들어내는 게 아니다.
 
 - 충족: 관련 eligibility claim이 모두 SUPPORTED이고, 재검색한 chunk의 구조화
-  조건(age_start/age_end)과 slots 사이에 위반이 없음.
+  조건(age_start/age_end)과 slots 사이에 위반이 없고 지역 UNKNOWN이 아님.
+  지역 UNKNOWN은 기존 조건 결과를 유지한 채 지역만 미확인으로 추가한다.
 
   **중요(2026-08-31 추가): "충족"은 "모든 자격 조건을 만족한다"는 뜻이 아니다.**
   이 노드가 실제로 대조할 수 있는 조건은 문서 metadata에 구조화되어 있는
@@ -49,7 +50,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Iterable
 
-from rag_design.contracts import EvidenceStatus, RetrievedChunk, SourceType
+from rag_design.contracts import EvidenceStatus, RegionScope, RetrievedChunk, SourceType
 from rag_design.vector_store import (
     ChromaVectorStore,
     CollectionNotFoundError,
@@ -88,6 +89,17 @@ _UNVERIFIABLE_ASPECTS = tuple(
 )
 
 
+def _unknown_region_policy_ids(chunks: Iterable[RetrievedChunk]) -> set[str]:
+    return {
+        item.chunk.metadata["source_id"]
+        for item in chunks
+        if item.chunk.source_type is SourceType.SUBSIDY
+        and item.chunk.metadata.get("region_scope") == RegionScope.UNKNOWN.value
+        and item.chunk.metadata.get("region_names") == []
+        and isinstance(item.chunk.metadata.get("source_id"), str)
+    }
+
+
 def determine_eligibility(
     state: GraphState, store: ChromaVectorStore, llm_client: LLMClient | None = None
 ) -> dict:
@@ -107,6 +119,9 @@ def determine_eligibility(
     없음.
     """
     slots = state.get("slots", {})
+    unknown_region_policies = _unknown_region_policy_ids(
+        list(state.get("subsidy_chunks") or []) + list(state.get("subsidy_full_chunks") or [])
+    )
     # Full slot callers share N4's subject/birth-date guard; age-only callers stay legacy.
     guarded_age = any(key in slots for key in ("age_subject", "birth_date", "age_year_based"))
     age_slots = (
@@ -179,6 +194,8 @@ def determine_eligibility(
             )
             continue
 
+        if policy_id in _unknown_region_policy_ids(recheck_chunks):
+            unknown_region_policies.add(policy_id)
         violations, checked = _find_structured_violations(recheck_chunks, age_slots)
         scope = _verification_scope(checked)
         if guarded_age and not checked and any(
@@ -193,7 +210,7 @@ def determine_eligibility(
             })
             continue
         if violations:
-            reasons = _naturalize_reasons(violations, llm_client)
+            reasons = violations if policy_id in unknown_region_policies else _naturalize_reasons(violations, llm_client)
             verdicts.append(
                 {
                     "policy_id": policy_id,
@@ -209,6 +226,14 @@ def determine_eligibility(
             {"policy_id": policy_id, "verdict": "충족", "reasons": reasons, **scope}
         )
 
+    # Add only the unresolved region; never erase other checks or a proven violation.
+    for verdict in verdicts:
+        if verdict["policy_id"] not in unknown_region_policies:
+            continue
+        if verdict["verdict"] == "충족":
+            verdict["verdict"] = "미확인"
+        verdict.setdefault("unchecked", []).append("지역")
+        verdict["reasons"].append("지역 조건 추가 확인 필요")
     return {"eligibility_verdicts": verdicts}
 
 

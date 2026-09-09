@@ -98,8 +98,16 @@ Search supports source isolation, snapshot and scalar metadata equality, a
 half-open effective-date filter, exact subsidy `region_names` intersection, and
 top-k conversion to ranked `RetrievedChunk` values. A national
 `region_scope` with `["전국"]` is a wildcard. An unknown scope with `[]`
-fails closed only when a region filter is present. Date and region checks are
-reapplied to decoded chunks so missing or malformed metadata fails closed.
+passes the region filter as an unverified candidate; its metadata remains
+`unknown` with `[]`, never national. This is candidate inclusion, not proof of
+regional eligibility. Missing or malformed region metadata still fails closed
+when a region filter is present, and explicit regional mismatches stay excluded.
+Date, age, source and other metadata filters still apply. For UNKNOWN policy
+regions, N9 adds region to `unchecked`, retains other checked/unchecked conditions
+and proven violations, and changes an otherwise satisfied verdict to unverified.
+It does not infer actual regional eligibility. N13 keeps deterministic text for
+these responses, and N14 guarantees `지역 조건 추가 확인 필요` in the final answer,
+including an abstention without upgrading its evidence status.
 
 The name-based region contract and subsidy region text prefix require
 `structure-v2` chunks and `chroma-vector-store-v3`. Existing code-based or

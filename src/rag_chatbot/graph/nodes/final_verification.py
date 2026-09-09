@@ -53,7 +53,13 @@ def verify_final_answer(state: GraphState) -> dict:
 
     assembled = state.get("assembled_result") or {}
     policies = assembled.get("policies", {})
-    has_incomplete_policy = any(entry.get("status_note") for entry in policies.values())
+    region_notices = [
+        f"{policy_id}: 지역 조건 추가 확인 필요"
+        for policy_id, entry in policies.items()
+        if "지역" in ((entry.get("eligibility") or {}).get("unchecked") or [])
+    ]
+    has_incomplete_policy = bool(region_notices) or any(entry.get("status_note") for entry in policies.values())
+    notice_suffix = "\n\n" + "\n".join(region_notices) if region_notices else ""
 
     node_trace = list(state.get("node_trace", []))
     node_trace.append("N14")
@@ -61,7 +67,7 @@ def verify_final_answer(state: GraphState) -> dict:
     if not policies or not verified_citations:
         status: AnswerStatus = "abstained"
         return {
-            "final_answer": _ABSTAIN_MESSAGE,
+            "final_answer": _ABSTAIN_MESSAGE + notice_suffix,
             "final_citations": [],
             "answer_status": status,
             "node_trace": node_trace,
@@ -69,7 +75,7 @@ def verify_final_answer(state: GraphState) -> dict:
 
     status = "partial" if (dropped > 0 or has_incomplete_policy) else "complete"
     return {
-        "final_answer": state.get("draft_answer", ""),
+        "final_answer": state.get("draft_answer", "") + notice_suffix,
         "final_citations": verified_citations,
         "answer_status": status,
         "node_trace": node_trace,

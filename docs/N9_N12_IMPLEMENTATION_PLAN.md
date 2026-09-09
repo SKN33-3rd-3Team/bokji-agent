@@ -94,17 +94,32 @@ N9 자격 판정, N10 지원금 계산, N11 중복수급 판정, N12 결과 조�
 - 입력: `state["slots"]`(사용자 정보), `state["claim_plan"]`의
   `claim_type == "eligibility"` claim.
 - 관련 claim이 모두 `SUPPORTED`면 재검색을 수행하고, 재검색한 chunk의
-  `metadata["age_start"]`/`metadata["age_end"]`와 `slots["age"]`를 비교한다.
+  `metadata["age_start"]`/`metadata["age_end"]`와 정책의 `age_basis`에 맞는
+  나이를 비교한다. 명시적 `year`는 연 나이, `international_age` 및 기존
+  None/unknown 기준은 기존 만 나이 동작을 유지한다. 전체 슬롯 호출은 N4와
+  같은 `resolve_filter_slots` 주체 guard를 사용하며 age-only 호출은 호환성을 유지한다.
+  non-self 등으로 나이를 비교하지 못해도 연령 제한이 있으면 연령을 미확인으로
+  남긴다. 아래 지역 UNKNOWN 후처리는 이 연령 결과를 덮어쓰지 않는다.
   - `age < age_start` 또는 `age > age_end`면 "미충족"이고 위반 사유 문자열을
     만든다. 슬롯에 `age`가 없거나 chunk에 age 조건이 아예 없으면 비교하지
     않는다(위반로 단정하지 않음).
-  - 위반이 없으면 "충족", claim의 `reasons`를 그대로 verdict의 `reasons`로
-    사용한다.
+  - 위반이 없으면 기본적으로 "충족", claim의 `reasons`를 그대로 verdict의
+    `reasons`로 사용하되 아래 지역 UNKNOWN 후처리를 적용한다.
 - 관련 claim이 없으면(NOT_APPLICABLE만 있거나 아예 없으면) "미확인" +
   "판정 가능한 자격 조건 근거가 없음".
 - 위반 사유는 `_naturalize_reasons()`로 LLM에 한 번 더 통과시킬 수 있다(LLM
   사용 범위는 아래 별도 절 참고). LLM은 판정 자체(충족/미충족/미확인)에는
   관여하지 않는다.
+
+- 정책 metadata가 `region_scope=unknown`, `region_names=[]`이면 기존 `checked`와
+  다른 `unchecked`를 유지하면서 `지역`만 미확인으로 추가한다. 기존 "충족"은
+  "미확인"으로 낮추지만 확인된 위반의 "미충족"과 근거 부족 사유는 보존한다.
+  사용자 주소의 미확정과 혼동하지 않으며 known regional/national을 새로 검증했다고
+  주장하지 않는다. 근거 없는 판정을 승격하지 않는다.
+- 이 경우 N9 위반 사유와 N13 답변은 결정적 규칙/템플릿을 유지하여 LLM 재서술로
+  전체 자격 충족을 주장하지 않게 한다. N14는 최종 답변에 정책별
+  **지역 조건 추가 확인 필요**를 반드시 덧붙인다. 다른 조건의 미확인·미충족 및
+  근거 부족 보류는 유지한다. N12·서비스·UI는 기존 조건별 필드를 전달한다.
 
 ### N10 지원금 계산 (`calculate_benefit_amount`, `benefit_calculator.py`)
 
@@ -300,7 +315,7 @@ N9 자격 판정, N10 지원금 계산, N11 중복수급 판정, N12 결과 조�
 | T4 | 자격 claim UNSUPPORTED | 재검색 생략하고 "미확인" |
 | T5 | 자격 claim CONFLICT | "미확인" |
 | T6 | 재검색 결과 없음(빈 chunk) | "미확인" + "재검색에서 다시 찾지 못함" |
-| T7 | age 슬롯 없음 또는 chunk에 나이 조건 없음 | 비교하지 않고 "충족" 유지 |
+| T7 | age-only legacy에서 age 없음 또는 나이 조건 없음 | 기존 비교 생략 유지; full-slot 주체 guard로 연령 제한을 확인하지 못하면 "미확인", 지역 UNKNOWN 후처리 별도 적용 |
 | T8 | 해당 정책에 자격 claim이 없음 | 빈 verdicts 목록 |
 | T9 | 여러 정책 동시 존재 | 정책별로 독립적으로 판정(교차 오염 없음) |
 | T10 | `llm_client=None` | 규칙이 만든 원문 사유 그대로 유지 |
