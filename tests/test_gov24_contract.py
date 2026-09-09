@@ -25,30 +25,7 @@ from rag_chatbot.collectors.gov_24.region_utils import (  # noqa: E402
 
 
 class RegionContractTests(unittest.TestCase):
-    def test_all_unresolved_fallbacks_serialize_as_national_without_codes(self) -> None:
-        from rag_design.contracts import Document
-
-        for organization in (None, "", " \t\n ", "한국주택금융공사", "미등록기관",
-                             "중구청", "강원도 춘천시청", "서울특별시 중구 강남구청",
-                             "경기도 수원시 장안구 팔달구청", "전국", "교육부"):
-            with self.subTest(organization=organization):
-                self.assertEqual(extract_region(organization), {
-                    "region_scope": "national", "region_names": ["전국"],
-                    "sido": None, "sigungu": None, "sido_code": None, "sigungu_code": None})
-                item = UrlAndSecretSafetyTests._item("https://www.gov.kr/portal/service-1")
-                if organization is None:
-                    item.pop("소관기관명")
-                else:
-                    item["소관기관명"] = organization
-                document = to_document.convert_one(item, "2026-09-09T00:00:00+09:00", [], set(), set(), {})
-                self.assertIsNotNone(document)
-                decoded = Document.from_dict(json.loads(json.dumps(document)))
-                self.assertEqual(decoded.metadata["region_scope"], "national")
-                self.assertEqual(decoded.metadata["region_names"], ["전국"])
-                for key in ("region_sido", "region_sigungu", "region_sido_code", "region_sigungu_code"):
-                    self.assertIsNone(decoded.metadata[key])
-
-    def test_national_regional_nested_and_fallback_contract(self) -> None:
+    def test_national_regional_nested_and_unknown_contract(self) -> None:
         self.assertEqual(
             extract_region("교육부")["region_names"],
             ["전국"],
@@ -62,10 +39,10 @@ class RegionContractTests(unittest.TestCase):
         )
 
         unknown = extract_region("한국주택금융공사")
-        self.assertEqual(unknown["region_scope"], "national")
-        self.assertEqual(unknown["region_names"], ["전국"])
+        self.assertEqual(unknown["region_scope"], "unknown")
+        self.assertEqual(unknown["region_names"], [])
 
-    def test_current_codes_are_used_and_legacy_names_default_national(self) -> None:
+    def test_current_codes_are_used_and_legacy_names_fail_closed(self) -> None:
         for organization, code in (
             ("강원특별자치도 춘천시청", "51"),
             ("전북특별자치도 전주시청", "52"),
@@ -77,7 +54,7 @@ class RegionContractTests(unittest.TestCase):
         for legacy_name in ("강원도 춘천시청", "전라북도 전주시청", "전라남도 순천시청"):
             with self.subTest(legacy_name=legacy_name):
                 legacy = extract_region(legacy_name)
-                self.assertEqual(legacy["region_scope"], "national")
+                self.assertEqual(legacy["region_scope"], "unknown")
                 self.assertIsNone(legacy["sido_code"])
 
         with tempfile.TemporaryDirectory() as temp_dir:

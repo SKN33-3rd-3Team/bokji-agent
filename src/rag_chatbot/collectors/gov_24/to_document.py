@@ -523,6 +523,10 @@ def convert_one(
         )
 
     region = extract_region(item.get("소관기관명"), sigungu_code_table)
+    if region["region_scope"] == "unknown":
+        doc_parse_warnings.append(
+            "소관기관명에서 지역 범위를 확정하지 못해 region_scope=unknown으로 보존"
+        )
 
     age_start, age_end, age_source = extract_age_metadata(item)
     support_conditions, support_condition_codes = collect_support_conditions(item)
@@ -669,7 +673,7 @@ def run() -> None:
             "region_extraction": (
                 "소관기관명 텍스트에서 시도/시군구를 정규식으로 추출(region_utils.py). "
                 "명시적으로 확인한 중앙기관은 national/['전국'], 시도/시군구는 "
-                "regional과 계층형 region_names로 기록한다. 미판정은 제품 기본값 national/[전국]; 실제 전국 자격 확인은 아님"
+                "regional과 계층형 region_names로 기록한다. 확정할 수 없으면 unknown/[]"
             ),
             "missing_vs_failed": (
                 "상세조회/지원조건조회 API 호출이 실패한 서비스ID는 실패 목록"

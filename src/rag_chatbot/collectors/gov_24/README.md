@@ -111,9 +111,7 @@ PYTHONPATH=src python -m rag_chatbot.collectors.gov_24.to_document
 - 지역 범위는 구조화된 필드가 없어 `region_utils.py`가 `소관기관명`에서
   추출한다. 확인된 중앙기관은 `region_scope=national`, `region_names=["전국"]`,
   시도/시군구는 `regional`과 상위 지역을 포함한 계층명으로 기록한다.
-  미판정(누락·공백·미등록 기관·모호한 지역명 포함)은 제품 기본값 `national`, `["전국"]`과 빈 지역 코드로 기록한다.
-  실제 전국 자격을 검증한 것은 아니며 새 national 문서는 N9 UNKNOWN 지역 경고를 유발하지 않는다.
-  기존/외부 UNKNOWN 데이터와 해당 검색·N9 보호는 유지하고 기존 색인을 소급 변경하지 않는다.
+  확정할 수 없는 기관은 전국으로 확대하지 않고 `unknown`, `[]`로 보존한다.
 - 현행 시도 2자리 코드(`region_sido_code`, 강원 `51`, 전북 `52`,
   전남광주통합특별시 `12`)는 보조정보로 채우지만, 시군구
   5자리 코드(`region_sigungu_code`)는 정확성이 중요해 하드코딩하지 않는다.

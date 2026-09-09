@@ -1,9 +1,8 @@
-"""소관기관명에서 지역을 추출하고 미판정은 제품 기본값인 전국으로 분류한다.
+"""소관기관명에서 이름 기반 지역 범위를 보수적으로 추출한다.
 
 보조금24 API에는 구조화된 지역 범위 필드가 없으므로 현재 시도 정규 명칭으로
-시작하는 기관은 지역 사업으로, 명시적으로 확인한 전국 기관은 전국 사업으로
-분류한다. 그 밖의 값은 ``national``/``["전국"]``을 기본값으로 사용한다.
-이 기본 분류는 실제 전국 지원자격을 검증했다는 뜻이 아니다.
+시작하는 기관만 지역 사업으로, 명시적으로 확인한 전국 기관만 전국 사업으로
+분류한다. 그 밖의 값은 전국으로 확대 해석하지 않고 ``unknown``으로 둔다.
 """
 
 import csv
@@ -31,8 +30,8 @@ SIDO_CODE = {
 }
 SIDO_NAMES = tuple(sorted(SIDO_CODE, key=len, reverse=True))
 
-# 기존에 명시적으로 전국으로 분류한 기관 목록이다.
-# 그 밖의 불명확한 조직도 아래 제품 기본값에 따라 national로 분류한다.
+# 기관명만으로 전국 범위를 확정할 수 있는 최소 목록이다. 공사·재단처럼
+# 서비스 범위가 기관명만으로 불명확한 조직은 unknown으로 남긴다.
 NATIONAL_ORGANIZATIONS = frozenset(
     {
         "교육부",
@@ -70,10 +69,10 @@ def load_sigungu_code_table(csv_path: str | Path | None) -> dict[tuple[str, str]
     return table
 
 
-def _national_region() -> dict:
+def _unknown_region() -> dict:
     return {
-        "region_scope": "national",
-        "region_names": ["전국"],
+        "region_scope": "unknown",
+        "region_names": [],
         "sido": None,
         "sigungu": None,
         "sido_code": None,
@@ -84,11 +83,18 @@ def _national_region() -> dict:
 def extract_region(org_name: str | None, sigungu_code_table: dict | None = None) -> dict:
     """기관명에서 이름 기반 지역 계약과 선택적 보조 코드를 만든다."""
     if not org_name or not org_name.strip():
-        return _national_region()
+        return _unknown_region()
 
     normalized_org = " ".join(org_name.split())
     if normalized_org == "전국" or normalized_org in NATIONAL_ORGANIZATIONS:
-        return _national_region()
+        return {
+            "region_scope": "national",
+            "region_names": ["전국"],
+            "sido": None,
+            "sigungu": None,
+            "sido_code": None,
+            "sigungu_code": None,
+        }
 
     for sido in SIDO_NAMES:
         if not normalized_org.startswith(sido):
@@ -100,7 +106,7 @@ def extract_region(org_name: str | None, sigungu_code_table: dict | None = None)
             len(sigungu_parts) == 2
             and not (sigungu_parts[0].endswith("시") and sigungu_parts[1].endswith("구"))
         ):
-            return _national_region()
+            return _unknown_region()
 
         region_names = [sido]
         for depth in range(1, len(sigungu_parts) + 1):
@@ -121,4 +127,4 @@ def extract_region(org_name: str | None, sigungu_code_table: dict | None = None)
             "sigungu_code": sigungu_code,
         }
 
-    return _national_region()
+    return _unknown_region()
