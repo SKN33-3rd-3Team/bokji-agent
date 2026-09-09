@@ -12,6 +12,7 @@ from rag_design.index_policy import (
     QueryScope,
     chunk_matches_filter,
     route_indexes,
+    subsidy_regions_match,
     validate_cross_index_merge,
 )
 from rag_design.policy import (
@@ -260,7 +261,7 @@ class ChunkingAndPolicyTests(unittest.TestCase):
         )
         self.assertIn("지역: 서울특별시, 서울특별시 강남구", chunk.text)
 
-    def test_unknown_region_is_unfiltered_only(self) -> None:
+    def test_unknown_region_remains_a_candidate_without_becoming_national(self) -> None:
         unknown_document = replace(
             self.subsidy,
             metadata={
@@ -276,7 +277,7 @@ class ChunkingAndPolicyTests(unittest.TestCase):
                 MetadataFilter(SourceType.SUBSIDY, date(2026, 8, 26)),
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             chunk_matches_filter(
                 chunk,
                 MetadataFilter(
@@ -287,6 +288,29 @@ class ChunkingAndPolicyTests(unittest.TestCase):
             )
         )
         self.assertIn("지역: 미확정", chunk.text)
+        self.assertEqual(chunk.metadata["region_scope"], "unknown")
+        self.assertEqual(chunk.metadata["region_names"], [])
+
+    def test_malformed_region_is_not_an_unknown_candidate(self) -> None:
+        for metadata in ({}, {"region_scope": "unknown"},
+                         {"region_scope": "unknown", "region_names": None},
+                         {"region_scope": "unknown", "region_names": ["전국"]},
+                         {"region_scope": "unknown", "region_names": ["서울특별시"]},
+                         {"region_scope": "regional", "region_names": []},
+                         {"region_scope": "invalid", "region_names": []}):
+            with self.subTest(metadata=metadata):
+                self.assertFalse(subsidy_regions_match(metadata, ("서울특별시",)))
+
+    def test_unknown_region_does_not_bypass_in_memory_source_or_date_filter(self) -> None:
+        chunk = chunk_document(self.subsidy)[0]
+        chunk = replace(chunk, metadata={**chunk.metadata, "region_scope": "unknown",
+                        "region_names": [], "effective_from": "2026-01-01", "effective_to": "2027-01-01"})
+        for as_of, expected in ((date(2025, 12, 31), False), (date(2026, 1, 1), True),
+                                (date(2027, 1, 1), False)):
+            with self.subTest(as_of=as_of):
+                self.assertEqual(chunk_matches_filter(chunk, MetadataFilter(
+                    SourceType.SUBSIDY, as_of, ("부산광역시",))), expected)
+        self.assertFalse(chunk_matches_filter(chunk, MetadataFilter(SourceType.LAW, date(2026, 1, 1))))
 
     def test_region_filter_requires_canonical_names_and_subsidy_source(self) -> None:
         policy = MetadataFilter(

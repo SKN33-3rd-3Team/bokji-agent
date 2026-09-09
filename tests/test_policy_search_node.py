@@ -100,6 +100,34 @@ class SearchPoliciesNodeTests(unittest.TestCase):
         self.assertIn("subsidy_chunks", update)
         self.assertGreater(len(update["subsidy_chunks"]), 0)
 
+    def test_unknown_region_survives_n4_without_bypassing_profile_conditions(self) -> None:
+        document = replace(self.subsidy, metadata={
+            **self.subsidy.metadata, "region_scope": "unknown", "region_names": [],
+        })
+        source_chunks = chunk_document(document)
+        self.store.sync_snapshot(SourceType.SUBSIDY, source_chunks,
+                                 snapshot_id="n4-unknown-region")
+        state = {"query_id": "q-unknown-n4", "as_of": date(2026, 1, 1),
+                 "initial_user_input": "유아학비 지원", "slots": {
+                     "region_names": ["부산광역시"], "gender": "female",
+                 }}
+        for required_gender, expected_count in (("JA0102", 1), ("JA0101", 0)):
+            with self.subTest(required_gender=required_gender):
+                result = search_policies(state, self.store, support_conditions={
+                    document.source_id: ConfigurableTopKTests._conditions(required_gender),
+                })
+                self.assertEqual(len(result["subsidy_chunks"]), expected_count)
+                if expected_count:
+                    self.assertEqual(result["subsidy_chunks"][0].rank, 1)
+                    self.assertEqual({c.chunk.chunk_id for c in result["subsidy_full_chunks"]},
+                                     {c.chunk_id for c in source_chunks})
+                    for candidate in result["subsidy_chunks"] + result["subsidy_full_chunks"]:
+                        self.assertEqual(candidate.chunk.metadata["region_scope"], "unknown")
+                        self.assertEqual(candidate.chunk.metadata["region_names"], [])
+                else:
+                    self.assertEqual(result["subsidy_full_chunks"], [])
+                    self.assertEqual(result["subsidy_legal_basis_chunks"], [])
+
     def test_search_policies_requires_query_id(self) -> None:
         with self.assertRaises(ValueError):
             search_policies({"as_of": date(2026, 1, 1), "slots": {}}, self.store)

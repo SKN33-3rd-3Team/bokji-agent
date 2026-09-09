@@ -1,11 +1,12 @@
 """N6 공식 정책문서 확인.
 
 Issue #16 (N4~N6): claim_plan 중 doc_check_required=True인 claim만, N4가 이미
-검색해둔 subsidy_chunks(같은 정책의 원문)와 대조해서 claim_plan을 갱신한다
+검색해둔 subsidy_full_chunks(없으면 같은 정책의 subsidy_chunks)와 대조해서 claim_plan을 갱신한다
 (evidence_chunk_ids, status).
 
-입력: GraphState["claim_plan"], GraphState["subsidy_chunks"]
-출력: {"claim_plan": list[ClaimDraft]}  (doc_check_required=False인 claim은
+입력: GraphState["claim_plan"], GraphState["subsidy_full_chunks"], GraphState["subsidy_chunks"]
+출력: {"claim_plan": list[ClaimDraft]} 및 재시도 시 subsidy_full_chunks
+      (doc_check_required=False인 claim은
       그대로 통과시키고, True인 것만 검증해서 갱신)
 
 설계 전제 (팀 확인 필요, 아직 확정 아님):
@@ -81,15 +82,23 @@ def _widen_search(store, policy_id: str, query_id: str, top_k: int) -> list[Retr
     )
 
 
-def _merge_unique_chunks(
+def merge_evidence_chunks(
     base: list[RetrievedChunk], extra: list[RetrievedChunk]
 ) -> list[RetrievedChunk]:
-    seen = {chunk.chunk.chunk_id for chunk in base}
+    """Collapse matching cross-pool records only; preserve duplicates and conflicts."""
+    unmatched: dict[str, list[RetrievedChunk]] = {}
+    for item in base:
+        unmatched.setdefault(item.chunk.chunk_id, []).append(item)
     merged = list(base)
-    for chunk in extra:
-        if chunk.chunk.chunk_id not in seen:
-            merged.append(chunk)
-            seen.add(chunk.chunk.chunk_id)
+    for item in extra:
+        matches = unmatched.get(item.chunk.chunk_id, [])
+        for index, previous in enumerate(matches):
+            if (previous.chunk == item.chunk and previous.query_id == item.query_id
+                    and previous.index_name == item.index_name):
+                matches.pop(index)
+                break
+        else:
+            merged.append(item)
     return merged
 
 
@@ -110,6 +119,9 @@ def verify_official_documents(
     subsidy_chunks = state.get("subsidy_chunks") or []
     query_id = state.get("query_id", "")
     chunks_by_policy = _group_chunks_by_policy(subsidy_chunks)
+    full_chunks_by_policy = _group_chunks_by_policy(state.get("subsidy_full_chunks") or [])
+    retained_chunks = list(state.get("subsidy_full_chunks") or [])
+    retried = False
 
     updated_plan: list[ClaimDraft] = []
     for claim in claim_plan:
@@ -120,12 +132,14 @@ def verify_official_documents(
             continue
 
         policy_id = claim["policy_id"]
-        policy_chunks = chunks_by_policy.get(policy_id, [])
+        policy_chunks = full_chunks_by_policy.get(policy_id) or chunks_by_policy.get(policy_id, [])
 
         is_retry = claim.get("doc_retry_count", 0) > 0
         if is_retry and store is not None:
             widened = _widen_search(store, policy_id, query_id, widen_top_k)
-            policy_chunks = _merge_unique_chunks(policy_chunks, widened)
+            policy_chunks = merge_evidence_chunks(policy_chunks, widened)
+            retained_chunks = merge_evidence_chunks(retained_chunks, policy_chunks)
+            retried = True
 
         reasons = claim.get("reasons", [])
 
@@ -162,4 +176,7 @@ def verify_official_documents(
             }
         )
 
-    return {"claim_plan": updated_plan}
+    update: dict = {"claim_plan": updated_plan}
+    if retried:
+        update["subsidy_full_chunks"] = retained_chunks
+    return update
