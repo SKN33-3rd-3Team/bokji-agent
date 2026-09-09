@@ -166,7 +166,13 @@ def generate_answer(state: GraphState, llm_client: LLMClient | None = None) -> d
     )
 
     draft_answer = template_answer
-    if llm_client is not None and sections:
+    region_unverified = any(
+        "지역" in ((entry.get("eligibility") or {}).get("unchecked") or [])
+        for entry in policies.values()
+    )
+    # Keep the deterministic verdict/scope when region is unresolved; a rewrite
+    # could omit the qualification or assert overall eligibility.
+    if llm_client is not None and sections and not region_unverified:
         prompt = (
             "다음은 규칙 기반으로 검증된 복지 제도 안내 정보다. 사실 관계를 "
             "하나도 바꾸거나 추가하지 말고, 사용자에게 보여줄 자연스러운 "

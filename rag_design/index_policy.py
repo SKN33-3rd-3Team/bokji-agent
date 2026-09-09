@@ -82,7 +82,7 @@ class MetadataFilter:
 def subsidy_regions_match(
     metadata: Mapping[str, Any], requested_region_names: tuple[str, ...]
 ) -> bool:
-    """Apply exact-name matching with national wildcard and unknown fail-closed."""
+    """Filter candidates by exact region; valid unknown remains unverified."""
 
     if not requested_region_names:
         return True
@@ -97,7 +97,7 @@ def subsidy_regions_match(
     if scope is RegionScope.NATIONAL:
         return True
     if scope is RegionScope.UNKNOWN:
-        return False
+        return True
     return bool(set(metadata["region_names"]).intersection(requested_region_names))
 
 

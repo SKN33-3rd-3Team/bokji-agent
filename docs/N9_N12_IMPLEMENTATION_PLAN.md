@@ -98,13 +98,23 @@ N9 자격 판정, N10 지원금 계산, N11 중복수급 판정, N12 결과 조�
   - `age < age_start` 또는 `age > age_end`면 "미충족"이고 위반 사유 문자열을
     만든다. 슬롯에 `age`가 없거나 chunk에 age 조건이 아예 없으면 비교하지
     않는다(위반로 단정하지 않음).
-  - 위반이 없으면 "충족", claim의 `reasons`를 그대로 verdict의 `reasons`로
-    사용한다.
+  - 위반이 없으면 기본적으로 "충족", claim의 `reasons`를 그대로 verdict의
+    `reasons`로 사용하되 아래 지역 UNKNOWN 후처리를 적용한다.
 - 관련 claim이 없으면(NOT_APPLICABLE만 있거나 아예 없으면) "미확인" +
   "판정 가능한 자격 조건 근거가 없음".
 - 위반 사유는 `_naturalize_reasons()`로 LLM에 한 번 더 통과시킬 수 있다(LLM
   사용 범위는 아래 별도 절 참고). LLM은 판정 자체(충족/미충족/미확인)에는
   관여하지 않는다.
+
+- 정책 metadata가 `region_scope=unknown`, `region_names=[]`이면 기존 `checked`와
+  다른 `unchecked`를 유지하면서 `지역`만 미확인으로 추가한다. 기존 "충족"은
+  "미확인"으로 낮추지만 확인된 위반의 "미충족"과 근거 부족 사유는 보존한다.
+  사용자 주소의 미확정과 혼동하지 않으며 known regional/national을 새로 검증했다고
+  주장하지 않는다. 근거 없는 판정을 승격하지 않는다.
+- 이 경우 N9 위반 사유와 N13 답변은 결정적 규칙/템플릿을 유지하여 LLM 재서술로
+  전체 자격 충족을 주장하지 않게 한다. N14는 최종 답변에 정책별
+  **지역 조건 추가 확인 필요**를 반드시 덧붙인다. 다른 조건의 미확인·미충족 및
+  근거 부족 보류는 유지한다. N12·서비스·UI는 기존 조건별 필드를 전달한다.
 
 ### N10 지원금 계산 (`calculate_benefit_amount`, `benefit_calculator.py`)
 
