@@ -279,7 +279,7 @@ bokji-agent/
 
 ### 사전 요구사항
 - **Python**: `3.11.x` 권장
-- **Streamlit**: 반드시 `1.62.0` 사용 (버전 불일치 시 UI 렌더링 에러 발생)
+- **Streamlit**: 새 환경은 `requirements-streamlit.txt`의 고정 버전(`1.62.0`) 사용. 기존 가상환경은 의존성과 UI 실행을 검증한 뒤 재사용합니다.
 
 ### 설치 및 설정
 
@@ -320,11 +320,21 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-> **Windows PowerShell 환경에서 모듈 경로 에러 발생 시:**
-> ```powershell
-> $env:PYTHONPATH = ".;src"
-> streamlit run app.py
-> ```
+Windows PowerShell에서는 저장소 루트에서 기존 가상환경을 활성화합니다. 정상적인 `.venv`나 기존 `.env`를 다시 만들거나 덮어쓸 필요는 없습니다.
+
+```powershell
+. .\.venv\Scripts\Activate.ps1
+Get-Command streamlit  # 이 저장소의 .venv\Scripts\streamlit.exe인지 확인
+streamlit run app.py
+```
+
+활성화 스크립트 실행이 정책으로 차단되는 환경에서는 전역 정책을 바꾸지 않고 다음 명령으로 같은 가상환경을 사용할 수 있습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+루트 `app.py`는 기존 `streamlit_ui`를 실행하며 패키지가 import 경로를 설정하므로 별도 `PYTHONPATH` 설정은 필요하지 않습니다. 상담에는 기존 `data/vector_db`와 해당 색인에 맞는 임베딩 모델이 필요합니다. 캐시 모델을 쓰는 환경은 기존 모델 캐시 설정을 유지하고, 이미 준비된 색인을 실행 과정에서 다시 생성하지 마세요.
 
 <details>
 <summary><b>🛠️ 유용한 CLI 진단 도구들</b></summary>
