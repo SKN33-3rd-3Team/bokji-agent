@@ -440,6 +440,9 @@ _DETAIL_SECTION_TYPES: list[tuple[str, str]] = [
     ("application_method", "신청방법"),
     ("application_period", "신청기한"),
     ("legal_basis", "근거법령"),
+    ("required_documents", "구비서류"),
+    ("required_documents_official", "공무원 확인 구비서류"),
+    ("required_documents_self", "본인확인 필요 구비서류"),
 ]
 
 
@@ -665,6 +668,9 @@ def _build_policy_view(
             "application_method": sections.get("application_method"),
             "application_period": sections.get("application_period"),
             "legal_basis": sections.get("legal_basis"),
+            "required_documents": sections.get("required_documents"),
+            "required_documents_official": sections.get("required_documents_official"),
+            "required_documents_self": sections.get("required_documents_self"),
             "region_names": detail_raw.get("region_names"),
             "region_scope": detail_raw.get("region_scope"),
             "age_start": detail_raw.get("age_start"),
