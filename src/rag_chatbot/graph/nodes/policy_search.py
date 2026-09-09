@@ -245,6 +245,7 @@ def search_policies(
         as_of=as_of,
         age=age if isinstance(age, int) else None,
         allow_missing_age=True,
+        year_age=age_condition.get("age_year_based") if age_condition else None,
     )
 
     results = store.search(

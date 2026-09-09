@@ -57,6 +57,7 @@ from rag_design.vector_store import (
 )
 
 from ...llm import LLMCallError, LLMClient
+from ..slot_schema import resolve_filter_slots
 from ..state import ClaimDraft, EligibilityVerdict, GraphState
 
 _UNCERTAIN_STATUSES = {
@@ -106,6 +107,12 @@ def determine_eligibility(
     없음.
     """
     slots = state.get("slots", {})
+    # Full slot callers share N4's subject/birth-date guard; age-only callers stay legacy.
+    guarded_age = any(key in slots for key in ("age_subject", "birth_date", "age_year_based"))
+    age_slots = (
+        resolve_filter_slots(slots, reference_date=state.get("as_of"))["hard"].get("birth_date", {})
+        if guarded_age else slots
+    )
     claims_by_policy: dict[str, list[ClaimDraft]] = defaultdict(list)
     for claim in state.get("claim_plan", []):
         if claim.get("claim_type") != "eligibility":
@@ -172,8 +179,19 @@ def determine_eligibility(
             )
             continue
 
-        violations, checked = _find_structured_violations(recheck_chunks, slots)
+        violations, checked = _find_structured_violations(recheck_chunks, age_slots)
         scope = _verification_scope(checked)
+        if guarded_age and not checked and any(
+            chunk.chunk.metadata.get(key) is not None
+            for chunk in recheck_chunks for key in ("age_start", "age_end")
+        ):
+            verdicts.append({
+                "policy_id": policy_id,
+                "verdict": "미확인",
+                "reasons": ["대상자의 나이가 확인되지 않아 연령 조건을 판정할 수 없음"],
+                **scope,
+            })
+            continue
         if violations:
             reasons = _naturalize_reasons(violations, llm_client)
             verdicts.append(
@@ -215,14 +233,15 @@ def _find_structured_violations(
     않음 - 그런 경우는 호출부에서 이미 "충족"으로 이어지므로, 이후 미확인
     처리가 필요하면 이 함수가 아니라 상위 판정 규칙을 조정한다).
     """
-    age = slots.get("age")
+    age_filter = VectorSearchFilter(age=slots.get("age"), year_age=slots.get("age_year_based"))
     violations: list[str] = []
     checked: list[str] = []
-    if age is None:
+    if age_filter.age is None:
         # 사용자 나이를 모르면 연령 조건도 "확인했다"고 말할 수 없다.
         return violations, checked
     for retrieved in chunks:
         metadata = retrieved.chunk.metadata
+        age = age_filter.age_for_basis(metadata.get("age_basis"))
         age_start = metadata.get("age_start")
         age_end = metadata.get("age_end")
         if age_start is None and age_end is None:

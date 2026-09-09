@@ -104,18 +104,20 @@ class VectorSearchFilter:
         default_factory=dict
     )
     snapshot_id: str | None = None
+    year_age: int | None = None
 
     def __post_init__(self) -> None:
         for name in self.region_names:
             validate_region_name(name)
         if len(set(self.region_names)) != len(self.region_names):
             raise ValueError("region_names must not contain duplicates")
-        if self.age is not None and (
-            isinstance(self.age, bool)
-            or not isinstance(self.age, int)
-            or not 0 <= self.age <= 120
-        ):
-            raise ValueError("age must be an integer between 0 and 120")
+        for name, value in (("age", self.age), ("year_age", self.year_age)):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= 120
+            ):
+                raise ValueError(f"{name} must be an integer between 0 and 120")
         if self.snapshot_id is not None and not self.snapshot_id.strip():
             raise ValueError("snapshot_id must be non-empty")
         for key, value in self.metadata_equals.items():
@@ -123,6 +125,10 @@ class VectorSearchFilter:
                 raise ValueError("metadata filter keys must be non-empty strings")
             if not isinstance(value, _SCALAR):
                 raise ValueError("metadata filter values must be scalar")
+
+    def age_for_basis(self, basis: object) -> int | None:
+        """Explicit year support; absent/unknown bases and age-only callers stay legacy."""
+        return self.year_age if basis == "year" and self.year_age is not None else self.age
 
 
 @dataclass(frozen=True, slots=True)
@@ -1223,14 +1229,15 @@ class ChromaVectorStore:
         if not subsidy_regions_match(chunk.metadata, search_filter.region_names):
             return False
         if search_filter.age is not None:
+            age = search_filter.age_for_basis(chunk.metadata.get("age_basis"))
             age_start = chunk.metadata.get("age_start")
             age_end = chunk.metadata.get("age_end")
             has_age_condition = isinstance(age_start, int) or isinstance(age_end, int)
             if not has_age_condition and not search_filter.allow_missing_age:
                 return False
-            if isinstance(age_start, int) and search_filter.age < age_start:
+            if isinstance(age_start, int) and age < age_start:
                 return False
-            if isinstance(age_end, int) and search_filter.age > age_end:
+            if isinstance(age_end, int) and age > age_end:
                 return False
         for key, expected in search_filter.metadata_equals.items():
             actual = {
