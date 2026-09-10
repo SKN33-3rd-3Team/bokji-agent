@@ -158,6 +158,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import os
+from math import isfinite
 
 from dotenv import load_dotenv
 
@@ -255,7 +256,9 @@ def connect_store() -> ChromaVectorStore:
 
 
 def build_llm_client() -> RecordingLLMClient | None:
-    """``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
+    """LLM_BACKEND=ollama는 로컬 설정으로 호환 chat endpoint를 사용한다.
+
+    기본 HF 경로는 ``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 붙일 클라이언트를
     만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
     기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
     성질은 그대로 유지한다.
@@ -264,6 +267,26 @@ def build_llm_client() -> RecordingLLMClient | None:
     ``LLM_HF_MODEL``(``scripts/interactive_console_chat.py``가 쓰던 이름 -
     하위 호환으로 계속 지원), 그것도 없으면 ``_DEFAULT_HF_MODEL``을 쓴다.
     """
+
+    backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
+    if backend == "ollama":
+        model = (os.environ.get("OLLAMA_MODEL") or "").strip()
+        if not model:
+            raise ValueError("OLLAMA_MODEL is required for the ollama backend")
+        base_url = (os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url += "/v1"
+        timeout = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or 120)
+        max_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+        if not isfinite(timeout) or timeout <= 0 or max_tokens <= 0:
+            raise ValueError("Ollama timeout and token limit must be positive and finite")
+        return RecordingLLMClient(HuggingFaceInferenceClient(
+            model=model, token="ollama", base_url=base_url,
+            timeout_seconds=timeout, max_new_tokens=max_tokens,
+            extra_body={"reasoning_effort": "none"},
+        ))
+    if backend not in {"hf", "huggingface"}:
+        raise ValueError("LLM_BACKEND must be hf, huggingface, or ollama")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
