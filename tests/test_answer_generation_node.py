@@ -90,13 +90,59 @@ def test_generate_answer_without_llm_uses_template() -> None:
     assert result["node_trace"] == ["N12", "N13"]
 
 
-def test_generate_answer_uses_llm_output_when_available() -> None:
-    llm = FakeLLMClient(response="다듬어진 안내문")
+def test_generate_answer_uses_validated_llm_summary_when_available() -> None:
+    llm = FakeLLMClient(
+        response='{"policies": [{"policy_id": "policy-a", "summary": "다듬어진 안내문"}]}'
+    )
 
     result = generate_answer(_state(), llm_client=llm)
 
-    assert result["draft_answer"] == "다듬어진 안내문"
+    assert result["draft_answer"].startswith("다듬어진 안내문")
+    # 사실 라인(지원자격/지원금액/중복수급)은 검증에 통과한 정책이어도
+    # 여전히 템플릿(규칙 기반)에서 나온다 - LLM이 다시 쓰지 않는다.
+    assert "확인한 조건에서는 결격 없음" in result["draft_answer"]
     assert len(llm.calls) == 1
+
+
+def test_generate_answer_rejects_summary_with_fabricated_number() -> None:
+    """rag_eval.ipynb 실험에서 실측된 위험(원문 없는 숫자로 자릿수 부풀림)을
+    막는지 확인한다. 원문 지원금액은 10000.0인데, LLM이 100000이라고 쓰면
+    그 정책의 summary는 버려지고 템플릿 문장만 남아야 한다."""
+
+    llm = FakeLLMClient(
+        response='{"policies": [{"policy_id": "policy-a", '
+        '"summary": "지원금 100000원을 받으실 수 있어요"}]}'
+    )
+
+    result = generate_answer(_state(), llm_client=llm)
+
+    assert "100000" not in result["draft_answer"]
+    assert result["draft_answer"] == "\n\n".join(
+        [
+            "[policy-a]\n- 지원자격: 확인한 조건에서는 결격 없음\n"
+            "  근거: 근거 문장\n- 지원금액: 10000.0\n- 중복수급: 미확인"
+        ]
+    )
+
+
+def test_generate_answer_ignores_summary_for_unknown_policy_id() -> None:
+    llm = FakeLLMClient(
+        response='{"policies": [{"policy_id": "policy-does-not-exist", '
+        '"summary": "지어낸 정책 안내문"}]}'
+    )
+
+    result = generate_answer(_state(), llm_client=llm)
+
+    assert "지어낸 정책" not in result["draft_answer"]
+
+
+def test_generate_answer_falls_back_to_template_when_llm_returns_non_json() -> None:
+    llm = FakeLLMClient(response="그냥 자유 텍스트, JSON 아님")
+
+    result = generate_answer(_state(), llm_client=llm)
+
+    assert "확인한 조건에서는 결격 없음" in result["draft_answer"]
+    assert "그냥 자유 텍스트" not in result["draft_answer"]
 
 
 def test_generate_answer_falls_back_to_template_when_llm_fails() -> None:
