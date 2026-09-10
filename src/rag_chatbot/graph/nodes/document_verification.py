@@ -122,6 +122,7 @@ def verify_official_documents(
     full_chunks_by_policy = _group_chunks_by_policy(state.get("subsidy_full_chunks") or [])
     retained_chunks = list(state.get("subsidy_full_chunks") or [])
     retried = False
+    widened_by_policy: dict[str, list[RetrievedChunk]] = {}
 
     updated_plan: list[ClaimDraft] = []
     for claim in claim_plan:
@@ -136,7 +137,11 @@ def verify_official_documents(
 
         is_retry = claim.get("doc_retry_count", 0) > 0
         if is_retry and store is not None:
-            widened = _widen_search(store, policy_id, query_id, widen_top_k)
+            if policy_id not in widened_by_policy:
+                widened_by_policy[policy_id] = _widen_search(
+                    store, policy_id, query_id, widen_top_k
+                )
+            widened = widened_by_policy[policy_id]
             policy_chunks = merge_evidence_chunks(policy_chunks, widened)
             retained_chunks = merge_evidence_chunks(retained_chunks, policy_chunks)
             retried = True
