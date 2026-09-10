@@ -259,11 +259,136 @@ class LlmGatewayLlmSlotExtractionTests(unittest.TestCase):
         self.assertIn("income_bracket", client.calls[0]["prompt"])
         self.assertEqual(result["income_bracket"], "unknown")
 
-    def test_first_free_form_turn_always_asks_the_llm(self) -> None:
-        # 되묻기 맥락이 없는 첫 발화는 규칙이 뭘 잡았든 LLM에게 물어본다.
-        # 규칙이 못 읽는 문장을 이해하는 것이 LLM을 붙인 이유다.
+    def test_ambiguous_first_free_form_turn_still_asks_the_llm(self) -> None:
         client = FakeLLMClient("{}")
         llm_gateway.extract_slots("혼자 사는데 월세가 부담돼요", {}, llm_client=client)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_complete_first_turn_with_search_interest_skips_llm(self) -> None:
+        client = FakeLLMClient('{"gender": "male"}')
+        result = parse_slots(
+            {"user_input": (
+                "서울 강남구 사는 1990-03-15 생 여성입니다. "
+                "차상위계층이고 구직 중이에요. 장애는 없습니다. "
+                "우리 아이 교육 지원 알려주세요."
+            ), "slots": {}},
+            llm_client=client,
+        )
+        self.assertEqual(client.calls, [])
+        self.assertEqual(check_slot_completeness(result)["missing_slots"], [])
+        self.assertEqual(result["slots"]["gender"], "female")
+        self.assertIn("교육", result["slots"]["interests"])
+
+    def test_complete_child_education_query_normalizes_interest_and_skips_llm(self) -> None:
+        text = (
+            "서울에 사는 2022년 5월 10일생 여자아이입니다. 소득은 중위소득 80%이고 "
+            "장애는 없으며 보호자는 재직 중입니다. 유치원 학비 지원을 알려주세요."
+        )
+        client = FakeLLMClient('{"gender": "male"}')
+        result = parse_slots({"user_input": text, "slots": {}}, llm_client=client)
+        self.assertEqual(client.calls, [])
+        self.assertEqual(result["slots"]["interests"], ["유아학비"])
+        self.assertEqual(check_slot_completeness(result)["missing_slots"], [])
+        self.assertEqual(result["initial_user_input"], text)
+        self.assertEqual(result["slots"]["age_subject"], "child")
+
+        client = FakeLLMClient("{}")
+        result = parse_slots(
+            {"user_input": text.replace("여자아이", "남자아이"), "slots": {}},
+            llm_client=client,
+        )
+        self.assertEqual(client.calls, [])
+        self.assertEqual(result["slots"]["age_subject"], "child")
+
+    def test_complete_own_profile_with_another_beneficiary_calls_llm(self) -> None:
+        profile = (
+            "서울 강남구 사는 1990-03-15 생 여성입니다. "
+            "차상위계층이고 구직 중이에요. 장애는 없습니다. "
+        )
+        for text in (
+            profile + "조카의 유아학비 지원을 알려주세요.",
+            "저는 " + profile + "조카의 유아학비 지원을 알려주세요.",
+            "저는 " + profile + "우리 아이 교육 지원 알려주세요.",
+        ):
+            with self.subTest(text=text):
+                client = FakeLLMClient("{}")
+                result = parse_slots(
+                    {"user_input": text, "slots": {}}, llm_client=client
+                )
+                self.assertEqual(len(client.calls), 1)
+                self.assertNotEqual(result["slots"]["age_subject"], "self")
+                self.assertNotIn(
+                    "birth_date", resolve_filter_slots(result["slots"])["hard"]
+                )
+
+    def test_complete_profile_with_unknown_relation_uses_llm_subject(self) -> None:
+        profile = (
+            "서울 강남구 사는 1990-03-15 생 여성입니다. "
+            "차상위계층이고 구직 중이에요. 장애는 없습니다. "
+        )
+        for prefix, relation in (("", "동생"), ("", "언니"), ("", "배우자"), ("저는 ", "동생")):
+            with self.subTest(prefix=prefix, relation=relation):
+                text = prefix + profile + f"{relation}의 교육 지원"
+                signals = llm_gateway.extract_slots(text, {})["age_subject_signals"]
+                self.assertEqual(signals, {"self": bool(prefix), "child": False, "other": False})
+                client = FakeLLMClient(json.dumps({
+                    "age_subject_signals": {"self": False, "child": False, "other": True},
+                }))
+                result = parse_slots(
+                    {"user_input": text, "slots": {}}, llm_client=client
+                )
+                self.assertEqual(len(client.calls), 1)
+                self.assertEqual(check_slot_completeness(result)["missing_slots"], [])
+                self.assertNotEqual(result["slots"]["age_subject"], "self")
+                self.assertNotIn(
+                    "birth_date", resolve_filter_slots(result["slots"])["hard"]
+                )
+
+    def test_preschool_interest_aliases_preserve_negation_and_other_interests(self) -> None:
+        for phrase in ("유치원 학비", "유아학비", "유치원비", "유치원 교육비",
+                       "누리과정", "방과후과정비"):
+            with self.subTest(phrase=phrase):
+                result = llm_gateway.extract_slots(f"주거 지원과 {phrase} 지원 알려주세요", {})
+                self.assertIn("유아학비", result["interests"])
+                self.assertIn("주거", result["interests"])
+                negated = llm_gateway.extract_slots(f"{phrase} 아닙니다", {})
+                self.assertNotIn("유아학비", negated["interests"])
+        self.assertEqual(
+            llm_gateway.extract_slots("유아학비와 유치원비 지원", {})["interests"],
+            ["유아학비"],
+        )
+
+    def test_unrelated_education_is_not_normalized_to_preschool_interest(self) -> None:
+        self.assertEqual(
+            llm_gateway.extract_slots("대학교 교육비 지원 알려주세요", {})["interests"],
+            ["교육"],
+        )
+
+    def test_incomplete_first_turn_with_concrete_query_still_calls_llm(self) -> None:
+        client = FakeLLMClient("{}")
+        llm_gateway.extract_slots("유치원 학비 지원을 알려주세요.", {}, llm_client=client)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_complete_profile_without_specific_interest_still_calls_llm(self) -> None:
+        profile = (
+            "서울 강남구 사는 1990-03-15 생 여성입니다. "
+            "차상위계층이고 구직 중이에요. 장애는 없습니다. "
+        )
+        for question in ("", "안녕하세요", "지원금 알려주세요", "어떤 지원이 있나요?",
+                         "복지 혜택 알려주세요", "010-1234-5678 지원 알려주세요"):
+            with self.subTest(question=question):
+                client = FakeLLMClient("{}")
+                llm_gateway.extract_slots(profile + question, {}, llm_client=client)
+                self.assertEqual(len(client.calls), 1)
+
+    def test_complete_followup_without_asked_slots_still_calls_llm(self) -> None:
+        client = FakeLLMClient("{}")
+        llm_gateway.extract_slots(
+            "서울 강남구 사는 1990-03-15 생 여성입니다. "
+            "차상위계층이고 구직 중이에요. 장애는 없습니다. 교육 지원 알려주세요.",
+            {"interests": ["주거"]},
+            llm_client=client,
+        )
         self.assertEqual(len(client.calls), 1)
 
     def test_prompt_never_carries_email_phone_or_resident_id(self) -> None:

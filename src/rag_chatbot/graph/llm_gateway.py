@@ -10,7 +10,7 @@ GraphState) -> dict:``)는 바뀌지 않는다.
 
 1. 규칙 기반 추출을 **항상** 먼저 돌린다. 결정론적이고 네트워크가 필요
    없어서, LLM이 없거나 실패해도 그래프가 끝까지 돈다.
-2. ``llm_client``가 주입되면 LLM에게 같은 발화를 다시 넣어 슬롯을 뽑고,
+2. 규칙만으로 충분하지 않고 ``llm_client``가 주입되면 같은 발화에서 슬롯을 뽑고,
    계약(``slot_schema``)에 있는 값만 통과시킨 뒤 규칙 결과 위에 덮어쓴다.
 
 이렇게 바꾼 이유: 규칙 기반 추출기는 "1955년 3월생이에요"(일자 없음),
@@ -158,11 +158,11 @@ _SELF_ATTRIBUTION_WINDOW = 12
 _AGE_SUBJECT_SELF_TRIGGERS = ("저는", "제가", "저의", "제 나이", "본인", "나는", "내가")
 _AGE_SUBJECT_CHILD_TRIGGERS = (
     "우리 아이", "저희 아이", "제 아이", "우리 애", "저희 애", "애기",
-    "아이가", "아이는", "아이 지원", "자녀", "아들", "딸", "손주", "손자", "손녀",
+    "아이가", "아이는", "아이 지원", "여자아이", "남자아이", "자녀", "아들", "딸", "손주", "손자", "손녀",
 )
 _AGE_SUBJECT_OTHER_TRIGGERS = (
     "부모님", "어머니", "아버지", "할머니", "할아버지", "조부모",
-    "가구원", "피부양자", "모시고",
+    "가구원", "피부양자", "모시고", "조카",
 )
 
 _GENDER_RULES = (
@@ -276,7 +276,7 @@ _INTEREST_KEYWORDS = (
     "지원금제도", "지원금", "실업급여", "청년수당",
     "육아", "출산", "보육", "주거", "주택", "취업", "일자리", "창업",
     "교육", "장학", "의료", "건강", "돌봄", "노인", "장애인", "저소득",
-    "청년", "다문화", "한부모",
+    "청년", "다문화", "한부모", "유아학비",
 )
 
 # 지역 후보를 "원문 그대로" 잘라내기 위한 표현. 정규화(공식 명칭 변환)는
@@ -343,7 +343,8 @@ def extract_slots(
     나이와 한국식 세는 나이가 구분되지 않아 경계에서 오판정이 난다.
 
     ``llm_client``가 없으면 예전과 완전히 동일하게 규칙 기반으로만 동작한다.
-    있으면 LLM 결과를 규칙 결과 **위에** 덮어쓴다 - 자연어 이해는 LLM이 더
+    명확한 자녀 대상 첫 발화에서 필수 슬롯과 구체적인 검색 질의가 확보되면 LLM을 생략한다.
+    그 외에는 LLM 결과를 규칙 결과 **위에** 덮어쓴다 - 자연어 이해는 LLM이 더
     잘하고, 규칙이 못 뽑은 자리를 채우는 것이 이 연동의 목적이기 때문이다.
     다만 LLM이 내놓은 값도 ``slot_schema`` 계약을 통과한 것만 받아들이고
     (fail-closed), 호출/파싱이 실패하면 규칙 결과를 그대로 쓴다.
@@ -359,6 +360,25 @@ def extract_slots(
     if llm_client is None:
         return rule_based
 
+    if (
+        not existing_slots
+        and not asked_slots
+        # 명확한 자녀 대상만 생략한다. 본인 신호만 있어도 미등록 친족일 수 있다.
+        and rule_based["age_subject_signals"]["child"]
+        and not rule_based["age_subject_signals"]["self"]
+        and not rule_based["age_subject_signals"]["other"]
+        and _rules_answered_everything(rule_based, HARD_GATE_SLOTS)
+        and (
+            any(
+                interest not in {"지원금", "지원금제도"}
+                for interest in rule_based.get("interests", [])
+            )
+            or _has_concrete_retrieval_query(user_input)
+        )
+    ):
+        # N4는 관심사가 없어도 개인정보를 지운 첫 발화를 검색에 사용한다.
+        return rule_based
+
     if _rules_answered_everything(rule_based, asked_slots):
         # 규칙이 이미 물어본 항목을 전부 채웠으면 LLM을 부르지 않는다.
         #
@@ -367,7 +387,7 @@ def extract_slots(
         # 더 얻지 못하면서 호출 시간만 그대로 든다. 실측에서 N1 한 번이
         # 50초였다(추론형 모델 호출 1회). 얻는 것 없는 50초다.
         #
-        # 첫 자유 발화 턴(asked_slots가 비어 있음)에는 건너뛰지 않는다.
+        # 위 조건을 충족하지 못한 첫 자유 발화는 LLM에게 맡긴다.
         # "혼자 사는데 월세가 부담돼요"처럼 규칙이 못 읽는 문장을 이해하는
         # 것이 LLM을 붙인 이유이기 때문이다.
         return rule_based
@@ -395,6 +415,23 @@ _ASKED_SLOT_RESULT_KEYS = {
     "disability_status": "disability_status",
     "employment_status": "employment_status",
 }
+
+
+
+def _has_concrete_retrieval_query(text: str) -> bool:
+    """관심사 사전에 없는 구체적인 지원 요청도 N4 원문 질의로 인정한다."""
+
+    # ponytail: 명시적인 지원 대상만 인정한다. 다른 표현은 LLM 경로를 유지한다.
+    return any(
+        match.group(1) not in {
+            "어떤", "무슨", "모든", "각종", "다른", "이런", "그런", "저런",
+            "있는", "받는", "받을", "가능한", "복지", "정부", "국가", "지원",
+        }
+        for match in re.finditer(
+            r"(?<![가-힣])([가-힣]{2,})\s+(?:지원|급여|혜택)",
+            redact_sensitive_text(text),
+        )
+    )
 
 
 def _rules_answered_everything(
@@ -782,7 +819,11 @@ def _extract_interests(text: str) -> list[str]:
 
     interests: list[str] = []
     for keyword in _INTEREST_KEYWORDS:
-        for match in re.finditer(re.escape(keyword), text):
+        pattern = (
+            r"유아학비|유치원\s*(?:학비|교육비)|유치원비|누리과정|방과후과정비"
+            if keyword == "유아학비" else re.escape(keyword)
+        )
+        for match in re.finditer(pattern, text):
             if text[max(0, match.start() - 1) : match.start()] == _INTEREST_NEGATION_PREFIX:
                 continue
             tail = text[match.end() : match.end() + _INTEREST_NEGATION_WINDOW]
