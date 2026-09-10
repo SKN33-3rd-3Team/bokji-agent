@@ -36,6 +36,9 @@ SECTION_LABELS_KO: dict[str, str] = {
     "application_period": "신청 기간",
     "legal_basis": "근거 법령",
     "support_conditions": "지원 조건",
+    "required_documents": "구비서류",
+    "required_documents_official": "공무원 확인 구비서류",
+    "required_documents_self": "본인확인 필요 구비서류",
 }
 
 # ── 안내 문구 / 예시 ───────────────────────────────────────────────

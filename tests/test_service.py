@@ -447,8 +447,8 @@ def test_fetch_policy_detail_collects_all_sections_and_metadata():
     assert detail["title"] == "영유아보육료 지원"
     assert detail["source_url"] == "https://gov.kr/policy-a"
     assert detail["age_start"] == 3 and detail["age_end"] == 5
-    # 7개 section_type 전부에 대해 재검색을 시도했는지 (일부만 있어도 전부 확인)
-    assert len(store.calls) == 7
+    # 10개 section_type 전부에 대해 재검색을 시도했는지 (일부만 있어도 전부 확인)
+    assert len(store.calls) == 10
     assert all(call["source_id"] == "policy-a" for call in store.calls)
 
 
