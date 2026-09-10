@@ -13,6 +13,7 @@ from rag_design.policy import AbstentionDecision
 from rag_design.vector_store import VectorSearchFilter
 
 from ..state import ClaimDraft, GraphState
+from .document_verification import merge_evidence_chunks
 from .evidence_gate import (
     _ClaimCoverage,
     _as_of_date,
@@ -154,7 +155,10 @@ def search_targeted_laws(
     query_id = _query_id(state)
     claims = _claim_plan(state)
     as_of = _as_of_date(state)
-    subsidy_chunks = _retrieved_chunks(state, "subsidy_chunks")
+    subsidy_chunks = merge_evidence_chunks(
+        _retrieved_chunks(state, "subsidy_chunks"),
+        _retrieved_chunks(state, "subsidy_full_chunks"),
+    )
     law_chunks = _retrieved_chunks(state, "law_chunks")
     target_ids = _string_list(
         state.get("missing_law_claim_ids"), "missing_law_claim_ids"

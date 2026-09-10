@@ -67,6 +67,7 @@ from rag_design.vector_store import (
 )
 
 from ..state import ClaimDraft, DuplicateVerdict, GraphState
+from .document_verification import merge_evidence_chunks
 
 _UNCERTAIN_STATUSES = {
     EvidenceStatus.UNSUPPORTED,
@@ -202,7 +203,10 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
     }
 
     claims_by_policy: dict[str, list[ClaimDraft]] = defaultdict(list)
+    retried_policy_ids: set[str] = set()
     for claim in state.get("claim_plan", []):
+        if claim.get("doc_retry_count", 0) > 0:
+            retried_policy_ids.add(claim["policy_id"])
         if claim.get("claim_type") != "duplicate":
             continue
         if claim["policy_id"] not in policy_ids_with_verdict:
@@ -239,9 +243,10 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
             continue
 
         recheck_chunks = full_by_policy.get(policy_id) or ()
-        if not recheck_chunks:
+        # N6 재시도에서 보존된 청크는 전체 문서라는 보장이 없다.
+        if not recheck_chunks or policy_id in retried_policy_ids:
             try:
-                recheck_chunks = store.search(
+                found = store.search(
                     SourceType.SUBSIDY,
                     f"{policy_id} 중복수급 병급 제한",
                     query_id=f"{state.get('query_id', 'n11')}-{policy_id}-recheck",
@@ -249,9 +254,9 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
                     search_filter=VectorSearchFilter(metadata_equals={"source_id": policy_id}),
                 )
             except CollectionNotFoundError:
-                # 아직 정책이 하나도 색인되지 않은 상태 - 근거를 못 찾은 것과 동일하게
-                # 취급한다 (여기서 예외를 흘려보내면 그래프 전체가 죽는다).
-                recheck_chunks = ()
+                # 추가 조회가 불가능해도 이미 보존한 근거는 유지한다.
+                found = ()
+            recheck_chunks = merge_evidence_chunks(list(recheck_chunks), list(found))
         if not recheck_chunks:
             verdicts.append(
                 {

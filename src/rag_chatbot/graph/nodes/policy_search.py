@@ -45,10 +45,8 @@ _FALLBACK_QUERY = "생활 지원 복지 서비스"
 # 사용자 질문을 질의에 쓸 때의 상한. 되묻기 답변이나 장문이 통째로 들어와
 # 임베딩이 흐려지는 것을 막는다.
 _MAX_QUESTION_CHARS = 200
-# 이보다 짧은 질문은 검색 재료로 보지 않는다. "안녕"(2자) 같은 인사말을
-# 그대로 질의로 쓰면 의미 없는 벡터로 검색하게 되기 때문이다.
-# 형태만 보는 휴리스틱이라 완벽하지 않다 - 긴 인사말은 걸러지지 않는다.
-_MIN_QUESTION_CHARS = 6
+# 길이 대신 인사만 제외해 짧은 정책명도 검색에 반영한다.
+_GREETINGS = {"안녕", "안녕하세요", "안녕하십니까", "반갑습니다", "hello", "hi"}
 
 
 def _load_legal_basis_chunks(
@@ -192,7 +190,7 @@ def _build_query(slots: dict, question: str | None = None) -> str:
 
     # 검색 로그·임베딩 provider로 PII가 나가면 안 된다(CONTRIBUTING.md 보안 항목).
     cleaned_question = redact_sensitive_text(question or "").strip()
-    if len(cleaned_question) >= _MIN_QUESTION_CHARS:
+    if cleaned_question and cleaned_question.rstrip(".!?~ ").casefold() not in _GREETINGS:
         parts.append(cleaned_question[:_MAX_QUESTION_CHARS])
 
     return " ".join(parts) or _FALLBACK_QUERY
@@ -247,6 +245,7 @@ def search_policies(
         as_of=as_of,
         age=age if isinstance(age, int) else None,
         allow_missing_age=True,
+        year_age=age_condition.get("age_year_based") if age_condition else None,
     )
 
     results = store.search(
