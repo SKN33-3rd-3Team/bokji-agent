@@ -616,12 +616,19 @@ class PackageEntrypointTests(unittest.TestCase):
     def test_package_entrypoint_help_runs_from_repository_root(self) -> None:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(SRC_ROOT)
+        # 자식 프로세스의 stdout 인코딩을 명시적으로 고정한다. 그렇지 않으면
+        # 부모(subprocess.run)는 OS 로케일(예: 한글 Windows의 cp949)로 디코딩을
+        # 시도하는데, 환경에 PYTHONIOENCODING=utf-8 같은 게 설정돼 있으면
+        # 자식은 UTF-8 로 --help 를 출력해 디코딩이 깨진다
+        # (UnicodeDecodeError -> result.stdout 이 None).
+        environment["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
             [sys.executable, "-m", "rag_chatbot.collectors.gov_24", "--help"],
             cwd=REPO_ROOT,
             env=environment,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=20,
             check=False,
         )
