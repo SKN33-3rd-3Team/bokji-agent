@@ -378,16 +378,9 @@ class ConfigurableTopKTests(unittest.TestCase):
             ["unknown-service", "female-1", "female-2"],
         )
         self.assertEqual([item.rank for item in kept], [1, 2, 3])
-        # 근거법령 조회는 선택된 정책마다 정확히 한 번씩.
+        # Legal basis is already present in the full-document metadata lookup.
         self.assertEqual(
-            [call for call in store.exact_calls if "section_type" in call[1]],
-            [
-                (
-                    SourceType.SUBSIDY,
-                    {"source_id": source_id, "section_type": "legal_basis"},
-                )
-                for source_id in ("unknown-service", "female-1", "female-2")
-            ],
+            [call for call in store.exact_calls if "section_type" in call[1]], []
         )
         # 전체 섹션 조회도 선택된 정책마다 한 번씩(section_type 없이).
         self.assertEqual(
@@ -437,16 +430,10 @@ class ConfigurableTopKTests(unittest.TestCase):
             ["basis-a-0", "basis-a-1", "basis-b-0"],
         )
         self.assertEqual(
-            [call for call in store.exact_calls if "section_type" in call[1]],
+            store.exact_calls,
             [
-                (
-                    SourceType.SUBSIDY,
-                    {"source_id": "service-a", "section_type": "legal_basis"},
-                ),
-                (
-                    SourceType.SUBSIDY,
-                    {"source_id": "service-b", "section_type": "legal_basis"},
-                ),
+                (SourceType.SUBSIDY, {"source_id": "service-a"}),
+                (SourceType.SUBSIDY, {"source_id": "service-b"}),
             ],
         )
 

@@ -234,3 +234,14 @@ def test_prefetch_workers_keep_the_request_recording_context(monkeypatch) -> Non
     assert summary["successes"] == 2
     assert summary["failures"] == 0
     assert recorder.summary()["calls"] == 0
+
+
+def test_prefetch_schedules_duplicate_inputs_only_once(monkeypatch) -> None:
+    extractor = LLMClaimExtractor(FailingLLMClient())
+    calls = []
+    # Disable caching to detect duplicate work regardless of thread scheduling.
+    monkeypatch.setattr(extractor, "extract", lambda **kwargs: calls.append(kwargs))
+    extractor.prefetch([("a", "근거"), ("a", "근거"), ("b", "근거")])
+    assert sorted((c["policy_id"], c["text"]) for c in calls) == [
+        ("a", "근거"), ("b", "근거")
+    ]

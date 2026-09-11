@@ -49,44 +49,21 @@ _MAX_QUESTION_CHARS = 200
 _GREETINGS = {"안녕", "안녕하세요", "안녕하십니까", "반갑습니다", "hello", "hi"}
 
 
-def _load_legal_basis_chunks(
-    store: ChromaVectorStore, selected: list[RetrievedChunk]
-) -> list[Chunk]:
-    """Load canonical legal-basis parts for selected policies only."""
-
-    source_ids: list[str] = []
-    seen_sources: set[str] = set()
-    for candidate in selected:
-        source_id = candidate.chunk.metadata["source_id"]
-        if not isinstance(source_id, str) or not source_id:
-            raise ValueError("selected subsidy chunk must have a non-empty source_id")
-        if source_id not in seen_sources:
-            seen_sources.add(source_id)
-            source_ids.append(source_id)
-
-    legal_basis_chunks: list[Chunk] = []
-    seen_chunks: set[str] = set()
-    for source_id in source_ids:
-        matches = store.get_chunks_by_metadata(
-            SourceType.SUBSIDY,
-            metadata_equals={
-                "source_id": source_id,
-                "section_type": "legal_basis",
-            },
-        )
+def _load_legal_basis_chunks(full: list[RetrievedChunk]) -> list[Chunk]:
+    """Reuse the exact full-document lookup, retaining policy/part order."""
+    by_policy: dict[str, list[Chunk]] = {}
+    for item in full:
+        chunk = item.chunk
+        if chunk.metadata.get("section_type") == "legal_basis":
+            by_policy.setdefault(chunk.metadata["source_id"], []).append(chunk)
+    return [
+        chunk
+        for chunks in by_policy.values()
         for chunk in sorted(
-            matches,
-            key=lambda item: (
-                item.ordinal,
-                item.metadata["chunk_part"],
-                item.chunk_id,
-            ),
-        ):
-            if chunk.chunk_id in seen_chunks:
-                continue
-            seen_chunks.add(chunk.chunk_id)
-            legal_basis_chunks.append(chunk)
-    return legal_basis_chunks
+            chunks,
+            key=lambda item: (item.ordinal, item.metadata["chunk_part"], item.chunk_id),
+        )
+    ]
 
 
 def _select_top_policies(
@@ -257,8 +234,9 @@ def search_policies(
     )
     filtered = filter_candidates(results, support_conditions, filter_plan)
     selected = _select_top_policies(filtered, resolved_top_k)
+    full = _load_full_policy_chunks(store, selected)
     return {
         "subsidy_chunks": selected,
-        "subsidy_legal_basis_chunks": _load_legal_basis_chunks(store, selected),
-        "subsidy_full_chunks": _load_full_policy_chunks(store, selected),
+        "subsidy_legal_basis_chunks": _load_legal_basis_chunks(full),
+        "subsidy_full_chunks": full,
     }
