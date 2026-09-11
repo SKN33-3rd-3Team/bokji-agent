@@ -1190,6 +1190,34 @@ class RegionAskLimitTests(unittest.TestCase):
         self.assertNotIn("region_fallback_applied", result)
 
 
+class SignupRegionOptionsSatisfyHardGateTests(unittest.TestCase):
+    """회원가입 지역 선택지(``streamlit_ui.constants.SIDO_OPTIONS``)가 전부
+    N1의 지역 정규화(``normalize_region_input``, ``service.ask()``의
+    ``known_region``도 같은 함수를 쓴다)를 통과해 하드 게이트를 만족시키는지.
+
+    두 목록이 서로 다른 파일에 있어서(회원가입 화면의 선택지 vs N1의
+    ``_SIDO_ALIASES``/``rag_design.contracts.CANONICAL_SIDO_NAMES``), 행정
+    구역 개편처럼 한쪽만 갱신되면 회원가입 때 고른 지역이 조용히
+    ``UNKNOWN``으로 떨어져 자동 연동이 아무 효과 없이 매번 대화로 다시
+    묻게 된다. 광주·전남 통합(2026-07-01)처럼 이미 한 번 실제로 있었던
+    개편이라 회귀 가능성이 낮지 않다."""
+
+    def test_every_signup_region_option_normalizes(self) -> None:
+        from streamlit_ui.constants import SIDO_OPTIONS
+
+        from rag_design.contracts import RegionScope
+        from rag_chatbot.graph.nodes.slot_parser import normalize_region_input
+
+        for option in SIDO_OPTIONS:
+            with self.subTest(option=option):
+                scope, names = normalize_region_input(option)
+                self.assertIs(
+                    scope, RegionScope.REGIONAL,
+                    f"{option!r} did not normalize to a confirmed region (got {scope!r})",
+                )
+                self.assertTrue(names, f"{option!r} normalized with empty region_names")
+
+
 class GateLoopTerminationTests(unittest.TestCase):
     def test_the_n1_n2_n3_loop_always_terminates(self) -> None:
         """사용자가 끝까지 답하지 않아도 루프가 끝나는지 실제로 돌려본다.

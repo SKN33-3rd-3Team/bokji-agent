@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -53,7 +54,8 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         )
 
     def _signup(self, at: AppTest, *, email, pw, pw2=None, name="김복지",
-                tos=True, privacy=True, region=None, interests=None):
+                tos=True, privacy=True, region=None, gender=None,
+                birth_date=None, interests=None):
         at.text_input(key="su_email").set_value(email)
         at.text_input(key="su_pw").set_value(pw)
         at.text_input(key="su_pw2").set_value(pw2 if pw2 is not None else pw)
@@ -62,6 +64,10 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         at.checkbox(key="su_privacy").set_value(privacy)
         if region is not None:
             at.selectbox(key="su_region").set_value(region)
+        if gender is not None:
+            at.radio(key="su_gender").set_value(gender)
+        if birth_date is not None:
+            at.date_input(key="su_birth_date").set_value(birth_date)
         if interests is not None:
             at.pills(key="su_interests").set_value(interests)
         return self._click(at, "회원가입")
@@ -72,9 +78,10 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         return self._click(at, "로그인")
 
     def _register_and_login(self, *, email, pw=_PW, name="김복지", region=None,
-                            interests=None) -> AppTest:
+                            gender=None, birth_date=None, interests=None) -> AppTest:
         self._signup(self._app("signup"), email=email, pw=pw, name=name,
-                     region=region, interests=interests)
+                     region=region, gender=gender, birth_date=birth_date,
+                     interests=interests)
         at = self._login(self._app("login"), email=email, pw=pw)
         at.session_state["view"] = "mypage"
         return at.run()
@@ -183,6 +190,26 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
             set(at.session_state["auth_user"]["interests"]), {"장애인", "청년"}
         )
 
+    def test_mypage_shows_signup_gender_and_birth_date(self):
+        at = self._register_and_login(
+            email="gb@example.com", name="성별유저",
+            gender="여성", birth_date=date(1998, 5, 12),
+        )
+        self.assertFalse(at.exception)
+        blob = " ".join(m.value for m in at.markdown)
+        self.assertIn("여성", blob)
+        self.assertIn("1998-05-12", blob)
+        self.assertEqual(at.session_state["auth_user"]["gender"], "female")
+        self.assertEqual(at.session_state["auth_user"]["birth_date"], "1998-05-12")
+
+    def test_signup_without_gender_and_birth_date_still_works(self):
+        """"선택 안 함"으로 비워도 회원가입 자체는 막히지 않는다."""
+
+        at = self._register_and_login(email="nogb@example.com")
+        self.assertFalse(at.exception)
+        self.assertEqual(at.session_state["auth_user"]["gender"], "")
+        self.assertEqual(at.session_state["auth_user"]["birth_date"], "")
+
     def test_mypage_name_with_markdown_is_escaped(self):
         at = self._register_and_login(email="md@example.com",
                                       name="# 큰제목 [링크](http://evil)")
@@ -273,6 +300,21 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         blob = " ".join(m.value for m in at.markdown)
         self.assertIn("바뀐이름", blob)
         self.assertIn("인천광역시", blob)
+
+    def test_mypage_profile_edit_gender_and_birth_date(self):
+        at = self._register_and_login(
+            email="peg@example.com", name="원래이름",
+            gender="남성", birth_date=date(1990, 1, 1),
+        )
+        at.radio(key="pe_gender").set_value("여성")
+        at.date_input(key="pe_birth_date").set_value(date(1995, 7, 1))
+        at = self._click(at, "저장")
+        self.assertFalse(at.exception)
+        user = at.session_state["auth_user"]
+        self.assertEqual(user["gender"], "female")
+        self.assertEqual(user["birth_date"], "1995-07-01")
+        blob = " ".join(m.value for m in at.markdown)
+        self.assertIn("1995-07-01", blob)
 
     # -- 마이페이지: 회원 탈퇴 연동 ---------------------------------
     def test_mypage_delete_account_success(self):

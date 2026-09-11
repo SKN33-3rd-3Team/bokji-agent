@@ -957,6 +957,107 @@ def test_ask_passes_no_slots_when_nothing_selected():
     )["slots"] is None
 
 
+# ── 회원가입 때 저장한 지역(known_region) ────────────────────────────
+
+
+def test_ask_seeds_known_region_as_initial_slot():
+    """로그인 사용자의 회원가입 지역이 N1과 같은 정규화 규칙으로 슬롯에
+    미리 채워진다 - 대화에서 다시 묻지 않기 위함."""
+
+    captured = _ask_capturing_run_graph("질문", "s1", top_k=5, known_region="서울특별시")
+    assert captured["slots"] == {
+        "region_scope": "regional",
+        "region_names": ["서울특별시"],
+    }
+
+
+def test_ask_combines_known_region_with_selected_interests():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, extra_interests=["청년"], known_region="부산광역시",
+    )
+    assert captured["slots"] == {
+        "interests": ["청년"],
+        "region_scope": "regional",
+        "region_names": ["부산광역시"],
+    }
+
+
+def test_ask_skips_known_region_that_does_not_normalize():
+    """정규화에 실패하면(형식이 이상한 값) 슬롯에 억지로 채워 넣지 않고
+    조용히 건너뛴다 - 잘못된 지역으로 검색이 진행되는 것보다 안전하다."""
+
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_region="이런 지역은 없음",
+    )["slots"] is None
+
+
+def test_ask_skips_empty_known_region():
+    assert _ask_capturing_run_graph("질문", "s1", top_k=5, known_region="")["slots"] is None
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_region=None
+    )["slots"] is None
+
+
+# ── 회원가입 때 저장한 성별·생년월일(known_gender/known_birth_date) ──────
+
+
+def test_ask_seeds_known_gender_as_initial_slot():
+    captured = _ask_capturing_run_graph("질문", "s1", top_k=5, known_gender="female")
+    assert captured["slots"] == {"gender": "female"}
+
+
+def test_ask_skips_known_gender_outside_the_contract():
+    """"male"/"female" 이외의 값(예: 위조된 폼값)은 조용히 건너뛴다(fail-closed)."""
+
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_gender="alien",
+    )["slots"] is None
+
+
+def test_ask_skips_empty_known_gender():
+    assert _ask_capturing_run_graph("질문", "s1", top_k=5, known_gender="")["slots"] is None
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_gender=None
+    )["slots"] is None
+
+
+def test_ask_seeds_known_birth_date_as_initial_slot():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_birth_date="1998-05-12",
+    )
+    assert captured["slots"] == {"birth_date": "1998-05-12"}
+
+
+def test_ask_skips_known_birth_date_that_does_not_parse():
+    """형식이 이상하거나 미래 날짜면 조용히 건너뛴다 - graph.slot_schema.
+    parse_birth_date와 같은 판정을 쓴다(N2/N9가 실제로 쓰는 판정과 다르면
+    게이트를 통과했는데 필터 조립은 건너뛰는 불일치가 생긴다)."""
+
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_birth_date="1998/05/12",
+    )["slots"] is None
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_birth_date="2999-01-01",
+    )["slots"] is None
+
+
+def test_ask_combines_known_gender_and_birth_date_with_region_and_interests():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5,
+        extra_interests=["청년"],
+        known_region="부산광역시",
+        known_gender="male",
+        known_birth_date="1990-01-01",
+    )
+    assert captured["slots"] == {
+        "interests": ["청년"],
+        "region_scope": "regional",
+        "region_names": ["부산광역시"],
+        "gender": "male",
+        "birth_date": "1990-01-01",
+    }
+
+
 # ── 토큰 한도로 잘린 LLM 응답 ───────────────────────────────────────
 
 

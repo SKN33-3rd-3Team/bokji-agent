@@ -108,13 +108,13 @@ def test_policies_are_shown_one_card_at_a_time_with_arrows() -> None:
             "policies": [
                 {
                     "policy_id": "p1",
-                    "title": "정책 1",
+                    "title": "청년월세지원",
                     "amount_label": "10만원",
                     "duplicate_status": "가능",
                 },
                 {
                     "policy_id": "p2",
-                    "title": "정책 2",
+                    "title": "청년구직활동지원금",
                     "amount_label": "20만원",
                     "duplicate_status": "확인 필요",
                 },
@@ -131,8 +131,8 @@ def test_policies_are_shown_one_card_at_a_time_with_arrows() -> None:
         "확인한 제도", "자격 충족", "미충족·미확인"
     ]
     markdown = " ".join(_values(app.markdown))
-    assert "정책 1" in markdown
-    assert "정책 2" not in markdown
+    assert "청년월세지원" in markdown
+    assert "청년구직활동지원금" not in markdown
     assert "1 / 2" in markdown
     # 좌우 화살표가 있고, 첫 장에서는 "이전"이 눌리지 않는다.
     arrows = {button.label: button for button in app.button}

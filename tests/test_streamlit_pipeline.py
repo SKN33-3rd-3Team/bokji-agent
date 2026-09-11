@@ -6,8 +6,11 @@ from streamlit_ui import pipeline
 def test_first_prompt_uses_official_ask(monkeypatch) -> None:
     calls: list[tuple] = []
 
-    def fake_ask(user_input: str, session_id: str, *, top_k: int, extra_interests=None):
-        calls.append(("ask", user_input, session_id, top_k, extra_interests))
+    def fake_ask(
+        user_input: str, session_id: str, *, top_k: int, extra_interests=None,
+        known_region=None, known_gender=None, known_birth_date=None,
+    ):
+        calls.append(("ask", user_input, session_id, top_k, extra_interests, known_region))
         return {"status": "needs_input", "question": "추가 정보"}
 
     monkeypatch.setattr(pipeline, "ask", fake_ask)
@@ -19,7 +22,7 @@ def test_first_prompt_uses_official_ask(monkeypatch) -> None:
     )
 
     assert response["status"] == "needs_input"
-    assert calls == [("ask", "질문", "session-a", 7, None)]
+    assert calls == [("ask", "질문", "session-a", 7, None, None)]
 
 
 def test_first_prompt_forwards_sidebar_interests(monkeypatch) -> None:
@@ -27,7 +30,10 @@ def test_first_prompt_forwards_sidebar_interests(monkeypatch) -> None:
 
     calls: list[tuple] = []
 
-    def fake_ask(user_input: str, session_id: str, *, top_k: int, extra_interests=None):
+    def fake_ask(
+        user_input: str, session_id: str, *, top_k: int, extra_interests=None,
+        known_region=None, known_gender=None, known_birth_date=None,
+    ):
         calls.append(("ask", extra_interests))
         return {"status": "answered"}
 
@@ -41,6 +47,55 @@ def test_first_prompt_forwards_sidebar_interests(monkeypatch) -> None:
     )
 
     assert calls == [("ask", ["청년", "주거"])]
+
+
+def test_first_prompt_forwards_known_region(monkeypatch) -> None:
+    """로그인 사용자의 회원가입 지역이 ask 까지 전달되는지."""
+
+    calls: list[tuple] = []
+
+    def fake_ask(
+        user_input: str, session_id: str, *, top_k: int, extra_interests=None,
+        known_region=None, known_gender=None, known_birth_date=None,
+    ):
+        calls.append(("ask", known_region))
+        return {"status": "answered"}
+
+    monkeypatch.setattr(pipeline, "ask", fake_ask)
+    pipeline.run_pipeline(
+        user_input="질문",
+        session_id="session-a",
+        awaiting_followup=False,
+        top_k=5,
+        known_region="서울특별시",
+    )
+
+    assert calls == [("ask", "서울특별시")]
+
+
+def test_first_prompt_forwards_known_gender_and_birth_date(monkeypatch) -> None:
+    """로그인 사용자의 회원가입 성별·생년월일이 ask 까지 전달되는지."""
+
+    calls: list[tuple] = []
+
+    def fake_ask(
+        user_input: str, session_id: str, *, top_k: int, extra_interests=None,
+        known_region=None, known_gender=None, known_birth_date=None,
+    ):
+        calls.append(("ask", known_gender, known_birth_date))
+        return {"status": "answered"}
+
+    monkeypatch.setattr(pipeline, "ask", fake_ask)
+    pipeline.run_pipeline(
+        user_input="질문",
+        session_id="session-a",
+        awaiting_followup=False,
+        top_k=5,
+        known_gender="female",
+        known_birth_date="1998-05-12",
+    )
+
+    assert calls == [("ask", "female", "1998-05-12")]
 
 
 def test_followup_does_not_forward_interests(monkeypatch) -> None:

@@ -35,7 +35,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -266,7 +266,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -376,7 +376,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
     # run_pipeline 은 워커 스레드에서 돌기 때문에 여기서 st.session_state 를
     # 건드릴 수 없다(ScriptRunContext 없음). 받은 값을 응답에 실어 보낸다.
     return {{
@@ -467,3 +467,127 @@ def test_profile_sidebar_replaces_tilde_with_hyphen(tmp_path) -> None:
     sidebar = _sidebar_markdown(app)
     assert "중위소득 30-50%" in sidebar
     assert "~" not in sidebar
+
+
+# ── 로그인 사용자의 회원가입 정보 자동 연동 ─────────────────────────
+
+
+def _chat_app_for_signed_up_user(data_dir, *, region: str, interests: list[str]) -> AppTest:
+    """``auth_user``가 이미 로그인된 채로 채팅 화면이 처음 그려지는 상황.
+
+    (인터랙티브하게 로그인 버튼을 누르는 흐름이 아니라, 로그인된 세션으로
+    페이지를 새로 열거나 새로고침한 경우다 - 이때는 ``interests_pick``
+    위젯 키가 아직 session_state에 없어서 ``default=``가 실제로 적용된다.)
+    ``run_pipeline``은 받은 ``extra_interests``/``known_region``을 그대로
+    답변 문구에 실어 보낸다.
+    """
+
+    script = f'''\
+from pathlib import Path
+import streamlit as st
+from streamlit_ui.session import init_session
+from streamlit_ui.pages import chat
+
+st.session_state.auth_user = {{
+    "username": "user@example.com",
+    "display_name": "김복지",
+    "region": {region!r},
+    "interests": {interests!r},
+}}
+init_session()
+chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
+
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
+    return {{
+        "status": "answered",
+        "answer_status": "complete",
+        "final_answer": f"interests={{extra_interests!r}} region={{known_region!r}}",
+        "final_citations": [],
+        "policies": [],
+    }}
+
+chat.run_pipeline = fake_run_pipeline
+chat.page_chat()
+'''
+    return AppTest.from_string(script).run(timeout=10)
+
+
+def test_signed_up_interests_prefill_the_condition_picker(tmp_path) -> None:
+    """회원가입 때 고른 지원조건이 사이드바 멀티셀렉트 기본값으로 들어온다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="부산광역시", interests=["장애인", "청년"])
+
+    condition_picker = next(
+        element for element in app.sidebar.multiselect if element.label == "지원조건"
+    )
+    assert condition_picker.value == ["장애인", "청년"]
+    # "관심 분야"는 회원가입에서 받지 않으니 그대로 빈 채로 시작한다.
+    field_picker = next(
+        element for element in app.sidebar.multiselect if element.label == "관심 분야"
+    )
+    assert field_picker.value == []
+
+    # 기본값을 그대로 두면 그 값이 파이프라인까지 전달된다.
+    app.chat_input[0].set_value("질문").run(timeout=10)
+    assert "interests=['장애인', '청년']" in " ".join(_values(app.markdown))
+
+
+def test_signed_up_interests_default_is_still_editable(tmp_path) -> None:
+    """자동으로 채워진 관심조건도 이번 상담에 한해 더하거나 지울 수 있다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="부산광역시", interests=["장애인"])
+
+    app.session_state["interests_pick"] = ["장애인", "청년"]
+    app = app.run(timeout=10)
+    app.chat_input[0].set_value("질문").run(timeout=10)
+
+    assert "interests=['장애인', '청년']" in " ".join(_values(app.markdown))
+
+
+def test_unknown_saved_interest_is_dropped_instead_of_crashing(tmp_path) -> None:
+    """INTEREST_OPTIONS에서 사라진 값이 저장돼 있어도 화면이 죽지 않는다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(
+        data_dir, region="", interests=["장애인", "이제는-없는-조건"]
+    )
+
+    assert not app.exception
+    condition_picker = next(
+        element for element in app.sidebar.multiselect if element.label == "지원조건"
+    )
+    assert condition_picker.value == ["장애인"]
+
+
+def test_signed_up_region_reaches_the_pipeline_without_asking_again(tmp_path) -> None:
+    """회원가입 때 저장한 지역이 대화에서 다시 안 물어도 검색에 반영된다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="부산광역시", interests=[])
+
+    app.chat_input[0].set_value("지원금 받을 수 있나요").run(timeout=10)
+
+    assert "region='부산광역시'" in " ".join(_values(app.markdown))
+
+
+def test_no_saved_region_is_not_forwarded(tmp_path) -> None:
+    """"선택 안 함"으로 가입한 사용자는 빈 문자열이 저장되므로 아무것도 안 보낸다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="", interests=[])
+
+    app.chat_input[0].set_value("지원금 받을 수 있나요").run(timeout=10)
+
+    assert "region=None" in " ".join(_values(app.markdown))

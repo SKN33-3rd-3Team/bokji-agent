@@ -76,6 +76,8 @@ def auth_user_dict(user) -> dict:
         "display_name": user.display_name,
         "created_at": user.created_at,
         "region": user.region,
+        "gender": user.gender,
+        "birth_date": user.birth_date,
         "interests": list(user.interests),
         "marketing_opt_in": user.marketing_opt_in,
     }
@@ -98,8 +100,16 @@ def clear_conversation_state() -> None:
     공용 PC 에서 로그아웃·계정 전환 시 이전 사용자의 상담 내용과 소득·장애·
     임신 등 슬롯이 다음 사용자에게 그대로 보이지 않게 한다. init_session 이
     심는 기본값과 같은 형태로 되돌린다.
+
+    사이드바 "지원조건"/"관심 분야" 멀티셀렉트 위젯 키(``interests_pick``/
+    ``fields_pick``)도 함께 지운다 - Streamlit은 위젯 키가 이미
+    session_state에 있으면 ``default=``를 무시하므로, 여기서 안 지우면
+    로그인 직후에도 회원가입 때 저장한 관심조건이 기본 선택값으로 채워지지
+    않는다(이전 사용자가 고른 값이 그대로 남는 문제이기도 하다).
     """
 
+    st.session_state.pop("interests_pick", None)
+    st.session_state.pop("fields_pick", None)
     new_conversation(st.session_state, clear_messages=True)
 
 

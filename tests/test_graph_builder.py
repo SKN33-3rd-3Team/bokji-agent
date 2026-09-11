@@ -169,6 +169,64 @@ def test_run_graph_interrupts_when_hard_gate_slots_are_missing() -> None:
     assert "region" in result.get("missing_slots", [])
 
 
+def test_run_graph_preseeded_region_slot_satisfies_the_hard_gate() -> None:
+    """``service.ask(known_region=...)``가 채우는 초기 슬롯이 실제로 N1(그대로
+    통과) -> N2(하드 게이트)를 통과해 지역을 다시 안 묻는지 실제 그래프로
+    확인한다. 회원가입 지역을 슬롯에 미리 채워도 ``resolve_filter_slots``가
+    요구하는 형태(``region_scope``/``region_names`` 쌍, REGIONAL이면
+    ``region_names`` 비어있지 않음)와 어긋나면 N2의 ``_has_region``이
+    "미확정"으로 보고 계속 되묻는다 - 그 회귀를 여기서 잡는다."""
+
+    graph = build_graph(_store("preseeded_region_test"))
+
+    result = run_graph(
+        graph,
+        user_input="",
+        session_id="session-preseeded-region-a",
+        slots={"region_scope": "regional", "region_names": ["서울특별시"]},
+    )
+
+    # 다른 하드 게이트 슬롯(생년월일 등)은 여전히 비어 있으니 인터럽트는
+    # 그대로 나야 하지만, "region"은 이제 missing_slots에 없어야 한다.
+    assert "__interrupt__" in result
+    assert "region" not in result.get("missing_slots", [])
+    assert result.get("slots", {}).get("region_scope") == "regional"
+    assert result.get("slots", {}).get("region_names") == ["서울특별시"]
+    # N2a(지역 부족 시에만 도는 일반 법령 참고 검색)도 돌지 않아야 한다.
+    assert "region_fallback_applied" not in result
+
+
+def test_run_graph_preseeded_gender_and_birth_date_satisfy_the_hard_gate() -> None:
+    """``service.ask(known_gender=..., known_birth_date=...)``와 같은 형태로
+    슬롯을 미리 채우면, N2가 성별·생년월일을 다시 안 묻는지(하드게이트
+    슬롯 5개 중 2개가 빠짐) 실제 그래프로 확인한다. ``birth_date``는 N1의
+    ``_apply_birth_date``가 매 턴 ``age``/``age_year_based``까지 다시
+    계산해야 하는데, 이번 턴 발화에 생년월일 언급이 없어도(``user_input=""``)
+    파생값이 비어 있지 않아야 한다 - 이게 비면 필터 조립에서 연령 조건이
+    조용히 빠진다."""
+
+    graph = build_graph(_store("preseeded_gender_birth_date_test"))
+
+    result = run_graph(
+        graph,
+        user_input="",
+        session_id="session-preseeded-gb-a",
+        slots={"gender": "female", "birth_date": "1998-05-12"},
+    )
+
+    # 나머지 하드 게이트 슬롯(지역·소득·장애·취업)은 그대로 비어 있으니
+    # 인터럽트는 여전히 나야 하지만, gender/birth_date는 missing_slots에
+    # 없어야 한다.
+    assert "__interrupt__" in result
+    assert "gender" not in result.get("missing_slots", [])
+    assert "birth_date" not in result.get("missing_slots", [])
+    slots = result.get("slots", {})
+    assert slots.get("gender") == "female"
+    assert slots.get("birth_date") == "1998-05-12"
+    # 파생 나이도 이번 턴 발화 없이 슬롯만으로 계산돼 있어야 한다.
+    assert isinstance(slots.get("age"), int)
+
+
 def test_run_graph_preserves_configurable_policy_top_k() -> None:
     graph = build_graph(_store("top_k_state_test"))
 

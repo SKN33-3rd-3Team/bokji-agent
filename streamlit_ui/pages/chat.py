@@ -65,12 +65,36 @@ def _render_intro() -> None:
                 st.rerun()
 
 
-def _render_sidebar() -> tuple[int, list[str]]:
+def _signed_up_interest_defaults(auth_user: dict | None) -> list[str]:
+    """로그인 사용자가 회원가입 때 고른 지원조건 중, 지금도 유효한 선택지만.
+
+    ``INTEREST_OPTIONS``가 나중에 바뀌어도(항목 추가/삭제) 예전에 저장된
+    값이 지금 선택지에 없으면 ``st.multiselect``가 그 값을 ``default``로
+    받는 순간 예외를 낸다 - 필터링 없이 그대로 넘기면 로그인 자체가 화면
+    오류로 이어진다.
+    """
+
+    if not auth_user:
+        return []
+    saved = auth_user.get("interests") or []
+    return [item for item in saved if item in INTEREST_OPTIONS]
+
+
+def _render_sidebar(auth_user: dict | None) -> tuple[int, list[str]]:
     """설정 사이드바. ``(top_k, extra_interests)``를 돌려준다.
 
     지원조건·관심 분야는 **검색 질의를 넓히는 힌트**이지 자격 판정 조건이
     아니다. interests는 소프트 슬롯이라 하드 게이트나 검색 필터에 쓰이지
     않는다 - 고른다고 해서 "그 조건에 해당한다"고 판정되지 않는다.
+
+    로그인 사용자는 "지원조건" 멀티셀렉트의 기본 선택값을 회원가입 때 저장한
+    값으로 미리 채운다(``default=``는 위젯이 이 세션에서 처음 그려질 때만
+    쓰이므로, 로그인 직후 한 번만 적용되고 이후엔 사용자가 고른 값이
+    session_state에 남아 그대로 유지된다 - 로그인/로그아웃 경계에서
+    ``clear_conversation_state()``가 위젯 키를 비워야 다음 로그인 때 다시
+    적용된다). "관심 분야"는 회원가입에서 받지 않는 값이라 그대로 빈 채로
+    시작한다. 어느 쪽이든 이 자리에서 더 고르거나 지우는 건 이번 상담에만
+    적용되고 회원 프로필 자체를 바꾸지 않는다.
     """
 
     with st.sidebar:
@@ -78,11 +102,13 @@ def _render_sidebar() -> tuple[int, list[str]]:
         selected_conditions = st.multiselect(
             "지원조건",
             INTEREST_OPTIONS,
-            default=[],
+            default=_signed_up_interest_defaults(auth_user),
             key="interests_pick",
             placeholder="조건 선택 (여러 개 선택 가능)",
             help="해당하는 조건을 골라 주세요. 여러 개 선택할 수 있고, "
-                 "정책 검색 쿼리에 더해집니다. 자격 판정 조건은 아닙니다.",
+                 "정책 검색 쿼리에 더해집니다. 자격 판정 조건은 아닙니다. "
+                 "로그인 상태면 회원가입 때 표시한 조건이 기본으로 선택돼 "
+                 "있습니다 - 더하거나 빼도 이번 상담에서만 적용됩니다.",
         )
         selected_fields = st.multiselect(
             "관심 분야",
@@ -112,7 +138,6 @@ def _render_sidebar() -> tuple[int, list[str]]:
             st.rerun()
 
         st.markdown(":material/account_circle: **계정**")
-        auth_user = st.session_state.get("auth_user")
         if auth_user:
             name = auth_user.get("display_name") or auth_user.get("username", "")
             st.caption(f":material/check_circle: {escape_md(name)} 님으로 로그인됨")
@@ -154,6 +179,30 @@ def _render_sidebar() -> tuple[int, list[str]]:
     # 사용자가 고른 순서는 유지한다.
     extra_interests = list(dict.fromkeys([*selected_conditions, *selected_fields]))
     return top_k, extra_interests
+
+
+def _known_region(auth_user: dict | None) -> str | None:
+    """회원가입 때 저장한 거주 지역. "선택 안 함"이었으면 빈 문자열이라 None."""
+
+    if not auth_user:
+        return None
+    return auth_user.get("region") or None
+
+
+def _known_gender(auth_user: dict | None) -> str | None:
+    """회원가입 때 저장한 성별. 미입력이면 빈 문자열이라 None."""
+
+    if not auth_user:
+        return None
+    return auth_user.get("gender") or None
+
+
+def _known_birth_date(auth_user: dict | None) -> str | None:
+    """회원가입 때 저장한 생년월일(ISO). 미입력이면 빈 문자열이라 None."""
+
+    if not auth_user:
+        return None
+    return auth_user.get("birth_date") or None
 
 
 def _render_profile_sidebar() -> None:
@@ -309,7 +358,8 @@ def page_chat() -> None:
         "거주 지역·기본 정보를 바탕으로 지원 제도를 찾아 자격·지원금·중복수급을 "
         "근거와 함께 확인합니다."
     )
-    top_k, extra_interests = _render_sidebar()
+    auth_user = st.session_state.get("auth_user")
+    top_k, extra_interests = _render_sidebar(auth_user)
     _render_profile_sidebar()
 
     if not (VECTOR_DB_DIR / "chroma.sqlite3").is_file():
@@ -347,6 +397,9 @@ def page_chat() -> None:
                 awaiting_followup=st.session_state.awaiting_followup,
                 top_k=top_k,
                 extra_interests=extra_interests,
+                known_region=_known_region(auth_user),
+                known_gender=_known_gender(auth_user),
+                known_birth_date=_known_birth_date(auth_user),
             )
         except SystemExit:
             _LOG.exception("서비스 실행 설정 오류")
