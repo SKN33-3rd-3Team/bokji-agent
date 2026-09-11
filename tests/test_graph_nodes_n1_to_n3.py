@@ -264,7 +264,7 @@ class LlmGatewayLlmSlotExtractionTests(unittest.TestCase):
         llm_gateway.extract_slots("혼자 사는데 월세가 부담돼요", {}, llm_client=client)
         self.assertEqual(len(client.calls), 1)
 
-    def test_complete_first_turn_with_search_interest_skips_llm(self) -> None:
+    def test_complete_first_turn_with_search_interest_calls_llm_and_merges(self) -> None:
         client = FakeLLMClient('{"gender": "male"}')
         result = parse_slots(
             {"user_input": (
@@ -274,19 +274,20 @@ class LlmGatewayLlmSlotExtractionTests(unittest.TestCase):
             ), "slots": {}},
             llm_client=client,
         )
-        self.assertEqual(client.calls, [])
+        self.assertEqual(len(client.calls), 1)
         self.assertEqual(check_slot_completeness(result)["missing_slots"], [])
-        self.assertEqual(result["slots"]["gender"], "female")
+        self.assertEqual(result["slots"]["gender"], "male")
         self.assertIn("교육", result["slots"]["interests"])
 
-    def test_complete_child_education_query_normalizes_interest_and_skips_llm(self) -> None:
+    def test_complete_child_education_query_normalizes_interest_and_calls_llm(self) -> None:
         text = (
             "서울에 사는 2022년 5월 10일생 여자아이입니다. 소득은 중위소득 80%이고 "
             "장애는 없으며 보호자는 재직 중입니다. 유치원 학비 지원을 알려주세요."
         )
         client = FakeLLMClient('{"gender": "male"}')
         result = parse_slots({"user_input": text, "slots": {}}, llm_client=client)
-        self.assertEqual(client.calls, [])
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(result["slots"]["gender"], "male")
         self.assertEqual(result["slots"]["interests"], ["유아학비"])
         self.assertEqual(check_slot_completeness(result)["missing_slots"], [])
         self.assertEqual(result["initial_user_input"], text)
@@ -297,7 +298,25 @@ class LlmGatewayLlmSlotExtractionTests(unittest.TestCase):
             {"user_input": text.replace("여자아이", "남자아이"), "slots": {}},
             llm_client=client,
         )
-        self.assertEqual(client.calls, [])
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(result["slots"]["age_subject"], "child")
+
+    def test_complete_child_first_turn_allows_llm_to_correct_disability(self) -> None:
+        text = (
+            "우리 아이는 서울특별시에 사는 2014-03-10생 남자입니다. "
+            "비장애인입니다. 중위소득 40%이며 학생입니다. 아들 교육 지원을 찾습니다."
+        )
+        state = {"user_input": text, "slots": {}, "as_of": date(2026, 9, 11)}
+        # 알려진 규칙 오인은 그대로다. 이 검증은 모델 품질이 아닌 호출·병합 경로다.
+        rules_only = parse_slots(state, llm_client=None)
+        self.assertEqual(rules_only["slots"]["disability_status"], "registered")
+        self.assertEqual(check_slot_completeness(rules_only)["missing_slots"], [])
+
+        client = FakeLLMClient('{"disability_status": "not_registered"}')
+        result = parse_slots(state, llm_client=client)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(result["slots"]["disability_status"], "not_registered")
+        self.assertEqual(check_slot_completeness(result)["missing_slots"], [])
         self.assertEqual(result["slots"]["age_subject"], "child")
 
     def test_complete_own_profile_with_another_beneficiary_calls_llm(self) -> None:
