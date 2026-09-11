@@ -139,6 +139,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
 def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
@@ -196,9 +200,9 @@ def test_authenticated_sidebar_reset_and_logout_clear_conversation(tmp_path) -> 
     app = app.run(timeout=10)
     first_id = app.session_state["conversation_id"]
 
-    assert any("김복지 님으로 로그인됨" in str(item.value) for item in app.caption)
+    assert any("김복지 님" in str(item.value) for item in app.caption)
     assert not any(button.label == "로그인" for button in app.button)
-    next(button for button in app.button if button.label == "대화 초기화").click()
+    next(button for button in app.button if button.label == "새 상담 시작").click()
     app = app.run(timeout=10)
 
     assert app.session_state["auth_user"]["username"] == "user@example.com"
@@ -250,6 +254,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
 def fail(**kwargs):
@@ -276,6 +284,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 chat.run_pipeline = lambda **kwargs: {{"status": "answered"}}
 
@@ -307,6 +319,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 chat.run_pipeline = lambda **kwargs: {{"status": "needs_input", "question": "지역?"}}
 
@@ -339,6 +355,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 st.session_state.messages = [
     {{"role": "assistant", "result": {{"status": "answered"}}}}
 ]
@@ -370,6 +390,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
 def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
@@ -441,7 +465,7 @@ def test_reset_conversation_clears_profile_sidebar(tmp_path) -> None:
     app.chat_input[0].set_value("서울 살아요").run(timeout=10)
     assert app.session_state["profile"]
 
-    reset = next(b for b in app.sidebar.button if "대화 초기화" in b.label)
+    reset = next(b for b in app.sidebar.button if "새 상담 시작" in b.label)
     app = reset.click().run(timeout=10)
 
     assert app.session_state["profile"] == []
@@ -480,6 +504,10 @@ from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
 init_session()
+import streamlit as _stg
+if "_auth_seeded" not in _stg.session_state:
+    _stg.session_state["_auth_seeded"] = True
+    _stg.session_state["auth_user"] = {{"username": "u@example.com", "display_name": "테스터"}}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
 def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
