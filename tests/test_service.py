@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from dataclasses import replace
 import os
 from threading import Barrier, Event, Lock, Thread
 from unittest.mock import patch
@@ -450,6 +451,79 @@ def test_fetch_policy_detail_collects_all_sections_and_metadata():
     # 10개 section_type 전부에 대해 재검색을 시도했는지 (일부만 있어도 전부 확인)
     assert len(store.calls) == 10
     assert all(call["source_id"] == "policy-a" for call in store.calls)
+
+
+def test_detail_batch_unique_sections_preserve_metadata_dates_and_order():
+    sections = {
+        f"policy-a:{section}": _section_chunk("policy-a", section, label, section)
+        for section, label in service_module._DETAIL_SECTION_TYPES
+    }
+    # Detail retrieval intentionally has no as_of/age/region filter.
+    first = sections["policy-a:purpose"]
+    sections["policy-a:purpose"] = replace(first, chunk=replace(
+        first.chunk, metadata={**first.chunk.metadata, "effective_from": "2099-01-01"}
+    ))
+    expected = _fetch_policy_detail("policy-a", FakeDetailStore(sections), "q1")
+
+    class BatchStore(FakeDetailStore):
+        def get_chunks_by_metadata(self, source_type, *, metadata_equals):
+            assert source_type is SourceType.SUBSIDY
+            assert metadata_equals == {"source_id": "policy-a"}
+            return tuple(hit.chunk for hit in reversed(list(self._sections.values())))
+
+    store = BatchStore(sections)
+    actual = _fetch_policy_detail("policy-a", store, "q1")
+    assert actual == expected
+    assert list(actual["sections"]) == list(expected["sections"])
+    assert store.calls == []
+
+
+@pytest.mark.parametrize("duplicate_same_chunk", [False, True])
+def test_detail_batch_multiple_and_missing_sections_keep_original_search(duplicate_same_chunk):
+    purpose = _section_chunk("policy-a", "purpose", "목적", "ranked winner")
+    other = purpose if duplicate_same_chunk else _section_chunk("policy-a", "purpose", "목적", "other candidate")
+    target = _section_chunk("policy-a", "support_target", "지원대상", "target")
+    sections = {"policy-a:purpose": purpose, "policy-a:support_target": target}
+    expected = _fetch_policy_detail("policy-a", FakeDetailStore(sections), "q1")
+
+    class BatchStore(FakeDetailStore):
+        def get_chunks_by_metadata(self, source_type, *, metadata_equals):
+            foreign = _section_chunk("policy-b", "support_target", "지원대상", "foreign")
+            return (other.chunk, target.chunk, foreign.chunk, purpose.chunk)
+
+        def search(self, source_type, query, *, query_id, top_k, search_filter):
+            section = search_filter.metadata_equals["section_type"]
+            assert source_type is SourceType.SUBSIDY and top_k == 1
+            assert query_id == f"q1-policy-a-detail-{section}"
+            assert query == f"policy-a {dict(service_module._DETAIL_SECTION_TYPES)[section]}"
+            assert search_filter.as_of is None and search_filter.age is None
+            assert search_filter.region_names == ()
+            return super().search(source_type, query, query_id=query_id, top_k=top_k, search_filter=search_filter)
+
+    store = BatchStore(sections)
+    assert _fetch_policy_detail("policy-a", store, "q1") == expected
+    assert [call["section_type"] for call in store.calls] == [
+        section for section, _ in service_module._DETAIL_SECTION_TYPES if section != "support_target"
+    ]
+
+
+@pytest.mark.parametrize("search_failure", [None, service_module.CollectionNotFoundError, service_module.VectorStoreError])
+def test_detail_batch_failure_preserves_legacy_missing_and_error_handling(search_failure):
+    class BrokenBatchStore(FakeDetailStore):
+        def get_chunks_by_metadata(self, *args, **kwargs):
+            raise service_module.VectorStoreError("batch failed")
+
+        def search(self, *args, **kwargs):
+            if search_failure:
+                raise search_failure("search failed")
+            return super().search(*args, **kwargs)
+
+    store = BrokenBatchStore({})
+    if search_failure is service_module.VectorStoreError:
+        with pytest.raises(service_module.VectorStoreError, match="search failed"):
+            _fetch_policy_detail("policy-a", store, "q1")
+    else:
+        assert _fetch_policy_detail("policy-a", store, "q1") == {"sections": {}}
 
 
 def test_build_policy_view_maps_eligibility_and_marks_top_as_most_suitable():
