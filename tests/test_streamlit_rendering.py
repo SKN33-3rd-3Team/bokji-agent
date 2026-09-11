@@ -24,7 +24,7 @@ def _expander_labels(app) -> list[str]:
     ]
 
 
-def test_needs_input_renders_question_and_missing_slot_labels() -> None:
+def test_needs_input_renders_question_and_llm_status() -> None:
     app = _render(
         {
             "status": "needs_input",
@@ -34,11 +34,10 @@ def test_needs_input_renders_question_and_missing_slot_labels() -> None:
         }
     )
 
+    # 어떤 항목이 필요한지는 위젯 폼(chat.py)이 보여준다 - render_result는
+    # 질문 문장과 AI 사용 여부만 낸다.
     assert "거주 지역과 생년월일을 알려주세요." in _values(app.markdown)
-    captions = " ".join(_values(app.caption))
-    assert "거주 지역" in captions
-    assert "생년월일" in captions
-    assert "규칙 기반" in captions
+    assert "규칙 기반" in " ".join(_values(app.caption))
 
 
 def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
@@ -94,7 +93,8 @@ def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
     assert "월 최대 200,000원" in metrics
     assert "조건부" in metrics
     assert "정책 공식 페이지" in markdown
-    assert "AI 분석 적용" in captions
+    # AI 분석이 정상 적용된 경우엔 "N회 호출" 같은 내부 수치를 화면에 내지 않는다.
+    assert "AI 분석 적용" not in captions
 
 
 def test_policies_are_shown_one_card_at_a_time_with_arrows() -> None:
@@ -135,7 +135,10 @@ def test_policies_are_shown_one_card_at_a_time_with_arrows() -> None:
     assert "정책 2" not in markdown
     assert "1 / 2" in markdown
     # 좌우 화살표가 있고, 첫 장에서는 "이전"이 눌리지 않는다.
-    arrows = {button.label: button for button in app.button}
+    # (카드마다 "이 정책에 대해 물어보기" 버튼도 있으므로 화살표만 추린다.)
+    arrows = {
+        button.label: button for button in app.button if button.label in ("◀", "▶")
+    }
     assert set(arrows) == {"◀", "▶"}
     assert arrows["◀"].disabled is True
     assert arrows["▶"].disabled is False
@@ -179,7 +182,8 @@ def test_single_policy_renders_without_arrows() -> None:
     )
 
     assert not app.exception
-    assert len(app.button) == 0
+    # 정책이 하나면 좌우 화살표는 없다("이 정책에 대해 물어보기" 버튼은 있음).
+    assert not any(button.label in ("◀", "▶") for button in app.button)
     assert "정책 1" in " ".join(_values(app.markdown))
 
 
@@ -283,109 +287,7 @@ def test_llm_failure_status_does_not_expose_internal_error() -> None:
         _values(app.markdown) + _values(app.caption) + _values(app.warning)
     )
     assert "규칙 기반 결과로 보완" in visible
-    assert "실패 1건" in visible
     assert "secret-internal-error" not in visible
-
-
-# ── 응답 원본(Markdown 표 · JSON · 텍스트) 노출 ─────────────────────
-
-
-def test_answer_exposes_markdown_table_and_json_outputs() -> None:
-    """서비스가 만들어 둔 output_markdown / output_json / output_text 를
-    화면에서 실제로 볼 수 있어야 한다(이전에는 셋 다 반환만 되고 어디에도
-    쓰이지 않았다)."""
-
-    markdown_table = (
-        "**확인한 제도 1건** · 자격 충족 0건 · 미충족·미확인 1건\n\n"
-        "| 순위 | 정책명 | 자격 확인 | 지원금 | 중복수급 | 출처 |\n"
-        "|---:|---|---|---|---|---|\n"
-        "| 1 | 유아학비 지원 | 미확인 | 지원금액 확인 필요 | 미확인 | - |"
-    )
-    app = _render(
-        {
-            "status": "answered",
-            "answer_status": "complete",
-            "final_answer": "확인된 범위의 안내입니다.",
-            "policies": [],
-            "output_markdown": markdown_table,
-            "output_text": "확인된 정책이 없습니다.",
-            "output_json": {
-                "status": "answered",
-                "summary": {"checked": 1, "eligible": 0, "not_eligible_or_unknown": 1},
-                "profile": [{"key": "region", "label": "지역", "value": "서울특별시"}],
-                "evidence_count": 0,
-            },
-        }
-    )
-
-    assert not app.exception
-    # 표는 렌더링된 Markdown 으로만 보여준다. 원문을 st.code로 한 번 더
-    # 뿌리면 코드블록에 줄바꿈이 없어서 표 한 줄이 잘려 보인다.
-    assert any(markdown_table in value for value in _values(app.markdown))
-    codes = _values(app.code)
-    assert not any(markdown_table in value for value in codes)
-    assert any("확인된 정책이 없습니다." in value for value in codes)
-    # JSON 은 st.json 으로 나간다.
-    assert len(app.json) == 1
-
-
-def test_execution_trace_tab_shows_node_path_and_total_seconds() -> None:
-    """콘솔(BOKJI_TRACE)에 찍히는 노드 실행 순서를 화면에서도 볼 수 있어야
-    한다 - 터미널을 못 보는 상황이나 지난 답변을 다시 볼 때를 위해."""
-
-    app = _render(
-        {
-            "status": "answered",
-            "answer_status": "complete",
-            "final_answer": "확인했습니다.",
-            "policies": [],
-            "output_json": {"status": "answered"},
-            "timing": {
-                "phases": [{"name": "request_total", "total_s": 12.5}],
-                "node_path": [
-                    {"node": "slot_parser", "title": "N1 slot_parser - 슬롯 추출", "seconds": 8.0},
-                    {"node": "policy_search", "title": "N4 policy_search - 후보 검색", "seconds": 4.5},
-                ],
-            },
-        }
-    )
-
-    assert not app.exception
-    assert any("총 소요 12.50초" in value for value in _values(app.markdown))
-    codes = " ".join(_values(app.code))
-    assert "N1 slot_parser - 슬롯 추출  (8.00초)" in codes
-    assert "N4 policy_search - 후보 검색  (4.50초)" in codes
-
-
-def test_needs_input_exposes_outputs_when_present() -> None:
-    app = _render(
-        {
-            "status": "needs_input",
-            "question": "소득 수준을 알려주세요.",
-            "missing_slots": ["income_bracket"],
-            "output_json": {"status": "needs_input", "profile": []},
-        }
-    )
-
-    assert not app.exception
-    assert len(app.json) == 1
-
-
-def test_answer_without_output_fields_renders_no_raw_output_section() -> None:
-    """output_* 가 없는 응답(예전 계약)에서도 깨지지 않고, 빈 섹션을 만들지도
-    않는다."""
-
-    app = _render(
-        {
-            "status": "answered",
-            "answer_status": "complete",
-            "final_answer": "확인된 범위의 안내입니다.",
-            "policies": [],
-        }
-    )
-
-    assert not app.exception
-    assert len(app.json) == 0
 
 
 # ── 근거 링크 위치 · Markdown ``~`` 처리 ────────────────────────────

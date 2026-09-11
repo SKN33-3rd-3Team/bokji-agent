@@ -11,7 +11,6 @@ import streamlit as st
 from .constants import (
     GUIDANCE_OFFICIAL,
     SECTION_LABELS_KO,
-    SLOT_LABELS_KO,
     VERDICT_STYLE,
 )
 from .session import md_text
@@ -33,31 +32,21 @@ def _metric(container: Any, label: str, value: str, *, icon: str) -> None:
 
 
 def _render_llm_status(status: Mapping[str, Any] | None) -> None:
+    """AI를 못 썼을 때만 한 줄 알린다(한계를 숨기지 않는다).
+
+    정상적으로 AI 분석이 적용된 경우엔 "N회 호출" 같은 내부 수치를 화면에
+    내지 않는다 - 사용자에게 필요한 건 결과지 호출 통계가 아니다.
+    """
+
     if not status:
         return
-
     if not status.get("enabled"):
+        st.caption(":material/info: 이번 답변은 AI 분석 없이 규칙 기반으로 처리됐어요.")
+        return
+    if status.get("failures"):
         st.caption(
-            ":material/info: AI 모델을 사용하지 않고 규칙 기반·템플릿 경로로 처리했습니다."
+            ":material/warning: AI 분석 일부가 실패해 규칙 기반 결과로 보완했어요."
         )
-        return
-
-    model = status.get("model") or "설정된 모델"
-    calls = status.get("calls")
-    failures = status.get("failures") or 0
-    successes = status.get("successes")
-    if failures:
-        st.warning(
-            f"AI 모델 호출 일부가 실패해 규칙 기반 결과로 보완했습니다. "
-            f"({model}, 성공 {successes or 0}회 / 실패 {failures}건)",
-            icon=":material/warning:",
-        )
-        return
-
-    if calls:
-        st.caption(f":material/smart_toy: AI 분석 적용 · {model} · {calls}회 호출")
-    else:
-        st.caption(f":material/smart_toy: AI 모델 준비됨 · {model}")
 
 
 def _citations_by_policy(
@@ -101,8 +90,26 @@ def _render_citations(citations: list[Mapping[str, Any]], *, title: str) -> None
 
 
 def _render_policy_detail(policy: Mapping[str, Any]) -> None:
+    """카드에서 바로 안 보여줘도 되는 것들을 접이식으로 묶는다.
+
+    정책 원문 7개 섹션 + 구비서류 + 확인/미확인 조건 + 관련 법령. 카드 표면은
+    '자격·지원금·중복수급'만 남기고 나머지는 여기 숨긴다.
+    """
+
     detail = policy.get("detail") or {}
-    with st.expander("정책 상세 보기", icon=":material/description:"):
+    checked = [md_text(x) for x in policy.get("verification_checked") or []]
+    unchecked = [md_text(x) for x in policy.get("verification_unchecked") or []]
+    laws = policy.get("related_law") or []
+    has_body = bool(detail) or checked or unchecked or laws
+    if not has_body:
+        return
+
+    with st.expander("자세히 보기 (상세 조건 · 관련 법령)", icon=":material/description:"):
+        if checked:
+            st.caption("확인한 조건: " + ", ".join(checked))
+        if unchecked:
+            st.caption("확인하지 못한 조건: " + ", ".join(unchecked))
+
         facts: list[str] = []
         organization = detail.get("organization")
         if organization:
@@ -125,6 +132,14 @@ def _render_policy_detail(policy: Mapping[str, Any]) -> None:
             if value:
                 st.markdown(f"**{label}**")
                 st.markdown(md_text(value))
+
+        for law in laws:
+            name = md_text(law.get("law_name") or "관련 법령")
+            law_url = law.get("source_url")
+            st.caption(
+                f":material/gavel: [{name}]({law_url})" if law_url
+                else f":material/gavel: {name}"
+            )
 
         source_url = detail.get("source_url")
         if source_url:
@@ -219,12 +234,7 @@ def _render_policy(
         if verification_note:
             st.info(md_text(verification_note), icon=":material/fact_check:")
 
-        checked = [md_text(item) for item in policy.get("verification_checked") or []]
-        unchecked = [md_text(item) for item in policy.get("verification_unchecked") or []]
-        if checked:
-            st.caption("확인한 조건: " + ", ".join(checked))
-        if unchecked:
-            st.caption("확인하지 못한 조건: " + ", ".join(unchecked))
+        # 확인한/확인하지 못한 조건은 카드 표면에서 빼고 "자세히 보기"로 내린다.
 
         reasons = [md_text(item) for item in policy.get("eligibility_reasons") or []]
         if reasons:
@@ -257,20 +267,30 @@ def _render_policy(
             for item in confirmations:
                 st.markdown(f"- {item}")
 
-        for law in policy.get("related_law") or []:
-            name = md_text(law.get("law_name") or "관련 법령")
-            source_url = law.get("source_url")
-            st.caption(
-                f":material/gavel: [{name}]({source_url})"
-                if source_url
-                else f":material/gavel: {name}"
-            )
+        # 관련 법령 링크도 카드 표면에서 빼고 "자세히 보기"(_render_policy_detail)로.
 
         # 근거 링크는 카드 안에 둔다 - 답변 전체에 하나로 묶어 두면 어느 정책의
         # 근거인지 알 수 없다. CitationEntry.policy_id 로 갈라 담는다.
         _render_citations(citations or [], title="근거 문서 확인")
 
-        # _render_policy_detail(policy) # conflict
+        # 이 정책에 대해 상세 질문을 이어갈 수 있는 경량 채팅으로 진입한다.
+        # 무거운 N1~N14 재실행 없이 이 카드가 이미 담고 있는 정보로만 답한다.
+        if st.button(
+            "이 정책에 대해 물어보기",
+            key=f"askpolicy-{metric_key}",
+            icon=":material/chat:",
+            width="stretch",
+        ):
+            # 이 정책 전용 문의 채팅방(모달)을 연다. 다른 정책을 보던 중이면
+            # 그 대화 기록은 버린다(채팅방은 한 번에 정책 하나).
+            st.session_state["detail_chat_policy"] = dict(policy)
+            st.session_state.pop("detail_chat_history", None)
+            st.rerun()
+
+        # 목적·지원대상·선정기준·지원내용·신청방법·신청기한·근거법령·구비서류를
+        # 접이식으로 보여준다(값 없는 섹션은 자동 생략). 이전 머지 충돌 때
+        # 주석 처리돼 유나가 붙인 구비서류 섹션이 화면에 안 떴던 것을 복구.
+        _render_policy_detail(policy)
 
 
 def _step_policy_page(state_key: str, delta: int, total: int) -> None:
@@ -382,12 +402,21 @@ def _render_summary_cards(result: Mapping[str, Any]) -> None:
 def _render_answer(result: Mapping[str, Any]) -> None:
     answer = md_text(result.get("final_answer") or "확인된 답변이 없습니다.")
     answer_status = result.get("answer_status")
+
     if answer_status == "abstained":
+        # 답을 못 한 경우엔 그 이유가 곧 메시지이고 아래에 카드도 없으므로 그대로.
         st.warning(answer, icon=":material/gpp_maybe:")
-    elif answer_status == "partial":
-        st.info(answer, icon=":material/info:")
     else:
-        st.markdown(answer)
+        # complete/partial 답변은 정책별 선정기준·신청방법·법령·"확인 필요" 같은
+        # 내용이 길게 들어간다. 핵심은 요약 카드 + 정책 카드가 담으므로 답변
+        # 전문은 항상 접어 둔다. partial일 때만 짧은 안내 한 줄을 위에 남긴다.
+        if answer_status == "partial":
+            st.info(
+                "일부 조건만 확인됐어요. 정책 카드와 상세 답변을 확인해 주세요.",
+                icon=":material/info:",
+            )
+        with st.expander("상담 답변 자세히 보기", icon=":material/notes:"):
+            st.markdown(answer)
 
     _render_summary_cards(result)
 
@@ -429,108 +458,16 @@ def _render_answer(result: Mapping[str, Any]) -> None:
     st.caption(GUIDANCE_OFFICIAL)
 
 
-def _render_raw_outputs(result: Mapping[str, Any]) -> None:
-    """서비스가 같은 결과로 만들어 둔 3가지 형식을 그대로 보여준다.
-
-    ``ChatResponse``는 ``output_json`` / ``output_markdown`` / ``output_text``를
-    항상 함께 반환하는데, 지금까지 화면은 셋 다 쓰지 않아서 사용자가 결과를
-    다른 곳에 붙여넣거나 API 응답 모양을 확인할 방법이 없었다. 접이식으로
-    두어 기본 화면은 그대로 두고, 필요할 때만 펼쳐 보게 한다.
-    """
-
-    output_json = result.get("output_json")
-    output_markdown = result.get("output_markdown")
-    output_text = result.get("output_text")
-    if not (output_json or output_markdown or output_text):
-        return
-
-    with st.expander("응답 원본 보기 (Markdown 표 · JSON · 실행 로그)", icon=":material/data_object:"):
-        tab_markdown, tab_json, tab_text, tab_trace = st.tabs(
-            ["Markdown 표", "JSON", "텍스트", "실행 로그"]
-        )
-
-        with tab_markdown:
-            # 원문 문자열을 st.code로 한 번 더 보여주지 않는다. 코드블록은
-            # 줄바꿈이 없어서 표 한 줄이 오른쪽으로 잘려 보이는데, 잘린 채
-            # 보여주느니 렌더링된 표만 두는 편이 낫다.
-            if output_markdown:
-                st.markdown(str(output_markdown))
-            else:
-                st.caption("Markdown 표가 없습니다.")
-
-        with tab_json:
-            if output_json:
-                st.json(output_json, expanded=2)
-            else:
-                st.caption("JSON 응답이 없습니다.")
-
-        with tab_text:
-            if output_text:
-                st.code(str(output_text), language="text")
-            else:
-                st.caption("텍스트 응답이 없습니다.")
-
-        with tab_trace:
-            _render_timing(result.get("timing"))
-
-
-def _render_timing(timing: Mapping[str, Any] | None) -> None:
-    """콘솔(BOKJI_TRACE)에 찍히는 것과 같은 노드 실행 순서·소요 시간.
-
-    터미널을 못 보는 사람도(다른 기기에서 열었거나, 지난 답변을 다시 볼 때)
-    "어디서 오래 걸렸는지"를 확인할 수 있게 응답에 실려온 값을 그대로 그린다.
-    """
-
-    if not isinstance(timing, Mapping):
-        st.caption("실행 로그가 없습니다.")
-        return
-
-    node_path = [item for item in timing.get("node_path") or [] if isinstance(item, Mapping)]
-    total = _request_total_seconds(timing)
-    if total is not None:
-        st.markdown(f"**총 소요 {total:.2f}초** · 노드 {len(node_path)}개")
-
-    if not node_path:
-        st.caption("실행된 노드 기록이 없습니다.")
-        return
-
-    lines = [
-        f"{item.get('title') or item.get('node')}  ({float(item.get('seconds') or 0.0):.2f}초)"
-        for item in node_path
-    ]
-    st.code("\n".join(lines), language="text")
-
-
-def _request_total_seconds(timing: Mapping[str, Any] | None) -> float | None:
-    """이번 요청 전체 소요 시간(``request_total`` 구간)."""
-
-    if not isinstance(timing, Mapping):
-        return None
-    for phase in timing.get("phases") or []:
-        if isinstance(phase, Mapping) and phase.get("name") == "request_total":
-            try:
-                return float(phase.get("total_s"))
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
 def render_result(result: Mapping[str, Any]) -> None:
     """서비스 응답 상태만 보고 추가 질문 또는 최종 결과를 그린다."""
 
     status = result.get("status")
     if status == "needs_input":
+        # 어떤 항목이 필요한지는 아래 위젯 폼(chat.py)이 보여준다.
         st.markdown(str(result.get("question") or "추가 정보가 필요합니다."))
-        missing_slots = [
-            SLOT_LABELS_KO.get(str(slot), str(slot))
-            for slot in result.get("missing_slots") or []
-        ]
-        if missing_slots:
-            st.caption("추가로 필요한 정보: " + ", ".join(missing_slots))
     elif status == "answered":
         _render_answer(result)
     else:
         st.error("서비스 응답을 표시할 수 없습니다.", icon=":material/error:")
 
     _render_llm_status(result.get("llm_status"))
-    _render_raw_outputs(result)

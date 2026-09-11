@@ -176,7 +176,11 @@ from rag_design.vector_store import (
 from .graph import build_graph, resume_graph, run_graph
 from .graph.policy_conditions import load_support_conditions
 from .graph.slot_schema import UNKNOWN
-from .llm import HuggingFaceInferenceClient, RecordingLLMClient
+from .llm import (
+    HuggingFaceInferenceClient,
+    RecordingLLMClient,
+    RunPodServerlessClient,
+)
 from .timing import TIMER, node_title
 
 # 레포 루트의 .env에서 HF_TOKEN/LLM_MODEL_NAME 등을 읽는다(이미 셸에 직접
@@ -255,15 +259,28 @@ def connect_store() -> ChromaVectorStore:
 
 
 def build_llm_client() -> RecordingLLMClient | None:
-    """``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
-    만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
-    기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
-    성질은 그대로 유지한다.
+    """N1/N5/N9/N10/N13 등에 붙일 LLM 클라이언트를 만든다. 아무 백엔드도
+    설정 안 됐으면 ``None``을 돌려주고 네 노드 모두 규칙 기반/템플릿 경로로
+    동작한다 - LLM 없이도 서비스가 끝까지 도는 성질은 그대로.
 
-    모델 이름은 ``LLM_MODEL_NAME`` 환경변수를 먼저 보고, 없으면 예전 이름
-    ``LLM_HF_MODEL``(``scripts/interactive_console_chat.py``가 쓰던 이름 -
-    하위 호환으로 계속 지원), 그것도 없으면 ``_DEFAULT_HF_MODEL``을 쓴다.
+    백엔드 선택(``LLM_BACKEND`` 환경변수):
+    - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
+      ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` / ``RUNPOD_MODEL_NAME`` 필요.
+    - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
+      모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
     """
+
+    backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
+    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+
+    if backend == "runpod":
+        if not (os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY")):
+            return None
+        return RecordingLLMClient(
+            RunPodServerlessClient(
+                timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+            )
+        )
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
@@ -273,13 +290,9 @@ def build_llm_client() -> RecordingLLMClient | None:
         or os.environ.get("LLM_HF_MODEL")
         or _DEFAULT_HF_MODEL
     )
-    # 토큰 예산과 "생각 끄기"를 환경변수로 조절할 수 있게 한다.
-    #
-    # 왜: 추론형 모델(Qwen3.5 계열)은 답을 쓰기 전에 내부 사고에 토큰을 크게
-    # 써서 호출 하나가 수십 초씩 걸린다(실측: N1 한 번에 50초). 기본
-    # max_new_tokens=8192는 그 사고 길이를 감당하려고 올려둔 값이라,
-    # 비추론형 모델을 쓰면 훨씬 낮춰도 되고 그만큼 빨라진다.
-    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+    # max_new_tokens: 추론형 모델(Qwen3.5 계열)은 답 전에 내부 사고에 토큰을
+    # 크게 써서 호출이 수십 초씩 걸린다. 비추론형/파인튜닝 모델은 훨씬 낮춰도
+    # 되고 그만큼 빨라진다(위 LLM_MAX_NEW_TOKENS로 조절).
 
     # LLM_DISABLE_THINKING=1이면 provider에 "사고 과정을 끄라"고 요청한다.
     # Qwen3 계열 chat template이 지원한다고 알려진 파라미터인데, 이
@@ -349,6 +362,14 @@ def get_store() -> ChromaVectorStore:
 
     get_graph()
     return _runtime_cache["store"]
+
+
+def get_llm_client() -> Any:
+    """정책 상세 문의 경량 응답(``light_followup``) 등이 재사용하는 공유 LLM
+    클라이언트. ``get_graph()``와 같은 인스턴스이며 HF_TOKEN이 없으면 ``None``."""
+
+    get_graph()
+    return _runtime_cache.get("llm_client")
 
 
 class PolicyDetail(TypedDict, total=False):
@@ -1117,6 +1138,7 @@ __all__ = [
     "build_llm_client",
     "get_graph",
     "get_store",
+    "get_llm_client",
     "ChatResponse",
     "PolicyView",
     "PolicyDetail",
