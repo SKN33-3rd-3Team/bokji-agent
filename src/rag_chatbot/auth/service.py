@@ -27,7 +27,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from . import lockout
 from . import repository as repo
@@ -54,6 +54,50 @@ _WS_RE = re.compile(r"\s+")
 # 검증하지는 않고 형태만 본다.
 USERNAME_MAX = 254
 _EMAIL_SHAPE_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# 성별: 하드게이트 슬롯 계약(graph.slot_schema.Gender)과 같은 값("male"/
+# "female")을 그대로 저장한다 - 이 모듈이 graph 패키지를 의존하지는 않되,
+# 값 자체는 한쪽만 고쳐 어긋나지 않도록 문자열을 그대로 맞춰 둔다.
+_GENDER_VALUES = frozenset({"male", "female"})
+
+# 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
+# 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가
+# 하드게이트 슬롯으로 쓰기 직전에 다시 검증한다). 미래 날짜만 걸러
+# 명백히 잘못된 값이 암호화돼 저장되는 것을 막는다.
+_MAX_PLAUSIBLE_AGE_YEARS = 120
+
+
+def _clean_gender(value: object) -> str:
+    """빈 값은 "선택 안 함"으로 허용한다. 계약에 없는 값은 거부한다(fail-closed)."""
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text not in _GENDER_VALUES:
+        raise AuthError("성별 값이 올바르지 않습니다.")
+    return text
+
+
+def _clean_birth_date(value: object) -> str:
+    """ISO ``YYYY-MM-DD`` 형식·개연성만 확인한다. 빈 값은 "선택 안 함"."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise AuthError("생년월일 형식이 올바르지 않습니다.") from exc
+    today = _utcnow_date()
+    if parsed > today:
+        raise AuthError("생년월일이 미래일 수 없습니다.")
+    if today.year - parsed.year > _MAX_PLAUSIBLE_AGE_YEARS:
+        raise AuthError("생년월일이 올바르지 않습니다.")
+    return parsed.isoformat()
+
+
+def _utcnow_date() -> date:
+    return datetime.now(timezone.utc).date()
 
 
 def _clean_display_name(value: object) -> str:
@@ -112,6 +156,8 @@ class AuthUser:
     display_name: str
     created_at: str
     region: str = ""
+    gender: str = ""
+    birth_date: str = ""
     interests: tuple[str, ...] = field(default_factory=tuple)
     marketing_opt_in: bool = False
 
@@ -194,13 +240,25 @@ def _safe_decrypt_name(token, uname: str) -> str:
         return ""
 
 
-def _row_to_user(row, *, display_name: str) -> AuthUser:
+def _safe_decrypt_birth_date(token, uname: str) -> str:
+    if not token:
+        return ""
+    try:
+        return decrypt_pii(token)
+    except Exception:  # noqa: BLE001 - 키 불일치/변조 시 생년월일만 비운다
+        _log.warning("birth_date 복호화 실패 username=%s", mask_email(uname))
+        return ""
+
+
+def _row_to_user(row, *, display_name: str, birth_date: str) -> AuthUser:
     return AuthUser(
         id=int(row["id"]),
         username=row["username"],
         display_name=display_name,
         created_at=row["created_at"],
         region=row["region"] or "",
+        gender=row["gender"] or "",
+        birth_date=birth_date,
         interests=_decrypt_interests(row["interests_enc"]),
         marketing_opt_in=bool(row["marketing_opt_in"]),
     )
@@ -215,6 +273,8 @@ def sign_up(
     display_name: str = "",
     *,
     region: str = "",
+    gender: str = "",
+    birth_date: str = "",
     interests=None,
     marketing_opt_in: bool = False,
     db_path=None,
@@ -227,6 +287,8 @@ def sign_up(
 
     name = _clean_display_name(display_name)
     region = (region or "").strip()
+    gender = _clean_gender(gender)
+    birth_date = _clean_birth_date(birth_date)
     interest_items = tuple(
         str(x).strip() for x in (interests or []) if str(x).strip()
     )
@@ -240,6 +302,8 @@ def sign_up(
                 password_hash=hash_password(password),
                 display_name_enc=encrypt_pii(name) if name else None,
                 region=region or None,
+                gender=gender or None,
+                birth_date_enc=encrypt_pii(birth_date) if birth_date else None,
                 interests_enc=_encrypt_interests(interest_items),
                 marketing_opt_in=marketing_opt_in,
             )
@@ -255,6 +319,8 @@ def sign_up(
         display_name=name,
         created_at=created_at,
         region=region,
+        gender=gender,
+        birth_date=birth_date,
         interests=interest_items,
         marketing_opt_in=bool(marketing_opt_in),
     )
@@ -317,8 +383,9 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
 
         # 저장 시 암호화한 값들을 로그인 시점에 명시적으로 복호화한다 (요구사항 4).
         display_name = _safe_decrypt_name(row["display_name_enc"], uname)
+        birth_date = _safe_decrypt_birth_date(row["birth_date_enc"], uname)
         _log.info("login ok username=%s", mask_email(uname))
-        return _row_to_user(row, display_name=display_name)
+        return _row_to_user(row, display_name=display_name, birth_date=birth_date)
     finally:
         conn.close()
 
@@ -335,7 +402,9 @@ def get_profile(username: str, *, db_path=None) -> AuthUser:
     if row is None:
         raise UserNotFoundError("존재하지 않는 사용자입니다.")
     return _row_to_user(
-        row, display_name=_safe_decrypt_name(row["display_name_enc"], uname)
+        row,
+        display_name=_safe_decrypt_name(row["display_name_enc"], uname),
+        birth_date=_safe_decrypt_birth_date(row["birth_date_enc"], uname),
     )
 
 
@@ -344,6 +413,8 @@ def update_profile(
     *,
     display_name: str | None = None,
     region: str | None = None,
+    gender: str | None = None,
+    birth_date: str | None = None,
     interests=None,
     db_path=None,
 ) -> AuthUser:
@@ -366,6 +437,11 @@ def update_profile(
         if region is not None:
             trimmed = region.strip()
             changes["region"] = trimmed or None
+        if gender is not None:
+            changes["gender"] = _clean_gender(gender) or None
+        if birth_date is not None:
+            cleaned = _clean_birth_date(birth_date)
+            changes["birth_date_enc"] = encrypt_pii(cleaned) if cleaned else None
         if interests is not None:
             changes["interests_enc"] = _encrypt_interests(interests)
 
@@ -376,7 +452,9 @@ def update_profile(
 
     _log.info("profile update ok username=%s", mask_email(uname))
     return _row_to_user(
-        fresh, display_name=_safe_decrypt_name(fresh["display_name_enc"], uname)
+        fresh,
+        display_name=_safe_decrypt_name(fresh["display_name_enc"], uname),
+        birth_date=_safe_decrypt_birth_date(fresh["birth_date_enc"], uname),
     )
 
 

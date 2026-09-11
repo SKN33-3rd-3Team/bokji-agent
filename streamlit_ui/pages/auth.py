@@ -1,8 +1,9 @@
 """로그인 / 회원가입 — 화면 + 인증 연동.
 
 폼 제출은 ``rag_chatbot.auth`` 서비스(SQLite ``users`` 테이블 + bcrypt +
-Fernet)로 처리한다. 회원가입은 이름·거주 지역·관심 지원조건·마케팅 동의까지
-저장하고, 로그인 성공 시 그 프로필을 복호화해 ``st.session_state["auth_user"]``
+Fernet)로 처리한다. 회원가입은 이름·거주 지역·성별·생년월일·관심 지원조건·
+마케팅 동의까지 저장하고, 로그인 성공 시 그 프로필을 복호화해
+``st.session_state["auth_user"]``
 (``session.auth_user_dict`` 형태)에 심는다. 마이페이지에서 이 값을 표시하고
 ``update_profile`` / ``change_password`` 로 수정한다.
 
@@ -11,6 +12,8 @@ Fernet)로 처리한다. 회원가입은 이름·거주 지역·관심 지원조
 """
 
 from __future__ import annotations
+
+from datetime import date
 
 import streamlit as st
 from rag_chatbot.auth import (
@@ -23,7 +26,14 @@ from rag_chatbot.auth import (
     sign_up,
 )
 
-from ..constants import INTEREST_OPTIONS, SIDO_OPTIONS
+from ..constants import (
+    BIRTH_DATE_MIN,
+    GENDER_CODE_BY_LABEL_KO,
+    GENDER_LABELS_KO,
+    GENDER_NONE,
+    INTEREST_OPTIONS,
+    SIDO_OPTIONS,
+)
 from ..nav import goto
 from ..session import auth_user_dict as _user_to_session
 from ..session import clear_auth_form_state, clear_conversation_state, escape_md
@@ -85,11 +95,16 @@ def _handle_signup() -> None:
 
     region_sel = st.session_state.get("su_region") or _REGION_NONE
     region = "" if region_sel == _REGION_NONE else region_sel
+    gender_sel = st.session_state.get("su_gender") or GENDER_NONE
+    gender = GENDER_CODE_BY_LABEL_KO.get(gender_sel, "")
+    birth_date_sel = st.session_state.get("su_birth_date")
+    birth_date = birth_date_sel.isoformat() if isinstance(birth_date_sel, date) else ""
     interests = list(st.session_state.get("su_interests") or [])
     marketing = bool(st.session_state.get("su_marketing"))
 
     try:
-        sign_up(email, password, name, region=region, interests=interests,
+        sign_up(email, password, name, region=region, gender=gender,
+                birth_date=birth_date, interests=interests,
                 marketing_opt_in=marketing)
     except PasswordPolicyError as exc:
         for violation in exc.violations:
@@ -145,6 +160,15 @@ def page_signup() -> None:
             st.markdown("**기본 정보 (선택)**")
             st.caption("입력한 정보는 마이페이지에 저장됩니다.")
             st.selectbox("거주 지역", [_REGION_NONE, *SIDO_OPTIONS], key="su_region")
+            st.radio(
+                "성별", [GENDER_NONE, *GENDER_LABELS_KO.values()],
+                key="su_gender", horizontal=True,
+            )
+            st.date_input(
+                "생년월일", value=None, min_value=BIRTH_DATE_MIN,
+                max_value=date.today(), key="su_birth_date",
+                help="입력하면 상담에서 나이를 다시 묻지 않습니다.",
+            )
             st.pills("해당하는 지원조건", INTEREST_OPTIONS, selection_mode="multi",
                      key="su_interests", default=[])
 

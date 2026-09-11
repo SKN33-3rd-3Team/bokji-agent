@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+
+from rag_design.contracts import SUBSIDY_DETAIL_SECTIONS
+
 from . import ROOT
 
 # ── 경로 ────────────────────────────────────────────────────────────
@@ -19,6 +23,21 @@ SLOT_LABELS_KO: dict[str, str] = {
     "employment_status": "취업 상태",
 }
 
+# 성별 선택지 (회원가입/마이페이지). 코드값("male"/"female")은 하드게이트
+# 슬롯 계약(graph.slot_schema.Gender)과 맞춘다 - 회원가입 때 고른 성별이
+# service.ask(known_gender=...)로 그대로 슬롯에 들어간다.
+GENDER_NONE = "선택 안 함"
+GENDER_LABELS_KO: dict[str, str] = {"male": "남성", "female": "여성"}
+GENDER_CODE_BY_LABEL_KO: dict[str, str] = {
+    label: code for code, label in GENDER_LABELS_KO.items()
+}
+
+# 생년월일 위젯(회원가입/마이페이지)의 선택 가능 범위. 서버 쪽 검증
+# (auth.service._clean_birth_date)의 "미래 불가 / 120년 초과 불가"와 같은
+# 경계를 화면에서도 걸어 둔다 — 두 곳이 따로 있는 값이니, 서버 규칙이
+# 바뀌면 여기도 같이 봐야 한다.
+BIRTH_DATE_MIN = date(date.today().year - 120, 1, 1)
+
 # 자격 판정별 배지 색/아이콘 (config.toml 의 greenColor/redColor/grayColor 와 짝)
 VERDICT_STYLE: dict[str, dict[str, str]] = {
     "충족": {"color": "green", "icon": ":material/check_circle:"},
@@ -27,18 +46,11 @@ VERDICT_STYLE: dict[str, dict[str, str]] = {
 }
 
 # 정책 원문 섹션 코드 → 한글 라벨
+# section_type 목록의 유일한 출처는 rag_design.contracts.SUBSIDY_DETAIL_SECTIONS다
+# (service.py의 _DETAIL_SECTION_TYPES도 같은 곳에서 가져온다) - 예전엔 이 dict를
+# 따로 손으로 관리해서, 구비서류 3종을 추가할 때 두 파일을 같이 고쳐야 했다(#48).
 SECTION_LABELS_KO: dict[str, str] = {
-    "purpose": "목적",
-    "support_target": "지원 대상",
-    "eligibility_criteria": "선정 기준",
-    "support_details": "지원 내용",
-    "application_method": "신청 방법",
-    "application_period": "신청 기간",
-    "legal_basis": "근거 법령",
-    "support_conditions": "지원 조건",
-    "required_documents": "구비서류",
-    "required_documents_official": "공무원 확인 구비서류",
-    "required_documents_self": "본인확인 필요 구비서류",
+    section_type: display_label for section_type, _, display_label in SUBSIDY_DETAIL_SECTIONS
 }
 
 # ── 안내 문구 / 예시 ───────────────────────────────────────────────
