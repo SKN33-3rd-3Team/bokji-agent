@@ -189,11 +189,28 @@ def _parse_ts(value) -> datetime | None:
 # ---------------------------------------------------------------------------
 # 암호화 헬퍼
 # ---------------------------------------------------------------------------
+def _encrypt_safe(plaintext: str) -> str:
+    """``encrypt_pii`` 를 감싸 키 설정 오류를 AuthError 계열로 통일한다.
+
+    ``AUTH_ENC_KEY`` 가 잘못된 형식이면 ``crypto.load_encryption_key`` 가 raw
+    ``RuntimeError`` 를 던지는데, 이는 ``AuthError`` 가 아니라서 화면단의
+    ``except AuthError`` 를 그대로 통과해 사용자에게 노출된다(회원가입·프로필
+    수정마다 재현됨). 원인은 로그에만 남기고 사용자에게는 일반 안내만 준다.
+    """
+    try:
+        return encrypt_pii(plaintext)
+    except RuntimeError as exc:
+        _log.error("PII 암호화 실패(키 설정 오류): %s", exc)
+        raise AuthBackendUnavailableError(
+            "서비스 설정 오류로 요청을 처리할 수 없습니다. 관리자에게 문의해 주세요."
+        ) from exc
+
+
 def _encrypt_interests(interests) -> str | None:
     items = [str(x).strip() for x in (interests or []) if str(x).strip()]
     if not items:
         return None
-    return encrypt_pii(json.dumps(items, ensure_ascii=False))
+    return _encrypt_safe(json.dumps(items, ensure_ascii=False))
 
 
 def _decrypt_interests(token) -> tuple[str, ...]:
@@ -260,7 +277,7 @@ def sign_up(
                 conn,
                 username=uname,
                 password_hash=hash_password(password),
-                display_name_enc=encrypt_pii(name) if name else None,
+                display_name_enc=_encrypt_safe(name) if name else None,
                 region=region or None,
                 interests_enc=_encrypt_interests(interest_items),
                 marketing_opt_in=marketing_opt_in,
@@ -384,7 +401,7 @@ def update_profile(
         changes: dict[str, object] = {}
         if display_name is not None:
             trimmed = _clean_display_name(display_name)
-            changes["display_name_enc"] = encrypt_pii(trimmed) if trimmed else None
+            changes["display_name_enc"] = _encrypt_safe(trimmed) if trimmed else None
         if region is not None:
             trimmed = region.strip()
             changes["region"] = trimmed or None

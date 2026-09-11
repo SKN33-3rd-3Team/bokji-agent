@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -82,6 +83,37 @@ class DuplicateUsername(Exception):
     """이미 존재하는 아이디로 INSERT 시도. 백엔드별 무결성 예외를 통일한 것."""
 
 
+def _as_backend_unavailable(fn):
+    """SQLite 저수준 함수에서 raw ``sqlite3.Error``/``OSError`` 가 새어나가지
+    않게 감싼다.
+
+    권한 오류·디스크 I/O 오류·DB 파일 손상·잠금(``database is locked``) 등으로
+    예외가 나면 ``service`` 를 거쳐 화면단까지 raw 로 올라가는데, 화면단은
+    ``except AuthError`` 만 잡는다. 원격 MySQL 백엔드(``_mysql.py``)와 동일하게
+    :class:`~rag_chatbot.auth.service.AuthBackendUnavailableError` 로 통일한다.
+
+    이 모듈은 ``service`` 가 최상단에서 import 하므로(``from . import
+    repository as repo``), ``service`` 를 여기서 최상단에 import 하면 순환
+    참조로 깨진다 — 예외가 실제로 발생했을 때만 지연 import 한다.
+    ``DuplicateUsername`` 은 ``sqlite3.Error``/``OSError`` 가 아니므로 그대로
+    통과한다.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (sqlite3.Error, OSError) as exc:
+            from .service import AuthBackendUnavailableError
+
+            raise AuthBackendUnavailableError(
+                "회원 데이터베이스 처리 중 오류가 발생했습니다. 잠시 후 다시 "
+                "시도해 주세요."
+            ) from exc
+
+    return wrapper
+
+
 # ---------------------------------------------------------------------------
 # 공통 헬퍼
 # ---------------------------------------------------------------------------
@@ -128,6 +160,7 @@ def parse_db_url(url: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # SQLite 저수준 CRUD (= SqliteBackend 의 구현)
 # ---------------------------------------------------------------------------
+@_as_backend_unavailable
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,6 +170,7 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+@_as_backend_unavailable
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
     have = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
@@ -146,6 +180,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+@_as_backend_unavailable
 def insert_user(
     conn: sqlite3.Connection,
     *,
@@ -182,6 +217,7 @@ def insert_user(
     return int(cur.lastrowid), now
 
 
+@_as_backend_unavailable
 def get_user_by_username(
     conn: sqlite3.Connection, username: str
 ) -> sqlite3.Row | None:
@@ -190,6 +226,7 @@ def get_user_by_username(
     ).fetchone()
 
 
+@_as_backend_unavailable
 def set_password_hash(
     conn: sqlite3.Connection, user_id: int, password_hash: str
 ) -> None:
@@ -202,6 +239,7 @@ def set_password_hash(
     conn.commit()
 
 
+@_as_backend_unavailable
 def set_login_security(
     conn: sqlite3.Connection,
     user_id: int,
@@ -222,6 +260,7 @@ def set_login_security(
     conn.commit()
 
 
+@_as_backend_unavailable
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     """회원 행과 그 내용을 삭제한다 (탈퇴).
 
@@ -243,6 +282,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
         pass
 
 
+@_as_backend_unavailable
 def update_profile_fields(
     conn: sqlite3.Connection,
     user_id: int,

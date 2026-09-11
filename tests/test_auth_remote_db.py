@@ -156,6 +156,86 @@ class BackendUnavailableTests(unittest.TestCase):
             sign_up("someone@example.com", _GOOD_PW, "홍길동")
 
 
+@unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
+class CrudDisconnectTests(unittest.TestCase):
+    """connect() 는 성공했지만 CRUD 도중 연결이 끊기면(Lost connection 등)
+    raw pymysql 예외가 아니라 AuthBackendUnavailableError 로 올라와야 한다."""
+
+    def _backend(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        return MySQLBackend(
+            {"host": "h", "port": 3306, "user": "u", "password": "p",
+             "database": "bokji"}
+        )
+
+    def _dead_conn(self):
+        import pymysql
+
+        class _DeadConn:
+            def cursor(self, *a, **kw):
+                raise pymysql.err.OperationalError(
+                    2013, "Lost connection to MySQL server during query"
+                )
+
+            def commit(self):
+                raise pymysql.err.OperationalError(2006, "MySQL server has gone away")
+
+        return _DeadConn()
+
+    def test_get_user_by_username_wraps_disconnect(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            self._backend().get_user_by_username(self._dead_conn(), "someone@example.com")
+
+    def test_insert_user_wraps_disconnect(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            self._backend().insert_user(
+                self._dead_conn(),
+                username="someone@example.com",
+                password_hash="x",
+                display_name_enc=None,
+            )
+
+    def test_set_password_hash_wraps_disconnect(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            self._backend().set_password_hash(self._dead_conn(), 1, "x")
+
+    def test_set_login_security_wraps_disconnect(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            self._backend().set_login_security(
+                self._dead_conn(), 1, failed_login_count=1, locked_until=None
+            )
+
+    def test_delete_user_wraps_disconnect(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            self._backend().delete_user(self._dead_conn(), 1)
+
+    def test_update_profile_fields_wraps_disconnect(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            self._backend().update_profile_fields(
+                self._dead_conn(), 1, region="서울특별시"
+            )
+
+    def test_insert_user_still_raises_duplicate_username(self):
+        """중복(errno 1062)은 여전히 DuplicateUsername 으로 통과해야 한다
+        (데코레이터가 삼키면 안 됨)."""
+        import pymysql
+
+        class _DupConn:
+            def cursor(self, *a, **kw):
+                raise pymysql.err.IntegrityError(
+                    1062, "Duplicate entry 'x' for key 'uq_users_username'"
+                )
+
+        with self.assertRaises(repo.DuplicateUsername):
+            self._backend().insert_user(
+                _DupConn(),
+                username="dup@example.com",
+                password_hash="x",
+                display_name_enc=None,
+            )
+
+
 @unittest.skipUnless(_LIVE_URL, "AUTH_TEST_DB_URL 미설정 — 라이브 DB 테스트 skip")
 @unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
 class LiveRemoteDbTests(unittest.TestCase):

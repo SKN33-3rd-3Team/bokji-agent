@@ -23,6 +23,7 @@ SQLite 백엔드와 동일한 :class:`~rag_chatbot.auth.repository.SqliteBackend
 
 from __future__ import annotations
 
+import functools
 import os
 from typing import Any, Mapping
 
@@ -65,6 +66,33 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE KEY uq_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
+
+
+def _as_backend_unavailable(fn):
+    """CRUD 경계에서 raw 드라이버 예외(``_MySQLError``)가 새어나가지 않게 감싼다.
+
+    ``connect()`` 는 성공했지만 그 뒤 CRUD 도중 연결이 끊기는 경우가 있다
+    (``wait_timeout`` 만료, 서버 재시작, ``read_timeout``/``write_timeout``,
+    "Lost connection to MySQL server during query" 등). 이때 pymysql 예외를
+    그대로 두면 ``service`` 를 거쳐 화면단까지 올라가는데, 화면단은
+    ``except AuthError`` 만 잡으므로 사용자에게 트레이스백이 노출된다.
+    ``connect()``/``init_schema()`` 와 동일하게
+    :class:`AuthBackendUnavailableError` 로 통일한다.
+
+    ``DuplicateUsername`` 은 ``_MySQLError`` 가 아니므로 그대로 통과한다.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except _MySQLError as exc:
+            raise AuthBackendUnavailableError(
+                "회원 데이터베이스 처리 중 연결이 끊겼습니다. RunPod Pod 가 "
+                "실행 중인지 확인하고 잠시 후 다시 시도해 주세요."
+            ) from exc
+
+    return wrapper
 
 
 def _connect_timeout() -> int:
@@ -134,6 +162,9 @@ class MySQLBackend:
         _schema_ready.add(self._key)
 
     # -- CRUD ---------------------------------------------------------------
+    # 각 메서드는 @_as_backend_unavailable 로 감싸 CRUD 도중 연결이 끊기면
+    # raw pymysql 예외 대신 AuthBackendUnavailableError 가 올라가게 한다.
+    @_as_backend_unavailable
     def insert_user(
         self,
         conn,
@@ -172,11 +203,13 @@ class MySQLBackend:
         conn.commit()
         return new_id, now
 
+    @_as_backend_unavailable
     def get_user_by_username(self, conn, username: str) -> Mapping[str, Any] | None:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM users WHERE username = %s", (username,))
             return cur.fetchone()
 
+    @_as_backend_unavailable
     def set_password_hash(self, conn, user_id: int, password_hash: str) -> None:
         now = _utcnow()
         with conn.cursor() as cur:
@@ -187,6 +220,7 @@ class MySQLBackend:
             )
         conn.commit()
 
+    @_as_backend_unavailable
     def set_login_security(
         self,
         conn,
@@ -203,11 +237,13 @@ class MySQLBackend:
             )
         conn.commit()
 
+    @_as_backend_unavailable
     def delete_user(self, conn, user_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
         conn.commit()
 
+    @_as_backend_unavailable
     def update_profile_fields(
         self,
         conn,
