@@ -158,6 +158,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import os
+from math import isfinite
 
 from dotenv import load_dotenv
 
@@ -259,19 +260,23 @@ def connect_store() -> ChromaVectorStore:
 
 
 def build_llm_client() -> RecordingLLMClient | None:
-    """N1/N5/N9/N10/N13 등에 붙일 LLM 클라이언트를 만든다. 아무 백엔드도
-    설정 안 됐으면 ``None``을 돌려주고 네 노드 모두 규칙 기반/템플릿 경로로
-    동작한다 - LLM 없이도 서비스가 끝까지 도는 성질은 그대로.
+    """LLM_BACKEND에 따라 다른 백엔드의 LLM 클라이언트를 만든다.
+
+    기본 HF 경로는 ``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 붙일 클라이언트를
+    만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
+    기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
+    성질은 그대로 유지한다.
 
     백엔드 선택(``LLM_BACKEND`` 환경변수):
     - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
       ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` / ``RUNPOD_MODEL_NAME`` 필요.
+    - ``ollama``: 로컬 설치된 Ollama의 OpenAI 호환 chat endpoint를 사용한다.
+      ``OLLAMA_MODEL`` 필요.
     - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
       모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
     """
 
     backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
-    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
 
     if backend == "runpod":
         if not (os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY")):
@@ -281,6 +286,24 @@ def build_llm_client() -> RecordingLLMClient | None:
                 timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
             )
         )
+    if backend == "ollama":
+        model = (os.environ.get("OLLAMA_MODEL") or "").strip()
+        if not model:
+            raise ValueError("OLLAMA_MODEL is required for the ollama backend")
+        base_url = (os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url += "/v1"
+        timeout = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or 120)
+        max_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+        if not isfinite(timeout) or timeout <= 0 or max_tokens <= 0:
+            raise ValueError("Ollama timeout and token limit must be positive and finite")
+        return RecordingLLMClient(HuggingFaceInferenceClient(
+            model=model, token="ollama", base_url=base_url,
+            timeout_seconds=timeout, max_new_tokens=max_tokens,
+            extra_body={"reasoning_effort": "none"},
+        ))
+    if backend not in {"hf", "huggingface"}:
+        raise ValueError("LLM_BACKEND must be hf, huggingface, ollama, or runpod")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
@@ -292,7 +315,8 @@ def build_llm_client() -> RecordingLLMClient | None:
     )
     # max_new_tokens: 추론형 모델(Qwen3.5 계열)은 답 전에 내부 사고에 토큰을
     # 크게 써서 호출이 수십 초씩 걸린다. 비추론형/파인튜닝 모델은 훨씬 낮춰도
-    # 되고 그만큼 빨라진다(위 LLM_MAX_NEW_TOKENS로 조절).
+    # 되고 그만큼 빨라진다(LLM_MAX_NEW_TOKENS로 조절).
+    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
 
     # LLM_DISABLE_THINKING=1이면 provider에 "사고 과정을 끄라"고 요청한다.
     # Qwen3 계열 chat template이 지원한다고 알려진 파라미터인데, 이

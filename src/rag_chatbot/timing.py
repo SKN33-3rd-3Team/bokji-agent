@@ -208,7 +208,7 @@ def timed_node(name: str, func):
             TIMER.trace(name, elapsed)
             TIMER.finish()
             if os.environ.get("BOKJI_TRACE") == "1":
-                print(f"     {node_title(name)} 완료 ({elapsed:.2f}초)", flush=True)
+                print(f"     {node_title(name)} 종료 ({elapsed:.2f}초)", flush=True)
 
     return _wrapped
 

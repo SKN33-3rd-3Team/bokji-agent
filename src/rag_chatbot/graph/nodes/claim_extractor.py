@@ -160,7 +160,7 @@ class LLMClaimExtractor:
 
         pending = [
             (policy_id, text)
-            for policy_id, text in items
+            for policy_id, text in dict.fromkeys(items)
             if text.strip() and self._cache_key(policy_id, text) not in self._cache
         ]
         if len(pending) <= 1:
