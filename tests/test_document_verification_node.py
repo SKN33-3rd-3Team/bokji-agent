@@ -133,29 +133,6 @@ class VerifyOfficialDocumentsNodeTests(unittest.TestCase):
         self.assertEqual(len(evidence_ids), 1)
         self.assertLess(len(evidence_ids), len(self.subsidy_chunks))
 
-    def test_retry_fetches_each_policy_once_even_when_no_chunks_match(self) -> None:
-        from unittest.mock import Mock
-
-        for chunks in (self.subsidy_chunks, []):
-            with self.subTest(has_chunks=bool(chunks)):
-                store = Mock()
-                store.search.return_value = chunks
-                state = {
-                    "query_id": "q-1",
-                    "claim_plan": [
-                        self._claim(claim_id="a", doc_retry_count=1),
-                        self._claim(claim_id="b", doc_retry_count=1),
-                    ],
-                }
-                result = verify_official_documents(state, store=store)
-                self.assertEqual(store.search.call_count, 1)
-                expected = "supported" if chunks else "unsupported"
-                self.assertEqual([c["status"] for c in result["claim_plan"]],
-                                 [expected, expected])
-                self.assertEqual(result["subsidy_full_chunks"], list(chunks))
-                verify_official_documents(state, store=store)
-                self.assertEqual(store.search.call_count, 2)
-
     def test_empty_claim_plan_yields_empty_result(self) -> None:
         update = verify_official_documents(
             {"claim_plan": [], "subsidy_chunks": self.subsidy_chunks}

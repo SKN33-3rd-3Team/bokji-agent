@@ -158,11 +158,11 @@ _SELF_ATTRIBUTION_WINDOW = 12
 _AGE_SUBJECT_SELF_TRIGGERS = ("저는", "제가", "저의", "제 나이", "본인", "나는", "내가")
 _AGE_SUBJECT_CHILD_TRIGGERS = (
     "우리 아이", "저희 아이", "제 아이", "우리 애", "저희 애", "애기",
-    "아이가", "아이는", "아이 지원", "여자아이", "남자아이", "자녀", "아들", "딸", "손주", "손자", "손녀",
+    "아이가", "아이는", "아이 지원", "자녀", "아들", "딸", "손주", "손자", "손녀",
 )
 _AGE_SUBJECT_OTHER_TRIGGERS = (
     "부모님", "어머니", "아버지", "할머니", "할아버지", "조부모",
-    "가구원", "피부양자", "모시고", "조카",
+    "가구원", "피부양자", "모시고",
 )
 
 _GENDER_RULES = (
@@ -276,7 +276,7 @@ _INTEREST_KEYWORDS = (
     "지원금제도", "지원금", "실업급여", "청년수당",
     "육아", "출산", "보육", "주거", "주택", "취업", "일자리", "창업",
     "교육", "장학", "의료", "건강", "돌봄", "노인", "장애인", "저소득",
-    "청년", "다문화", "한부모", "유아학비",
+    "청년", "다문화", "한부모",
 )
 
 # 지역 후보를 "원문 그대로" 잘라내기 위한 표현. 정규화(공식 명칭 변환)는
@@ -782,11 +782,7 @@ def _extract_interests(text: str) -> list[str]:
 
     interests: list[str] = []
     for keyword in _INTEREST_KEYWORDS:
-        pattern = (
-            r"유아학비|유치원\s*(?:학비|교육비)|유치원비|누리과정|방과후과정비"
-            if keyword == "유아학비" else re.escape(keyword)
-        )
-        for match in re.finditer(pattern, text):
+        for match in re.finditer(re.escape(keyword), text):
             if text[max(0, match.start() - 1) : match.start()] == _INTEREST_NEGATION_PREFIX:
                 continue
             tail = text[match.end() : match.end() + _INTEREST_NEGATION_WINDOW]

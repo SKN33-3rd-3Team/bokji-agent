@@ -52,6 +52,12 @@ from .nodes.final_verification import route_final_verification, verify_final_ans
 from .nodes.general_law_reference_search import search_general_law_references
 from .nodes.law_source_resolver import VectorStoreLawSourceResolver
 from .nodes.policy_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, search_policies
+from .nodes.request_calc_info import (
+    apply_calc_skip,
+    merge_calc_choice_answer,
+    merge_calc_slot_answer,
+    request_calc_info_input,
+)
 from .nodes.request_missing_slots import request_missing_slot_input
 from .nodes.result_assembly import assemble_result
 from .nodes.slot_completeness_gate import (
@@ -62,10 +68,11 @@ from .nodes.slot_completeness_gate import (
 from .nodes.slot_parser import parse_slots
 from .nodes.targeted_law_search import search_targeted_laws
 from ..timing import timed_node
-from .policy_conditions import SupportConditionsIndex
+from .policy_conditions import PolicyUserTypeIndex, SupportConditionsIndex
 from .state import GraphState
 
 _SlotGateRoute = Literal["sufficient", "general_law", "request_input"]
+_BenefitCalcRoute = Literal["result_assembly", "request_calc_info"]
 
 
 def _route_after_slot_completeness_gate(state: GraphState) -> _SlotGateRoute:
@@ -111,6 +118,61 @@ def _await_missing_slot_input(state: GraphState) -> dict:
     return {**update, "needs_input": False, "user_input": resumed_user_input}
 
 
+def _await_calc_info_input(state: GraphState, llm_client: LLMClient | None = None) -> dict:
+    """N10a(request_calc_info_input)를 감싸 실제 interrupt/resume을 구현한다.
+
+    _await_missing_slot_input과 인터럽트 자체의 구조는 같지만(state를 읽어
+    질문을 만들고 ``interrupt()``로 멈췄다가, 재개 값을 받아 마무리한다),
+    재개 이후 라우팅은 다르다 - _await_missing_slot_input은 슬롯 파싱을
+    N1(slot_parser)에게 맡기고 그냥 N1로 돌아가지만, 이 함수는 슬롯 파싱을
+    직접 끝낸다(``merge_calc_slot_answer``). request_calc_info.py 모듈
+    docstring의 "재입력 라우팅"에 적었듯, 여기서 되묻는 슬롯은 N4~N8의
+    입력이 아니라 N10 금액 계산에만 쓰이므로 N1부터 다시 돌 이유가 없다 -
+    슬롯만 채워서 바로 N9(eligibility_verdict)로 돌아간다(아래 그래프
+    배선의 E18b 참고).
+    """
+
+    update = request_calc_info_input(state)
+    resumed_user_input = interrupt(update["followup_question"])
+    missing_fields = list(state.get("calc_missing_slots") or [])
+    missing_choices = list(state.get("calc_missing_choices") or [])
+    merged_slots = merge_calc_slot_answer(
+        resumed_user_input, missing_fields, state.get("slots") or {}, llm_client=llm_client
+    )
+    merged_choice_answers = merge_calc_choice_answer(
+        resumed_user_input,
+        missing_choices,
+        state.get("calc_choice_answers") or {},
+        llm_client=llm_client,
+    )
+    result = {
+        **update,
+        "needs_input": False,
+        "user_input": resumed_user_input,
+        "slots": merged_slots,
+        "calc_choice_answers": merged_choice_answers,
+    }
+    # 사용자가 "모름/스킵" 류로 답하면(apply_calc_skip), merge_calc_slot_answer/
+    # merge_calc_choice_answer가 채우지 못하고 남긴 슬롯·선택 답변만 UNKNOWN으로
+    # 확정해 재확인 루프를 반복하지 않는다.
+    return apply_calc_skip(state, result, resumed_user_input)
+
+
+def route_after_benefit_calculator(state: GraphState) -> _BenefitCalcRoute:
+    """N10 이후 조건부 분기(E18/E18a).
+
+    benefit_calculator.calculate_benefit_amount()가 이미 되묻기 상한
+    (slot_schema.MAX_SLOT_ASKS)까지 확인하고 나서 state["calc_missing_slots"]/
+    state["calc_missing_choices"]를 채우므로(_select_tier_amount 참고),
+    여기서는 그 값들이 비어 있는지만 본다 - 상한 검사를 두 곳에서 중복하지
+    않는다.
+    """
+
+    if state.get("calc_missing_slots") or state.get("calc_missing_choices"):
+        return "request_calc_info"  # E18a: 계산에 필요한 소프트 슬롯/선택 옵션 재질문
+    return "result_assembly"  # E18: 계산 완료(또는 더 물을 수 없어 확정)
+
+
 def _abstain_insufficient_evidence(state: GraphState) -> dict:
     """N7이 evidence_gate_verdict="fail"로 끝낸 경우(다이어그램 E14)의
     종착 노드.
@@ -139,6 +201,7 @@ def build_graph(
     *,
     llm_client: LLMClient | None = None,
     support_conditions: SupportConditionsIndex | None = None,
+    user_types: PolicyUserTypeIndex | None = None,
 ) -> Any:
     """N1~N14를 다이어그램 간선대로 배선한 컴파일된 LangGraph 그래프를 만든다.
 
@@ -156,6 +219,11 @@ def build_graph(
 
     support_conditions: N4가 semantic 후보를 후처리할 때 쓰는 정부24 raw
     지원조건 index. None이면 모든 후보를 유지한다.
+
+    user_types: N4가 쓰는 source_id -> 사용자구분("개인"/"가구"/
+    "법인/시설/단체" 등) index (2026-09-11 추가 - support_conditions와
+    무관하게 순수 기업/사업자 전용 정책을 개인 사용자에게서 거르는데 쓴다). None이면
+    이 필터를 적용하지 않는다.
 
     반환된 그래프는 ``MemorySaver`` 체크포인터로 컴파일되므로, N3에서
     인터럽트가 걸린 세션을 재개하려면(``resume_graph``) 첫 호출
@@ -178,6 +246,13 @@ def build_graph(
     graph.add_node("slot_completeness_gate", timed_node("slot_completeness_gate", check_slot_completeness))
     graph.add_node("general_law_reference_search", timed_node("general_law_reference_search", search_general_law_references))
     graph.add_node("request_missing_slots", timed_node("request_missing_slots", _await_missing_slot_input))
+    graph.add_node(
+        "request_calc_info",
+        timed_node(
+            "request_calc_info",
+            functools.partial(_await_calc_info_input, llm_client=llm_client),
+        ),
+    )
 
     # --- N4~N14: 기존 정책 검색 ~ 최종 검증 --------------------------------
     graph.add_node(
@@ -188,6 +263,7 @@ def build_graph(
                 search_policies,
                 store=store,
                 support_conditions=support_conditions,
+                user_types=user_types,
             ),
         ),
     )
@@ -206,7 +282,18 @@ def build_graph(
     )
     graph.add_node("evidence_gate", timed_node("evidence_gate", evaluate_evidence))
     graph.add_node("targeted_law_search", timed_node("targeted_law_search", functools.partial(search_targeted_laws, search=store.search)))
-    graph.add_node("eligibility_verdict", timed_node("eligibility_verdict", functools.partial(determine_eligibility, store=store, llm_client=llm_client),))
+    graph.add_node(
+        "eligibility_verdict",
+        timed_node(
+            "eligibility_verdict",
+            functools.partial(
+                determine_eligibility,
+                store=store,
+                llm_client=llm_client,
+                support_conditions=support_conditions,
+            ),
+        ),
+    )
     graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client),))
     graph.add_node("duplicate_benefit", timed_node("duplicate_benefit", functools.partial(check_duplicate_benefit, store=store)))
     graph.add_node("result_assembly", timed_node("result_assembly", functools.partial(assemble_result, store=store)))
@@ -255,10 +342,27 @@ def build_graph(
     graph.add_edge("eligibility_verdict", "benefit_calculator")  # E16
     graph.add_edge("eligibility_verdict", "duplicate_benefit")  # E17
     # result_assembly는 benefit_calculator/duplicate_benefit 두 선행 노드가
-    # 모두 끝난 뒤 한 번만 실행된다(LangGraph의 기본 join 동작 - 두 노드가
-    # 같은 superstep에서 병렬 실행되고, 두 incoming edge가 모두 해소된 다음
-    # superstep에 result_assembly가 실행된다).
-    graph.add_edge("benefit_calculator", "result_assembly")  # E18
+    # 모두 "result_assembly로 감"을 끝낸 뒤 한 번만 실행된다(LangGraph의
+    # 기본 join 동작 - 두 엣지가 같은 superstep에 result_assembly를 가리켜야
+    # 한 번에 합쳐진다). benefit_calculator가 이번 라운드에 request_calc_info로
+    # 빠지면(E18a) 그 superstep에는 duplicate_benefit만 result_assembly를
+    # 가리키므로 result_assembly가 실행되지 않는다(join 대기) - request_calc_info가
+    # N9(eligibility_verdict)로 루프백하면(E18b) E16/E17이 그대로 다시 발화해
+    # benefit_calculator/duplicate_benefit이 같은 superstep에서 재실행되고,
+    # 이번에는 benefit_calculator가 "result_assembly"로 갈라지면서 둘 다
+    # join된다. N1(slot_parser)이 아니라 N9로 되돌리는 이유는
+    # request_calc_info.py 모듈 docstring의 "재입력 라우팅" 참고 - N4~N8을
+    # 다시 돌 필요가 없어 N9의 저비용 재확인(policy_id로 좁힌 단건 검색)만
+    # 거치면 된다.
+    graph.add_conditional_edges(
+        "benefit_calculator",
+        route_after_benefit_calculator,
+        {
+            "result_assembly": "result_assembly",  # E18 계산 완료(또는 더 물을 수 없음)
+            "request_calc_info": "request_calc_info",  # E18a 계산에 필요한 소프트 슬롯 재질문
+        },
+    )
+    graph.add_edge("request_calc_info", "eligibility_verdict")  # E18b 재입력 -> N9 (N1 전체 재실행 대신)
     graph.add_edge("duplicate_benefit", "result_assembly")  # E19
 
     graph.add_edge("result_assembly", "answer_generation")  # E20 assembled_result

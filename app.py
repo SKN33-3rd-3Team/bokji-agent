@@ -11,12 +11,9 @@
 
 from __future__ import annotations
 
-import os
-
 import streamlit as st
 import streamlit_ui  # noqa: F401  # import 경로 부트스트랩(rag_design / rag_chatbot)
 
-from src.rag_chatbot.service import get_store
 from streamlit_ui.pages.auth import page_login, page_signup
 from streamlit_ui.pages.chat import page_chat
 from streamlit_ui.pages.mypage import page_mypage
@@ -31,13 +28,7 @@ _PAGES = {
 }
 
 
-@st.cache_resource(show_spinner="상담 서비스를 준비하고 있어요...")
-def _warmup_embedding() -> None:
-    get_store().embedding_provider.embed_query("복지 서비스 준비")
-
-
 def main() -> None:
-    os.environ.setdefault("BOKJI_TRACE", "1")
     st.set_page_config(
         page_title="복지 에이전트",
         page_icon="💬",
@@ -48,12 +39,6 @@ def main() -> None:
     render_header()
 
     view = st.session_state.get("view", "chat")
-    if view == "chat":
-        try:
-            _warmup_embedding()
-        except (SystemExit, Exception):
-            # Optional warmup: let the chat page handle service errors safely.
-            pass
     _PAGES.get(view, page_chat)()
 
 

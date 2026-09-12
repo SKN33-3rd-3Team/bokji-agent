@@ -39,6 +39,7 @@ _EXPECTED_NODES = {
     "targeted_law_search",  # N8
     "eligibility_verdict",  # N9
     "benefit_calculator",  # N10
+    "request_calc_info",  # N10a
     "duplicate_benefit",  # N11
     "result_assembly",  # N12
     "answer_generation",  # N13
@@ -137,6 +138,31 @@ def test_request_missing_slots_loops_back_to_slot_parser() -> None:
     targets = {edge.target for edge in edges if edge.source == "request_missing_slots"}
 
     assert targets == {"slot_parser"}
+
+
+def test_benefit_calculator_conditional_edges_cover_both_routes() -> None:
+    # E18/E18a: N10 이후에는 부족한 슬롯 유무에 따라 request_calc_info(N10a)
+    # 또는 result_assembly(N12)로 갈린다(route_after_benefit_calculator 참고).
+    graph = build_graph(_store())
+
+    edges = graph.get_graph().edges
+    targets = {edge.target for edge in edges if edge.source == "benefit_calculator"}
+
+    assert targets == {"request_calc_info", "result_assembly"}
+
+
+def test_request_calc_info_loops_back_to_eligibility_verdict() -> None:
+    # E18b(2026-09-09 변경): request_missing_slots(N3)와 달리 N1(slot_parser)
+    # 전체를 다시 돌지 않는다 - 여기서 되묻는 슬롯은 N4~N8의 입력이 아니라
+    # N10 금액 계산에만 쓰이므로, 슬롯 파싱을 이 노드가 직접 끝내고
+    # N9(eligibility_verdict)로만 돌아간다(request_calc_info.py 모듈
+    # docstring의 "재입력 라우팅" 참고).
+    graph = build_graph(_store())
+
+    edges = graph.get_graph().edges
+    targets = {edge.target for edge in edges if edge.source == "request_calc_info"}
+
+    assert targets == {"eligibility_verdict"}
 
 
 def test_evidence_gate_conditional_edges_cover_all_verdicts() -> None:

@@ -220,11 +220,15 @@ def chunk_document(
                     "age_end",
                     "age_basis",
                     "age_source",
-                    # 지원조건조회에서 실제로 켜진 JA 코드만. 전체 딕셔너리
-                    # (support_conditions)는 문서에만 두고 청크에는 싣지
-                    # 않는다 - 청크 8.9만 개에 48개 키를 다 넣으면 색인이
-                    # 크게 불어나는데 정작 쓰는 건 켜진 코드뿐이다.
                     "support_condition_codes",
+                    "support_type",
+                    "user_type",
+                    "organization_type",
+                    "organization_code",
+                    "online_application_url",
+                    "registered_at",
+                    "updated_at_raw",
+                    "view_count",
                 )
             )
             for key in source_metadata_fields:

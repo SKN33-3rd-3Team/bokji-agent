@@ -146,9 +146,32 @@ def assemble_result(state: GraphState, store: ChromaVectorStore) -> dict:
                 entry["status_note"] = "정보 부족: 지원금 계산 결과 없음"
             else:
                 entry["benefit_amount"] = amount
+                if amount.get("amount") is None:
+                    entry["status_note"] = (
+                        amount.get("calculation_note") or "정보 부족: 지원금 계산 결과 없음"
+                    )
 
             if calculation_failed:
                 entry["related_law"] = _find_related_law(policy_id, store, query_id)
+
+        else:
+            # N10은 자격 판정이 "충족"인 정책만 금액을 계산한다(eligible_policy_ids 필터,
+            # benefit_calculator.py 참고) - 그 외(미확인/미충족)는 애초에 amount_by_policy에
+            # 항목이 없다. 예전에는 이 경우 status_note를 아예 남기지 않아(아래 duplicate
+            # 분기가 duplicate가 있으면 실행되지 않으므로), "지원금액 확인 필요"라고만 뜨고
+            # 왜인지 설명이 전혀 안 보이는 문제가 있었다(2026-09-11, "지역 조건 추가 확인
+            # 필요"로 인해 충족에서 미확인으로 내려간 정책의 지원금 칸이 아무 설명 없이
+            # 비어있던 사례로 확인). 자격 자체가 확정되지 않았다는 사실을 그대로 알린다 -
+            # 실패를 숨기지 않는다는 원칙 유지.
+            entry["benefit_amount"] = None
+            if eligibility.get("verdict") == "미충족":
+                entry["status_note"] = (
+                    "자격 조건을 충족하지 않는 것으로 판정되어 지원금을 계산하지 않음"
+                )
+            else:
+                entry["status_note"] = (
+                    "자격 여부가 아직 확인되지 않아 지원금을 계산하지 않음"
+                )
 
         duplicate = duplicate_by_policy.get(policy_id)
         if duplicate is None:
