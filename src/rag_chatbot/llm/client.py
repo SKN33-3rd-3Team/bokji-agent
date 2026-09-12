@@ -34,6 +34,7 @@ import re
 import threading
 import time
 from typing import Iterator, Protocol
+from urllib.parse import urlsplit
 
 from ..timing import TIMER
 
@@ -504,7 +505,14 @@ class HuggingFaceInferenceClient:
         timeout_seconds: float = 60.0,
         max_new_tokens: int = 8192,
         extra_body: dict | None = None,
+        base_url: str | None = None,
     ):
+        if base_url is not None:
+            parsed = urlsplit(base_url)
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.query or parsed.fragment):
+                raise ValueError("base_url must be an HTTP(S) endpoint without credentials")
+        self.base_url = base_url
         self.model = model
         self.token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
         if not self.token:
@@ -538,7 +546,7 @@ class HuggingFaceInferenceClient:
             ) from exc
 
         client = InferenceClient(
-            model=self.model,
+            model=self.base_url or self.model,
             token=self.token,
             provider=self.provider,
             timeout=self.timeout_seconds,
@@ -554,6 +562,7 @@ class HuggingFaceInferenceClient:
                 messages=messages,
                 max_tokens=effective_max_tokens,
                 extra_body=self.extra_body,
+                **({"model": self.model} if self.base_url else {}),
             )
         except (HfHubHTTPError, Exception) as exc:
             # 상태코드별로 "무엇을 확인하면 되는지"까지 담아 던진다.
@@ -561,12 +570,16 @@ class HuggingFaceInferenceClient:
             # requests의 HTTPError 등 다른 예외가 그대로 올라오는 경우가 있어
             # (실측 2026-08-31의 403이 그랬다), 종류와 무관하게 같은 진단을
             # 적용하는 편이 실제로 도움이 된다.
+            if self.base_url:
+                raise LLMCallError("Ollama 호환 엔드포인트 호출 실패") from exc
             raise LLMCallError(diagnose_hf_error(exc, self.model)) from exc
 
         try:
             choice = response.choices[0]
             content = choice.message.content
         except (AttributeError, IndexError, TypeError) as exc:
+            if self.base_url:
+                raise LLMCallError("Ollama 응답 형식 오류") from exc
             raise LLMCallError(f"HuggingFace 응답을 파싱하지 못함: {response!r}") from exc
         finish_reason = getattr(choice, "finish_reason", None)
         if finish_reason == "length":
@@ -584,10 +597,11 @@ class HuggingFaceInferenceClient:
                 else "답을 시작도 못 함(추론형 모델이면 사고 과정에 토큰을 다 썼을 수 있음)"
             )
             raise LLMCallError(
-                f"HuggingFace 응답이 잘림(모델={self.model!r}) - "
+                    f"{'Ollama' if self.base_url else 'HuggingFace'} 응답이 잘림(모델={self.model!r}) - "
                 f"finish_reason='length'로 max_new_tokens={effective_max_tokens} 안에 "
-                f"{detail}. max_new_tokens를 늘려보세요."
             )
+        if self.base_url and (not isinstance(content, str) or not content.strip()):
+            raise LLMCallError("Ollama 응답이 비어 있거나 문자열이 아님")
         if not content:
             raise LLMCallError(f"HuggingFace 응답이 비어 있음: {response!r}")
         return content
