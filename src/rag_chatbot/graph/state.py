@@ -113,6 +113,28 @@ class BenefitAmount(TypedDict, total=False):
     # 원문에 근거가 있을 때만 계산한 총액(월 단가 x 개월수, 1인당 x 가구원수).
     # 근거가 없으면 None - 기간을 모르는데 12를 곱하지 않는다.
     total_amount: float | None
+    # 조건부/구간별 금액 규칙(소득구간·취업상태·장애여부·혼인상태·임신출산상태에
+    # 따라 금액이 달라지는 경우)을 원문에서 찾았지만, 그 규칙이 가리키는 슬롯
+    # 값을 아직 몰라서(주로 marital_status/pregnancy_status처럼 N2 하드 게이트를
+    # 거치지 않는 소프트 슬롯) 금액을 확정하지 못했을 때 True. amount는 이때
+    # None으로 남는다 - 추측으로 대표 tier를 고르지 않는다는 원칙은 그대로다.
+    needs_more_info: bool
+    # needs_more_info=True일 때 어떤 슬롯이 있어야 계산할 수 있는지
+    # (slot_schema 계약에 있는 슬롯 이름). request_calc_info 노드(N10a)가
+    # state["calc_missing_slots"]로 모아 사용자에게 되묻는다.
+    missing_calc_fields: list[str]
+    # 원문이 "90-110만원"처럼 조건 구분 없는 범위로만 금액을 적어서 단일
+    # 금액을 하나로 확정할 수 없을 때(2026-09-11 추가). amount는 이때도
+    # None으로 남는다 - 대표값을 임의로 고르지 않는다는 원칙은 범위에도
+    # 그대로 적용된다. 대신 하한/상한을 둘 다 보여줘서, 원문에 이미 있는
+    # 정보를 "확인 필요"로 뭉개지 않는다. 둘 다 있을 때만 유효하다.
+    amount_min: float | None
+    amount_max: float | None
+    # amount_min/amount_max에 원문 근거가 있는 총액 산술(월 단가 x
+    # 개월수, 1인당 x 가구원수)을 적용할 수 있을 때만 채운다(2026-09-11
+    # 추가) - total_amount와 마찬가지로 근거 없이 만들지 않는다.
+    total_amount_min: float | None
+    total_amount_max: float | None
 
 
 class DuplicateVerdict(TypedDict, total=False):
@@ -199,6 +221,26 @@ class GraphState(TypedDict, total=False):
     claim_plan: list[ClaimDraft]
     eligibility_verdicts: list[EligibilityVerdict]
     benefit_amounts: list[BenefitAmount]
+    # N10(benefit_calculator)이 조건부/구간별 금액 규칙에 필요한 소프트 슬롯을
+    # 확인하지 못했을 때, 이번 턴에 사용자에게 되물을 슬롯 이름 목록.
+    # request_calc_info 노드(N10a)가 이 값을 읽어 질문을 만든다. N2의
+    # missing_slots(하드 게이트)와 별개다 - 자격은 이미 충족했고 금액 계산에만
+    # 필요한 슬롯을 다룬다. ask 상한은 slot_ask_counts를 그대로 공유해서 같은
+    # 슬롯을 N2/N3와 N10a가 각자 무한정 물을 수 없게 한다.
+    calc_missing_slots: list[str]
+    # N10이 "선택형" 조건부 규칙(자연분만/제왕절개처럼 slot_schema
+    # 열거형에 없는 자유 라벨로 금액이 갈리는 경우)에서 아직 사용자의
+    # 선택을 모를 때, 이번 턴에 되물을 정책별 옵션 목록. 슬롯 이름이
+    # 아니라 정책마다 다른 라벨 집합을 들고 다녀야 해서
+    # calc_missing_slots(슬롯 이름 목록)와 따로 둔다. 원소 형태:
+    # {"policy_id": str, "labels": list[str]}.
+    calc_missing_choices: list[dict[str, Any]]
+    # 위 선택형 질문에 대한 사용자 답변을 자유 라벨 매칭으로 정한 값 -
+    # policy_id -> 매칭된 라벨 문자열(또는 확인 불가를 뜻하는
+    # slot_schema.UNKNOWN 센티넬). slots(SlotState)에는 넣지 않는다 -
+    # 이 값은 전역 슬롯이 아니라 이 정책의 이번 계산에만 쓰는 값이다
+    # (request_calc_info.py 모듈 docstring 참고).
+    calc_choice_answers: dict[str, str]
     duplicate_verdicts: list[DuplicateVerdict]
     assembled_result: dict[str, Any]
     node_trace: list[str]
