@@ -144,7 +144,15 @@ def test_assemble_result_fills_related_law_when_amount_missing():
 
 def test_assemble_result_skips_related_law_lookup_when_not_eligible():
     """자격 미충족/미확인 정책은 애초에 금액 계산을 시도하지 않으므로
-    related_law 재검색도 하지 않는다(불필요한 vectorDB 호출 방지 확인)."""
+    related_law 재검색도 하지 않는다(불필요한 vectorDB 호출 방지 확인).
+
+    아울러 benefit_amount는 None으로, status_note는 "자격이 아직 확인되지
+    않았다"는 사실 그대로를 남겨야 한다(2026-09-11 수정 전에는 이 경로에서
+    status_note를 전혀 안 남겨서, duplicate_verdicts가 비어있을 때만 우연히
+    duplicate 판정 문구("정보 부족: 중복수급 판정 결과 없음")가 대신 채워지는
+    바람에 아무도 눈치채지 못했다 - 아래
+    test_assemble_result_leaves_no_silent_blank_status_note_when_not_eligible가
+    duplicate가 있는 실제 사례를 재현한다)."""
     store = FakeStore(subsidy_chunks={}, law_chunks={})
     state = {
         "query_id": "n12",
@@ -158,3 +166,96 @@ def test_assemble_result_skips_related_law_lookup_when_not_eligible():
     entry = result["assembled_result"]["policies"]["policy-b"]
     assert "related_law" not in entry
     assert store.calls == []
+    assert entry["benefit_amount"] is None
+    assert entry["status_note"] == "자격 여부가 아직 확인되지 않아 지원금을 계산하지 않음"
+
+
+def test_assemble_result_leaves_no_silent_blank_status_note_when_not_eligible():
+    """실사용 중 확인된 버그(2026-09-11): "지역 조건 추가 확인 필요"로 자격
+    판정이 충족에서 미확인으로 내려간 정책은 N10이 애초에 금액을 계산하지
+    않는데, 그 정책의 duplicate_verdicts 항목이 존재하면(=None이 아니면)
+    status_note를 채우는 두 분기(충족 분기, duplicate가 None일 때의 설명
+    기본값)가 모두 실행되지 않아 status_note가 아예 안 남았다. 화면에는
+    "지원금액 확인 필요"만 뜨고 왜 그런지 설명이 전혀 없었다 - 자격 근거에
+    금액처럼 보이는 숫자가 있어도 이유를 알 수 없었던 사례.
+    """
+    store = FakeStore(subsidy_chunks={}, law_chunks={})
+    state = {
+        "query_id": "n12",
+        "eligibility_verdicts": [
+            {
+                "policy_id": "policy-region",
+                "verdict": "미확인",
+                "reasons": ["지역 조건 추가 확인 필요"],
+            }
+        ],
+        "benefit_amounts": [],
+        "duplicate_verdicts": [
+            {
+                "policy_id": "policy-region",
+                "status": "미확인",
+                "conflicts_with": [],
+                "condition_note": None,
+            }
+        ],
+    }
+
+    result = assemble_result(state, store)
+
+    entry = result["assembled_result"]["policies"]["policy-region"]
+    assert entry["benefit_amount"] is None
+    assert entry["status_note"] == "자격 여부가 아직 확인되지 않아 지원금을 계산하지 않음"
+
+
+def test_assemble_result_explains_amount_gap_for_verdict_not_met():
+    """자격 미충족(위반 사실 확정)일 때는 미확인과는 다른, 정확한 문구를
+    남긴다 - "아직 확인 안 됨"이 아니라 "충족하지 않는 것으로 판정됨"이다."""
+    store = FakeStore(subsidy_chunks={}, law_chunks={})
+    state = {
+        "query_id": "n12",
+        "eligibility_verdicts": [
+            {"policy_id": "policy-d", "verdict": "미충족", "reasons": ["나이 조건 불충족"]}
+        ],
+        "benefit_amounts": [],
+        "duplicate_verdicts": [
+            {"policy_id": "policy-d", "status": "가능", "conflicts_with": [], "condition_note": None}
+        ],
+    }
+
+    result = assemble_result(state, store)
+
+    entry = result["assembled_result"]["policies"]["policy-d"]
+    assert entry["benefit_amount"] is None
+    assert entry["status_note"] == "자격 조건을 충족하지 않는 것으로 판정되어 지원금을 계산하지 않음"
+
+
+def test_assemble_result_surfaces_calculation_note_when_amount_entry_exists_but_unresolved():
+    """benefit_amounts에 항목은 있지만(N10이 시도는 함) amount가 None인 경우
+    (2026-09-08 추가: 조건부 규칙에 필요한 슬롯을 아직 몰라서 needs_more_info로
+    남은 경우가 대표적)도 status_note가 채워져야 한다 - 그래야 N14가 이 정책을
+    "완료"가 아니라 "부분 응답"으로 판정하고, 화면에도 구체적 사유가 뜬다.
+    이 항목이 없으면(예전 동작) status_note가 비어서 N14가 잘못 "완료"로
+    판정하고, 사용자에게는 사유 없이 "지원금액 계산 불가"만 보였다.
+    """
+    store = FakeStore(subsidy_chunks={}, law_chunks={})
+    state = {
+        "query_id": "n12",
+        "eligibility_verdicts": [{"policy_id": "policy-c", "verdict": "충족", "reasons": ["근거 문장"]}],
+        "benefit_amounts": [
+            {
+                "policy_id": "policy-c",
+                "amount": None,
+                "rule_chunk_id": "chunk-1",
+                "calculation_note": "정확한 금액 계산에 'marital_status' 확인이 필요함",
+                "needs_more_info": True,
+                "missing_calc_fields": ["marital_status"],
+            }
+        ],
+        "duplicate_verdicts": [],
+    }
+
+    result = assemble_result(state, store)
+
+    entry = result["assembled_result"]["policies"]["policy-c"]
+    assert entry["benefit_amount"]["needs_more_info"] is True
+    assert entry["status_note"] == "정확한 금액 계산에 'marital_status' 확인이 필요함"
