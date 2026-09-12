@@ -213,7 +213,7 @@ def test_prefetch_workers_keep_the_request_recording_context(monkeypatch) -> Non
         def __init__(self):
             self.barrier = Barrier(2)
 
-        def complete(self, prompt, *, system=None):
+        def complete(self, prompt, *, system=None, max_tokens=None):
             self.barrier.wait(timeout=5)
             return json.dumps(
                 {"claims": [{"claim_type": "eligibility", "reasons": ["근거"]}]},
