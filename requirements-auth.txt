@@ -7,3 +7,9 @@
 # 운영 배포에서는 아래를 설치해 강한 구현을 쓰는 것을 권장한다.
 bcrypt>=4.0
 cryptography>=42.0
+
+# 원격 회원 DB(RunPod Pod 등의 MySQL/MariaDB)를 쓸 때만 필요 — 기본은 SQLite 라
+# 평소엔 설치하지 않아도 된다. AUTH_DB_URL 을 설정하는 사람만 아래 주석을 풀거나
+#   pip install pymysql
+# 을 실행한다. 배포 절차: docs/AUTH_REMOTE_DB.md
+# pymysql>=1.1

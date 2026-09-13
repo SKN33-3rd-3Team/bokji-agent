@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from rag_chatbot.auth import (
     AccountLockedError,
+    AuthBackendUnavailableError,
     AuthUser,
     InvalidCredentialsError,
     PasswordPolicyError,
@@ -361,6 +363,114 @@ class ServiceTests(unittest.TestCase):
         delete_account("scrubme@example.com", _GOOD_PW, db_path=self.db)
         # secure_delete + wal_checkpoint(TRUNCATE) 후 메인 DB 파일에 흔적이 없다.
         self.assertNotIn(b"scrubme@example.com", Path(self.db).read_bytes())
+
+    # -- AUTH_ENC_KEY 오류가 AuthBackendUnavailableError 로 통일되는지 --------
+    def test_signup_wraps_bad_enc_key_as_backend_unavailable(self):
+        os.environ["AUTH_ENC_KEY"] = "not-a-valid-fernet-key"
+        try:
+            with self.assertRaises(AuthBackendUnavailableError):
+                sign_up("badkey@example.com", _GOOD_PW, "홍길동", db_path=self.db)
+        finally:
+            os.environ["AUTH_ENC_KEY"] = generate_key()
+
+    def test_signup_with_interests_wraps_bad_enc_key(self):
+        # display_name 은 비워 _encrypt_interests 경로(관심조건 암호화)만 탄다.
+        os.environ["AUTH_ENC_KEY"] = "not-a-valid-fernet-key"
+        try:
+            with self.assertRaises(AuthBackendUnavailableError):
+                sign_up("badkey2@example.com", _GOOD_PW, "",
+                        interests=["청년"], db_path=self.db)
+        finally:
+            os.environ["AUTH_ENC_KEY"] = generate_key()
+
+    def test_update_profile_wraps_bad_enc_key_as_backend_unavailable(self):
+        self._signup(username="badkey3@example.com")
+        os.environ["AUTH_ENC_KEY"] = "not-a-valid-fernet-key"
+        try:
+            with self.assertRaises(AuthBackendUnavailableError):
+                update_profile("badkey3@example.com", display_name="새이름",
+                               db_path=self.db)
+        finally:
+            os.environ["AUTH_ENC_KEY"] = generate_key()
+
+
+class SqliteBackendErrorTests(unittest.TestCase):
+    """SQLite 저수준 함수의 raw 예외가 AuthBackendUnavailableError 로 통일되는지.
+
+    ``connect()``/``init_schema()``/CRUD 6개 전부 대상. ``DuplicateUsername``
+    은 그대로 통과해야 한다(데코레이터가 삼키면 안 됨).
+    """
+
+    def _dead_conn(self):
+        class _DeadConn:
+            def execute(self, *a, **kw):
+                raise sqlite3.OperationalError("database is locked")
+
+            def commit(self):
+                raise sqlite3.OperationalError("database is locked")
+
+        return _DeadConn()
+
+    def test_connect_wraps_sqlite_error(self):
+        real_connect = sqlite3.connect
+        sqlite3.connect = lambda *a, **kw: (_ for _ in ()).throw(
+            sqlite3.OperationalError("unable to open database file")
+        )
+        try:
+            with self.assertRaises(AuthBackendUnavailableError):
+                _repo.connect(Path(tempfile.gettempdir()) / "whatever-auth-test.db")
+        finally:
+            sqlite3.connect = real_connect
+
+    def test_init_schema_wraps_sqlite_error(self):
+        class _BadSchemaConn:
+            def executescript(self, *a, **kw):
+                raise sqlite3.OperationalError("disk I/O error")
+
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.init_schema(_BadSchemaConn())
+
+    def test_insert_user_wraps_sqlite_error(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.insert_user(
+                self._dead_conn(), username="x@example.com",
+                password_hash="h", display_name_enc=None,
+            )
+
+    def test_get_user_by_username_wraps_sqlite_error(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.get_user_by_username(self._dead_conn(), "x@example.com")
+
+    def test_set_password_hash_wraps_sqlite_error(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.set_password_hash(self._dead_conn(), 1, "h")
+
+    def test_set_login_security_wraps_sqlite_error(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.set_login_security(
+                self._dead_conn(), 1, failed_login_count=1, locked_until=None
+            )
+
+    def test_delete_user_wraps_sqlite_error(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.delete_user(self._dead_conn(), 1)
+
+    def test_update_profile_fields_wraps_sqlite_error(self):
+        with self.assertRaises(AuthBackendUnavailableError):
+            _repo.update_profile_fields(self._dead_conn(), 1, region="서울특별시")
+
+    def test_insert_user_still_raises_duplicate_username(self):
+        class _DupConn:
+            def execute(self, *a, **kw):
+                raise sqlite3.IntegrityError(
+                    "UNIQUE constraint failed: users.username"
+                )
+
+        with self.assertRaises(_repo.DuplicateUsername):
+            _repo.insert_user(
+                _DupConn(), username="dup@example.com", password_hash="h",
+                display_name_enc=None,
+            )
 
 
 class LoginLockoutTests(unittest.TestCase):
