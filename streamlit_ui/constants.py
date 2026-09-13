@@ -19,28 +19,6 @@ SLOT_LABELS_KO: dict[str, str] = {
     "employment_status": "취업 상태",
 }
 
-# 자격 판정별 배지 색/아이콘 (config.toml 의 greenColor/redColor/grayColor 와 짝)
-VERDICT_STYLE: dict[str, dict[str, str]] = {
-    "충족": {"color": "green", "icon": ":material/check_circle:"},
-    "미충족": {"color": "red", "icon": ":material/cancel:"},
-    "미확인": {"color": "gray", "icon": ":material/help:"},
-}
-
-# 정책 원문 섹션 코드 → 한글 라벨
-SECTION_LABELS_KO: dict[str, str] = {
-    "purpose": "목적",
-    "support_target": "지원 대상",
-    "eligibility_criteria": "선정 기준",
-    "support_details": "지원 내용",
-    "application_method": "신청 방법",
-    "application_period": "신청 기간",
-    "legal_basis": "근거 법령",
-    "support_conditions": "지원 조건",
-    "required_documents": "구비서류",
-    "required_documents_official": "공무원 확인 구비서류",
-    "required_documents_self": "본인확인 필요 구비서류",
-}
-
 # ── 안내 문구 / 예시 ───────────────────────────────────────────────
 EXAMPLE_PROMPTS: list[str] = [
     "서울특별시에 살고 2021년 3월 5일생 남자아이입니다. "
