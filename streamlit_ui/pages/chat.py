@@ -304,6 +304,101 @@ def _render_history() -> None:
                 _render_result_safely(message["result"])
 
 
+def _render_light_answer(out: Mapping[str, object]) -> None:
+    """정책 상세 채팅의 경량 응답(``light_followup.respond_to_policy_question``
+    결과)을 그린다."""
+
+    text = str(out.get("text") or "")
+    if out.get("kind") == "guidance":
+        st.info(text, icon=":material/info:")
+        return
+    st.markdown(text)
+    quotes = [str(q) for q in (out.get("evidence_quotes") or []) if q]
+    if quotes:
+        with st.expander("보충자료", icon=":material/source:"):
+            for quote in quotes:
+                st.markdown(f"- {md_text(quote)}")
+
+
+def _clear_detail_chat() -> None:
+    """상세 문의 채팅방 상태를 비운다(닫기 버튼·모달 X 공통)."""
+
+    st.session_state.pop("detail_chat_policy", None)
+    st.session_state.pop("detail_chat_history", None)
+    st.session_state.pop("_detail_chat_opened", None)
+
+
+@st.dialog("정책 문의 채팅방", width="large", on_dismiss=_clear_detail_chat)
+def _detail_chat_dialog(policy: Mapping[str, object]) -> None:
+    """정책 상세 문의를 화면 한가운데 뜨는 채팅방(모달)으로 띄운다.
+
+    메인 대화(``messages``)와 분리해 ``detail_chat_history``에 쌓는다 - 추천
+    결과 화면은 그대로 두고, 특정 정책 하나만 이어서 물어본다. 모달이라
+    "어디 열렸는지" 헷갈릴 일이 없다. X 또는 "닫기"로 나간다.
+    """
+
+    history = st.session_state.setdefault("detail_chat_history", [])
+    title = md_text(policy.get("title") or policy.get("policy_id") or "이 정책")
+
+    st.markdown(f"##### :material/chat: {title}")
+    st.caption("이 정책 전용 채팅방이에요. 신청·자격·서류 등을 물어보세요.")
+
+    box = st.container(height=360)
+    if not history:
+        box.caption("예: “신청은 어디서 하나요?”, “제가 서울 사는데 대상인가요?”")
+    for message in history:
+        avatar = USER_AVATAR if message["role"] == "user" else BOT_AVATAR
+        with box.chat_message(message["role"], avatar=avatar):
+            if "light_answer" in message:
+                _render_light_answer(message["light_answer"])
+            else:
+                st.markdown(message["content"])
+
+    typed = st.chat_input(f"{title}에 대해 물어보세요", key="detail_chat_input")
+    if st.button("닫기", key="detail_chat_exit", icon=":material/close:"):
+        _clear_detail_chat()
+        st.rerun()
+
+    if typed:
+        _handle_detail_chat_turn(policy, typed)
+
+
+def _handle_detail_chat_turn(policy: Mapping[str, object], prompt: str) -> None:
+    """정책 상세 문의 한 턴 - 무거운 파이프라인 없이 경량 응답으로 답한다.
+
+    결과는 ``detail_chat_history``에만 쌓고 rerun한다. 모달이 다음 실행에서
+    그 기록을 다시 그린다.
+    """
+
+    from src.rag_chatbot.light_followup import respond_to_policy_question
+    from src.rag_chatbot.service import get_llm_client
+
+    history = st.session_state.setdefault("detail_chat_history", [])
+    history.append({"role": "user", "content": prompt})
+
+    # 사이드바 "파악한 정보"(지역·나이·소득 등)를 함께 넘겨 "우리 지역도
+    # 되나요?" 같은 질문에 답할 수 있게 한다. 답변 완료 후에도 세션에 남는다
+    # (_remember_profile).
+    profile = st.session_state.get("profile") or []
+
+    try:
+        client = get_llm_client()
+        with st.spinner("정책 내용을 확인하고 있어요"):
+            out = respond_to_policy_question(
+                policy, prompt, llm_client=client, user_profile=profile
+            )
+    except Exception:  # 내부 정보·비밀값은 화면에 노출하지 않는다.
+        _LOG.exception("정책 상세 채팅 응답 실패")
+        out = {
+            "kind": "guidance",
+            "text": _GENERIC_ERROR_MESSAGE,
+            "evidence_quotes": [],
+        }
+
+    history.append({"role": "assistant", "light_answer": out})
+    st.rerun()
+
+
 def page_chat() -> None:
     st.caption(
         "거주 지역·기본 정보를 바탕으로 지원 제도를 찾아 자격·지원금·중복수급을 "
@@ -323,6 +418,10 @@ def page_chat() -> None:
     _render_history()
     if not st.session_state.messages and not st.session_state.pending_prompt:
         _render_intro()
+
+    # 정책 상세 문의는 화면 한가운데 뜨는 채팅방(모달)으로.
+    if st.session_state.get("detail_chat_policy"):
+        _detail_chat_dialog(st.session_state["detail_chat_policy"])
 
     typed = st.chat_input(
         "메시지를 입력하세요 (예: 서울 사는 2021년 3월생 아이 유아학비 지원 되나요?)"

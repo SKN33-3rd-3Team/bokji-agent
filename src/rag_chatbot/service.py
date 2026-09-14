@@ -176,7 +176,11 @@ from rag_design.vector_store import (
 from .graph import build_graph, resume_graph, run_graph
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
-from .llm import HuggingFaceInferenceClient, RecordingLLMClient
+from .llm import (
+    HuggingFaceInferenceClient,
+    RecordingLLMClient,
+    RunPodServerlessClient,
+)
 from .timing import TIMER, node_title
 
 # 레포 루트의 .env에서 HF_TOKEN/LLM_MODEL_NAME 등을 읽는다(이미 셸에 직접
@@ -266,10 +270,25 @@ def build_llm_client() -> RecordingLLMClient | None:
     기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
     성질은 그대로 유지한다.
 
-    모델 이름은 ``LLM_MODEL_NAME`` 환경변수를 먼저 보고, 없으면 예전 이름
-    ``LLM_HF_MODEL``(``scripts/interactive_console_chat.py``가 쓰던 이름 -
-    하위 호환으로 계속 지원), 그것도 없으면 ``_DEFAULT_HF_MODEL``을 쓴다.
+    백엔드 선택(``LLM_BACKEND`` 환경변수):
+    - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
+      ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
+    - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
+      모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
     """
+
+    backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
+
+    if backend == "runpod":
+        if not (os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY")):
+            return None
+        return RecordingLLMClient(
+            RunPodServerlessClient(
+                timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+            )
+        )
+    if backend not in {"hf", "huggingface"}:
+        raise ValueError("LLM_BACKEND must be hf, huggingface, or runpod")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
@@ -361,6 +380,14 @@ def get_store() -> ChromaVectorStore:
 
     get_graph()
     return _runtime_cache["store"]
+
+
+def get_llm_client() -> Any:
+    """정책 상세 문의 경량 응답(``light_followup``) 등이 재사용하는 공유 LLM
+    클라이언트. ``get_graph()``와 같은 인스턴스이며 HF_TOKEN이 없으면 ``None``."""
+
+    get_graph()
+    return _runtime_cache.get("llm_client")
 
 
 class PolicyDetail(TypedDict, total=False):
@@ -1184,6 +1211,7 @@ __all__ = [
     "build_llm_client",
     "get_graph",
     "get_store",
+    "get_llm_client",
     "ChatResponse",
     "PolicyView",
     "PolicyDetail",

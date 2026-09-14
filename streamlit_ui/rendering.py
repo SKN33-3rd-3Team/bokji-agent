@@ -270,6 +270,20 @@ def _render_policy(
         # 근거인지 알 수 없다. CitationEntry.policy_id 로 갈라 담는다.
         _render_citations(citations or [], title="근거 문서 확인")
 
+        # 이 정책에 대해 상세 질문을 이어갈 수 있는 경량 채팅으로 진입한다.
+        # 무거운 N1~N14 재실행 없이 이 카드가 이미 담고 있는 정보로만 답한다.
+        if st.button(
+            "이 정책에 대해 물어보기",
+            key=f"askpolicy-{metric_key}",
+            icon=":material/chat:",
+            width="stretch",
+        ):
+            # 이 정책 전용 문의 채팅방(모달)을 연다. 다른 정책을 보던 중이면
+            # 그 대화 기록은 버린다(채팅방은 한 번에 정책 하나).
+            st.session_state["detail_chat_policy"] = dict(policy)
+            st.session_state.pop("detail_chat_history", None)
+            st.rerun()
+
         # _render_policy_detail(policy) # conflict
 
 

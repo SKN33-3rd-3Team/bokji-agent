@@ -179,7 +179,8 @@ def test_single_policy_renders_without_arrows() -> None:
     )
 
     assert not app.exception
-    assert len(app.button) == 0
+    # 정책이 하나면 좌우 화살표는 없다("이 정책에 대해 물어보기" 버튼은 있음).
+    assert not any(button.label in ("◀", "▶") for button in app.button)
     assert "정책 1" in " ".join(_values(app.markdown))
 
 
