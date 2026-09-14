@@ -35,7 +35,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -266,7 +266,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -376,7 +376,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     # run_pipeline 은 워커 스레드에서 돌기 때문에 여기서 st.session_state 를
     # 건드릴 수 없다(ScriptRunContext 없음). 받은 값을 응답에 실어 보낸다.
     return {{
@@ -497,7 +497,7 @@ st.session_state.auth_user = {{
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     return {{
         "status": "answered",
         "answer_status": "complete",

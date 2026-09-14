@@ -9,6 +9,8 @@ def test_first_prompt_uses_official_ask(monkeypatch) -> None:
     def fake_ask(
         user_input: str, session_id: str, *, top_k: int, extra_interests=None,
         known_region=None, known_gender=None, known_birth_date=None,
+        known_disability_status=None, known_income_bracket=None,
+        known_household_types=None, known_veteran_status=None,
     ):
         calls.append(("ask", user_input, session_id, top_k, extra_interests, known_region))
         return {"status": "needs_input", "question": "추가 정보"}
@@ -33,6 +35,8 @@ def test_first_prompt_forwards_sidebar_interests(monkeypatch) -> None:
     def fake_ask(
         user_input: str, session_id: str, *, top_k: int, extra_interests=None,
         known_region=None, known_gender=None, known_birth_date=None,
+        known_disability_status=None, known_income_bracket=None,
+        known_household_types=None, known_veteran_status=None,
     ):
         calls.append(("ask", extra_interests))
         return {"status": "answered"}
@@ -57,6 +61,8 @@ def test_first_prompt_forwards_known_region(monkeypatch) -> None:
     def fake_ask(
         user_input: str, session_id: str, *, top_k: int, extra_interests=None,
         known_region=None, known_gender=None, known_birth_date=None,
+        known_disability_status=None, known_income_bracket=None,
+        known_household_types=None, known_veteran_status=None,
     ):
         calls.append(("ask", known_region))
         return {"status": "answered"}
@@ -81,6 +87,8 @@ def test_first_prompt_forwards_known_gender_and_birth_date(monkeypatch) -> None:
     def fake_ask(
         user_input: str, session_id: str, *, top_k: int, extra_interests=None,
         known_region=None, known_gender=None, known_birth_date=None,
+        known_disability_status=None, known_income_bracket=None,
+        known_household_types=None, known_veteran_status=None,
     ):
         calls.append(("ask", known_gender, known_birth_date))
         return {"status": "answered"}

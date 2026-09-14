@@ -28,11 +28,22 @@ from rag_chatbot.auth import (
 
 from ..constants import (
     BIRTH_DATE_MIN,
+    DISABILITY_CODE_BY_LABEL_KO,
+    DISABILITY_LABELS_KO,
+    DISABILITY_NONE,
     GENDER_CODE_BY_LABEL_KO,
     GENDER_LABELS_KO,
     GENDER_NONE,
-    INTEREST_OPTIONS,
+    HOUSEHOLD_TYPE_CODE_BY_LABEL_KO,
+    HOUSEHOLD_TYPE_LABELS_KO,
+    INCOME_BRACKET_CODE_BY_LABEL_KO,
+    INCOME_BRACKET_LABELS_KO,
+    INCOME_BRACKET_NONE,
     SIDO_OPTIONS,
+    SIGNUP_INTEREST_OPTIONS,
+    VETERAN_CODE_BY_LABEL_KO,
+    VETERAN_LABELS_KO,
+    VETERAN_NONE,
 )
 from ..nav import goto
 from ..session import auth_user_dict as _user_to_session
@@ -74,7 +85,10 @@ def _handle_login() -> None:
     clear_conversation_state()
     st.toast(f"{escape_md(user.display_name or user.username)} 님, 환영합니다.",
              icon=":material/check_circle:")
-    goto("chat")
+    # 로그인 성공 시 채팅이 아니라 마이페이지 정보 기반 정책 자동 검색
+    # 화면으로 이동한다(PR #55 리뷰 후속조치). 상담으로 가려면 그 화면
+    # 사이드바의 "상담으로 돌아가기" 버튼을 쓴다.
+    goto("home")
 
 
 def _handle_signup() -> None:
@@ -101,10 +115,24 @@ def _handle_signup() -> None:
     birth_date = birth_date_sel.isoformat() if isinstance(birth_date_sel, date) else ""
     interests = list(st.session_state.get("su_interests") or [])
     marketing = bool(st.session_state.get("su_marketing"))
+    disability_sel = st.session_state.get("su_disability") or DISABILITY_NONE
+    disability_status = DISABILITY_CODE_BY_LABEL_KO.get(disability_sel, "")
+    veteran_sel = st.session_state.get("su_veteran") or VETERAN_NONE
+    veteran_status = VETERAN_CODE_BY_LABEL_KO.get(veteran_sel, "")
+    income_sel = st.session_state.get("su_income") or INCOME_BRACKET_NONE
+    income_bracket = INCOME_BRACKET_CODE_BY_LABEL_KO.get(income_sel, "")
+    household_labels = list(st.session_state.get("su_household_types") or [])
+    household_types = [
+        HOUSEHOLD_TYPE_CODE_BY_LABEL_KO[label]
+        for label in household_labels
+        if label in HOUSEHOLD_TYPE_CODE_BY_LABEL_KO
+    ]
 
     try:
         sign_up(email, password, name, region=region, gender=gender,
                 birth_date=birth_date, interests=interests,
+                disability_status=disability_status, veteran_status=veteran_status,
+                income_bracket=income_bracket, household_types=household_types,
                 marketing_opt_in=marketing)
     except PasswordPolicyError as exc:
         for violation in exc.violations:
@@ -169,8 +197,25 @@ def page_signup() -> None:
                 max_value=date.today(), key="su_birth_date",
                 help="입력하면 상담에서 나이를 다시 묻지 않습니다.",
             )
-            st.pills("해당하는 지원조건", INTEREST_OPTIONS, selection_mode="multi",
+            st.pills("해당하는 지원조건", SIGNUP_INTEREST_OPTIONS, selection_mode="multi",
                      key="su_interests", default=[])
+            st.radio(
+                "장애 등록 여부", [DISABILITY_NONE, *DISABILITY_LABELS_KO.values()],
+                key="su_disability", horizontal=True,
+            )
+            st.pills(
+                "가구 유형 (해당하는 항목 모두 선택)",
+                list(HOUSEHOLD_TYPE_LABELS_KO.values()), selection_mode="multi",
+                key="su_household_types", default=[],
+            )
+            st.radio(
+                "국가유공자/보훈대상자 여부", [VETERAN_NONE, *VETERAN_LABELS_KO.values()],
+                key="su_veteran", horizontal=True,
+            )
+            st.selectbox(
+                "소득 수준", [INCOME_BRACKET_NONE, *INCOME_BRACKET_LABELS_KO.values()],
+                key="su_income",
+            )
 
             st.space("small")
             st.checkbox("[필수] 서비스 이용약관에 동의합니다.", key="su_tos")

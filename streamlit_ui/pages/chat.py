@@ -205,6 +205,38 @@ def _known_birth_date(auth_user: dict | None) -> str | None:
     return auth_user.get("birth_date") or None
 
 
+def _known_disability_status(auth_user: dict | None) -> str | None:
+    """회원가입 때 저장한 장애 등록 여부. 미입력이면 빈 문자열이라 None."""
+
+    if not auth_user:
+        return None
+    return auth_user.get("disability_status") or None
+
+
+def _known_income_bracket(auth_user: dict | None) -> str | None:
+    """회원가입 때 저장한 소득 수준. 미입력이면 빈 문자열이라 None."""
+
+    if not auth_user:
+        return None
+    return auth_user.get("income_bracket") or None
+
+
+def _known_household_types(auth_user: dict | None) -> list[str] | None:
+    """회원가입 때 저장한 가구유형 목록. 미입력이면 빈 리스트라 None."""
+
+    if not auth_user:
+        return None
+    return list(auth_user.get("household_types") or []) or None
+
+
+def _known_veteran_status(auth_user: dict | None) -> str | None:
+    """회원가입 때 저장한 보훈대상자 여부. 미입력이면 빈 문자열이라 None."""
+
+    if not auth_user:
+        return None
+    return auth_user.get("veteran_status") or None
+
+
 def _render_profile_sidebar() -> None:
     """서비스가 파악한 슬롯을 사이드바에 보여준다.
 
@@ -400,6 +432,10 @@ def page_chat() -> None:
                 known_region=_known_region(auth_user),
                 known_gender=_known_gender(auth_user),
                 known_birth_date=_known_birth_date(auth_user),
+                known_disability_status=_known_disability_status(auth_user),
+                known_income_bracket=_known_income_bracket(auth_user),
+                known_household_types=_known_household_types(auth_user),
+                known_veteran_status=_known_veteran_status(auth_user),
             )
         except SystemExit:
             _LOG.exception("서비스 실행 설정 오류")

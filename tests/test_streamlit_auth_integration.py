@@ -141,11 +141,14 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         self.assertTrue(any("이미 가입" in e.value for e in at2.error))
 
     # -- 로그인 -------------------------------------------------------------
-    def test_login_success_sets_session_and_goes_chat(self):
+    def test_login_success_sets_session_and_goes_home(self):
+        """로그인 성공 시 채팅이 아니라 마이페이지 정보 기반 정책 자동 검색
+        화면("home")으로 이동한다(PR #55 리뷰 후속조치)."""
+
         self._signup(self._app("signup"), email="ok@example.com", pw=_PW, name="복지왕")
         at = self._login(self._app("login"), email="ok@example.com", pw=_PW)
         self.assertFalse(at.exception)
-        self.assertEqual(at.session_state["view"], "chat")
+        self.assertEqual(at.session_state["view"], "home")
         user = at.session_state["auth_user"]
         self.assertEqual(user["username"], "ok@example.com")
         self.assertEqual(user["display_name"], "복지왕")
@@ -176,18 +179,22 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         self.assertIn("mp@example.com", " ".join(c.value for c in at.caption))
 
     def test_mypage_shows_signup_profile(self):
+        # "장애인"/"기초생활수급/차상위"/"한부모/조손가정"은 각각 별도
+        # 구조화 필드(장애 등록 여부/소득 수준/가구 유형)와 중복이라
+        # SIGNUP_INTEREST_OPTIONS에서 빠졌다(2026-09-14 리뷰) - 겹치지
+        # 않는 값으로 검증한다.
         at = self._register_and_login(
             email="prof@example.com", name="프로필유저",
-            region="서울특별시", interests=["장애인", "청년"],
+            region="서울특별시", interests=["임신/출산", "청년"],
         )
         self.assertFalse(at.exception)
         blob = " ".join(m.value for m in at.markdown)
         self.assertIn("서울특별시", blob)
-        self.assertIn("장애인", blob)
+        self.assertIn("임신/출산", blob)
         self.assertIn("청년", blob)
         self.assertEqual(at.session_state["auth_user"]["region"], "서울특별시")
         self.assertEqual(
-            set(at.session_state["auth_user"]["interests"]), {"장애인", "청년"}
+            set(at.session_state["auth_user"]["interests"]), {"임신/출산", "청년"}
         )
 
     def test_mypage_shows_signup_gender_and_birth_date(self):
@@ -289,13 +296,13 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         )
         at.text_input(key="pe_name").set_value("바뀐이름")
         at.selectbox(key="pe_region").set_value("인천광역시")
-        at.pills(key="pe_interests").set_value(["장애인", "노인/어르신"])
+        at.pills(key="pe_interests").set_value(["임신/출산", "노인/어르신"])
         at = self._click(at, "저장")
         self.assertFalse(at.exception)
         user = at.session_state["auth_user"]
         self.assertEqual(user["display_name"], "바뀐이름")
         self.assertEqual(user["region"], "인천광역시")
-        self.assertEqual(set(user["interests"]), {"장애인", "노인/어르신"})
+        self.assertEqual(set(user["interests"]), {"임신/출산", "노인/어르신"})
         # 재조회(다음 렌더)에도 유지
         blob = " ".join(m.value for m in at.markdown)
         self.assertIn("바뀐이름", blob)

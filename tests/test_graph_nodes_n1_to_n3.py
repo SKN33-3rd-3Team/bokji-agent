@@ -31,9 +31,12 @@ from rag_chatbot.graph.slot_schema import (  # noqa: E402
     SKIP_NOT_CONFIRMED,
     SKIP_SUBJECT_NOT_SELF,
     HARD_FILTER_SLOTS,
+    HouseholdType,
     MAX_SLOT_ASKS,
+    SLOT_ENUMS,
     SOFT_FILTER_SLOTS,
     calculate_ages,
+    is_valid_slot_value,
     parse_birth_date,
     resolve_filter_slots,
 )
@@ -845,6 +848,16 @@ class ProfileSlotExtractionTests(unittest.TestCase):
             sorted(result["household_types"]), ["multi_child", "multicultural"]
         )
 
+    def test_stating_newlywed_status_sets_household_type(self) -> None:
+        # 신혼부부(HouseholdType.NEWLYWED)도 다른 가구유형과 같은 규칙기반
+        # 커버리지를 갖는다 - 자기서술일 때만 잡고 대상 질문은 잡지 않는다.
+        result = llm_gateway.extract_slots("저희는 신혼부부입니다", {})
+        self.assertEqual(result["household_types"], ["newlywed"])
+
+    def test_asking_about_newlywed_support_does_not_set_household_type(self) -> None:
+        result = llm_gateway.extract_slots("신혼부부 대상 지원 제도 알려주세요", {})
+        self.assertEqual(result["household_types"], [])
+
     def test_median_income_percentage_maps_to_a_bracket(self) -> None:
         for text, expected in (
             ("중위소득 30% 이하입니다", "under_30"),
@@ -1329,6 +1342,26 @@ class AgeSubjectTests(unittest.TestCase):
         self.assertNotIn("age_subject", HARD_GATE_SLOTS)
         missing = check_slot_completeness({"slots": {}})["missing_slots"]
         self.assertNotIn("age_subject", missing)
+
+    def test_veteran_status_is_not_a_hard_gate_or_filter_slot(self) -> None:
+        """보훈대상자(veteran_status)는 대화 재질문도, 검색 필터도 하지 않는다
+        (정부24 raw JA 코드 미검증 - graph.slot_schema.VeteranStatus docstring
+        참고). service.ask()가 known_veteran_status를 interests로만 반영한다.
+        이 테스트는 그 결정이 나중에 실수로 뒤집히지 않게 못박는다."""
+
+        self.assertNotIn("veteran_status", HARD_GATE_SLOTS)
+        self.assertNotIn("veteran_status", HARD_FILTER_SLOTS)
+        self.assertNotIn("veteran_status", SOFT_FILTER_SLOTS)
+        # is_valid_slot_value 재사용을 위해 SLOT_ENUMS에는 등록돼 있다.
+        self.assertIn("veteran_status", SLOT_ENUMS)
+        self.assertTrue(is_valid_slot_value("veteran_status", "registered"))
+        self.assertFalse(is_valid_slot_value("veteran_status", "alien"))
+        missing = check_slot_completeness({"slots": {}})["missing_slots"]
+        self.assertNotIn("veteran_status", missing)
+
+    def test_household_type_includes_newlywed(self) -> None:
+        # 신혼부부는 별도 슬롯이 아니라 가구유형 목록의 값 하나다.
+        self.assertEqual(HouseholdType.NEWLYWED.value, "newlywed")
 
 
 if __name__ == "__main__":

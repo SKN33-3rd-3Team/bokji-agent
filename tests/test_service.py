@@ -1058,6 +1058,107 @@ def test_ask_combines_known_gender_and_birth_date_with_region_and_interests():
     }
 
 
+# ── 회원가입 때 저장한 장애·소득·가구유형·보훈(known_disability_status/
+# known_income_bracket/known_household_types/known_veteran_status) ────────
+
+
+def test_ask_seeds_known_disability_status_as_initial_slot():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_disability_status="registered",
+    )
+    assert captured["slots"] == {"disability_status": "registered"}
+
+
+def test_ask_skips_known_disability_status_outside_the_contract():
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_disability_status="alien",
+    )["slots"] is None
+
+
+def test_ask_seeds_known_income_bracket_as_initial_slot():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_income_bracket="under_30",
+    )
+    assert captured["slots"] == {"income_bracket": "under_30"}
+
+
+def test_ask_skips_known_income_bracket_outside_the_contract():
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_income_bracket="alien",
+    )["slots"] is None
+
+
+def test_ask_seeds_known_household_types_as_initial_slot():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5,
+        known_household_types=["single_parent", "newlywed"],
+    )
+    assert captured["slots"] == {
+        "household_types": ["single_parent", "newlywed"],
+    }
+
+
+def test_ask_drops_only_the_invalid_known_household_types():
+    """계약 밖 값만 조용히 빠지고, 유효한 값은 그대로 남는다(fail-closed는
+    "값 하나"가 아니라 "그 항목"에만 적용된다)."""
+
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5,
+        known_household_types=["single_parent", "alien"],
+    )
+    assert captured["slots"] == {"household_types": ["single_parent"]}
+
+
+def test_ask_skips_empty_known_household_types():
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_household_types=[],
+    )["slots"] is None
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_household_types=None,
+    )["slots"] is None
+
+
+def test_ask_known_veteran_status_only_adds_search_interest():
+    """보훈대상자는 하드/소프트 필터로 연결하지 않는다(정부24 raw JA 코드가
+    검증되지 않아서 - graph.slot_schema.VeteranStatus docstring 참고). 대신
+    검색 질의를 넓히는 interests에만 반영된다."""
+
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_veteran_status="registered",
+    )
+    assert captured["slots"] == {"interests": ["국가유공자/보훈"]}
+
+
+def test_ask_known_veteran_status_not_registered_adds_nothing():
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_veteran_status="not_registered",
+    )["slots"] is None
+
+
+def test_ask_known_veteran_status_combines_with_selected_interests():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5,
+        extra_interests=["청년"],
+        known_veteran_status="registered",
+    )
+    assert captured["slots"] == {"interests": ["청년", "국가유공자/보훈"]}
+
+
+def test_ask_known_veteran_status_does_not_duplicate_existing_interest():
+    captured = _ask_capturing_run_graph(
+        "질문", "s1", top_k=5,
+        extra_interests=["국가유공자/보훈"],
+        known_veteran_status="registered",
+    )
+    assert captured["slots"] == {"interests": ["국가유공자/보훈"]}
+
+
+def test_ask_skips_known_veteran_status_outside_the_contract():
+    assert _ask_capturing_run_graph(
+        "질문", "s1", top_k=5, known_veteran_status="alien",
+    )["slots"] is None
+
+
 # ── 토큰 한도로 잘린 LLM 응답 ───────────────────────────────────────
 
 

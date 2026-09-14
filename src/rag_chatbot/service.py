@@ -177,7 +177,12 @@ from rag_design.vector_store import (
 from .graph import build_graph, resume_graph, run_graph
 from .graph.nodes.slot_parser import normalize_region_input
 from .graph.policy_conditions import load_support_conditions
-from .graph.slot_schema import UNKNOWN, is_valid_slot_value, parse_birth_date
+from .graph.slot_schema import (
+    UNKNOWN,
+    HouseholdType,
+    is_valid_slot_value,
+    parse_birth_date,
+)
 from .llm import HuggingFaceInferenceClient, RecordingLLMClient
 from .timing import TIMER, node_title
 
@@ -792,8 +797,14 @@ _HOUSEHOLD_KO = {
     "single_parent": "한부모", "multi_child": "다자녀", "multicultural": "다문화",
     "grandparent": "조손", "single_person": "1인 가구",
     "north_korean_defector": "북한이탈주민", "care_leaver": "자립준비청년",
-    "facility_leaver": "시설퇴소",
+    "facility_leaver": "시설퇴소", "newlywed": "신혼부부",
 }
+# veteran_status는 하드 게이트 슬롯이 아니라 known_veteran_status로 채워진
+# interests 텍스트("국가유공자/보훈")로만 검색에 반영되므로(service.ask()
+# docstring 참고), 이 슬롯 자체는 대화 중 채워지지 않는다. 그래도 프로필
+# 표시용 라벨은 남겨둔다 - 다른 경로로 slots에 실릴 가능성까지 막지 않기
+# 위함(예: 향후 회원 정보를 그대로 slots에 얹는 경로가 생길 경우).
+_VETERAN_KO = {"registered": "보훈대상자", "not_registered": "해당 없음"}
 
 
 def _build_profile(slots: Any) -> list[dict]:
@@ -832,6 +843,7 @@ def _build_profile(slots: Any) -> list[dict]:
         ("employment_status", _EMPLOYMENT_KO, "취업 상태"),
         ("marital_status", _MARITAL_KO, "혼인"),
         ("pregnancy_status", _PREGNANCY_KO, "임신"),
+        ("veteran_status", _VETERAN_KO, "보훈"),
     ):
         value = slots.get(key)
         if isinstance(value, str) and value != UNKNOWN and value in mapping:
@@ -1037,6 +1049,9 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
     }
 
 
+_VETERAN_INTEREST_KEYWORD = "국가유공자/보훈"
+
+
 def ask(
     user_input: str,
     session_id: str,
@@ -1046,6 +1061,10 @@ def ask(
     known_region: str | None = None,
     known_gender: str | None = None,
     known_birth_date: str | None = None,
+    known_disability_status: str | None = None,
+    known_income_bracket: str | None = None,
+    known_household_types: list[str] | None = None,
+    known_veteran_status: str | None = None,
 ) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
     질문을 입력했을 때 호출한다.
@@ -1080,6 +1099,26 @@ def ask(
     타므로 이 함수는 초기값만 얹는다), 계약에 없는 값이거나(``is_valid_slot_value``)
     파싱 불가능한 날짜면(``parse_birth_date``) 조용히 건너뛴다.
 
+    ``known_disability_status``/``known_income_bracket``도 같은 방식이다 -
+    회원가입 때 저장한 장애 등록 여부("registered"/"not_registered")·소득
+    구간("under_30" 등)을 초기 슬롯에 미리 채운다. 둘 다 계약에 없는 값이면
+    조용히 건너뛴다.
+
+    ``known_household_types``는 회원가입 때 저장한 가구유형 목록(예:
+    ``["single_parent", "newlywed"]``)이다. 소프트 슬롯(``household_types``)
+    이라 하드 게이트에도 검색 필터에도 관여하지 않고, 계약에 있는 값만 골라
+    초기 슬롯에 채운다.
+
+    ``known_veteran_status``는 회원가입 때 저장한 보훈대상자 여부다. **하드/
+    소프트 필터로 연결하지 않는다** - 정부24 raw 지원조건 sidecar
+    (``policy_conditions.py``)의 JA 코드 중 어느 것이 보훈에 대응하는지
+    검증할 방법이 없어서, 추측한 코드로 필터를 걸면 검증 안 된 조건으로
+    정책이 조용히 잘못 걸러질 위험이 있다(``graph.slot_schema.VeteranStatus``
+    클래스 docstring 참고 - "지어내지 않는다" 원칙). 대신 ``"registered"``면
+    이미 안전하게 검증된 소프트 경로인 ``interests``에
+    ``"국가유공자/보훈"``(``streamlit_ui.constants.INTEREST_OPTIONS``와 동일
+    문자열)을 얹어 검색 질의만 넓힌다 - 자격 판정에는 관여하지 않는다.
+
     ``answer_followup()``에는 이 인자들이 없다. 재개 시점에는 이미 체크포인터에
     슬롯이 있고, 중간에 초기 슬롯을 갈아끼우면 이전 턴의 판정 근거와
     어긋나기 때문이다 - 화면에서 선택을 바꿨다면 새 상담으로 물어야 한다.
@@ -1104,6 +1143,29 @@ def ask(
                 initial_slots["gender"] = known_gender
             if known_birth_date and parse_birth_date(known_birth_date, date.today()):
                 initial_slots["birth_date"] = known_birth_date
+            if known_disability_status and is_valid_slot_value(
+                "disability_status", known_disability_status
+            ):
+                initial_slots["disability_status"] = known_disability_status
+            if known_income_bracket and is_valid_slot_value(
+                "income_bracket", known_income_bracket
+            ):
+                initial_slots["income_bracket"] = known_income_bracket
+            if known_household_types:
+                valid_household_types = {member.value for member in HouseholdType}
+                household_types = [
+                    str(item)
+                    for item in known_household_types
+                    if str(item) in valid_household_types
+                ]
+                if household_types:
+                    initial_slots["household_types"] = household_types
+            if known_veteran_status and is_valid_slot_value(
+                "veteran_status", known_veteran_status
+            ) and known_veteran_status == "registered":
+                if _VETERAN_INTEREST_KEYWORD not in interests:
+                    interests.append(_VETERAN_INTEREST_KEYWORD)
+                initial_slots["interests"] = interests
             result = run_graph(
                 graph,
                 user_input=user_input,

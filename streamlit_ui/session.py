@@ -79,6 +79,10 @@ def auth_user_dict(user) -> dict:
         "gender": user.gender,
         "birth_date": user.birth_date,
         "interests": list(user.interests),
+        "disability_status": user.disability_status,
+        "veteran_status": user.veteran_status,
+        "income_bracket": user.income_bracket,
+        "household_types": list(user.household_types),
         "marketing_opt_in": user.marketing_opt_in,
     }
 
@@ -110,6 +114,11 @@ def clear_conversation_state() -> None:
 
     st.session_state.pop("interests_pick", None)
     st.session_state.pop("fields_pick", None)
+    # home.py(마이페이지 정보 기반 정책 자동 검색)의 캐시된 세션·결과도
+    # 이전 사용자 것이 다음 사용자에게 그대로 보이지 않게 비운다.
+    st.session_state.pop("home_session_id", None)
+    st.session_state.pop("home_result", None)
+    st.session_state.pop("home_followup_answer", None)
     new_conversation(st.session_state, clear_messages=True)
 
 

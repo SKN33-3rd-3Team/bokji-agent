@@ -16,6 +16,14 @@
                          (표시 이름과 같은 직접 식별자라 암호화한다)
 - ``interests_enc``    : 관심 지원조건 JSON 배열, Fernet 암호문 (장애·보훈·
                          기초수급 등 민감 범주가 섞일 수 있어 암호화한다)
+- ``disability_status_enc`` : "registered"/"not_registered", Fernet 암호문
+                         (장애 등록 여부 - 건강정보성 민감 범주)
+- ``veteran_status_enc``    : "registered"/"not_registered", Fernet 암호문
+                         (국가유공자/보훈대상자 여부 - 법적 지위 민감 범주)
+- ``income_bracket_enc``    : 소득 구간 코드("under_30" 등), Fernet 암호문
+                         (기초수급 여부가 이 구간에 포함돼 민감하다)
+- ``household_types_enc``   : 가구유형 JSON 배열, Fernet 암호문 (다문화·
+                         북한이탈주민 등 민감 범주가 섞일 수 있어 암호화한다)
 - ``marketing_opt_in`` : 0/1
 - ``failed_login_count``: 연속 로그인 실패 횟수 (성공 시 0으로 초기화)
 - ``locked_until``     : 계정 잠금 해제 시각, ISO8601 UTC (없으면 NULL)
@@ -43,6 +51,10 @@ CREATE TABLE IF NOT EXISTS users (
     gender              TEXT,
     birth_date_enc      TEXT,
     interests_enc       TEXT,
+    disability_status_enc TEXT,
+    veteran_status_enc  TEXT,
+    income_bracket_enc  TEXT,
+    household_types_enc TEXT,
     marketing_opt_in    INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
@@ -58,6 +70,10 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("gender", "gender TEXT"),
     ("birth_date_enc", "birth_date_enc TEXT"),
     ("interests_enc", "interests_enc TEXT"),
+    ("disability_status_enc", "disability_status_enc TEXT"),
+    ("veteran_status_enc", "veteran_status_enc TEXT"),
+    ("income_bracket_enc", "income_bracket_enc TEXT"),
+    ("household_types_enc", "household_types_enc TEXT"),
     ("marketing_opt_in", "marketing_opt_in INTEGER NOT NULL DEFAULT 0"),
     ("failed_login_count", "failed_login_count INTEGER NOT NULL DEFAULT 0"),
     ("locked_until", "locked_until TEXT"),
@@ -106,6 +122,10 @@ def insert_user(
     gender: str | None = None,
     birth_date_enc: str | None = None,
     interests_enc: str | None = None,
+    disability_status_enc: str | None = None,
+    veteran_status_enc: str | None = None,
+    income_bracket_enc: str | None = None,
+    household_types_enc: str | None = None,
     marketing_opt_in: bool = False,
 ) -> tuple[int, str]:
     """``(user_id, created_at)`` 를 돌려준다. 중복이면 ``sqlite3.IntegrityError``."""
@@ -114,8 +134,9 @@ def insert_user(
     cur = conn.execute(
         "INSERT INTO users "
         "(username, password_hash, display_name_enc, region, gender, "
-        "birth_date_enc, interests_enc, marketing_opt_in, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "birth_date_enc, interests_enc, disability_status_enc, veteran_status_enc, "
+        "income_bracket_enc, household_types_enc, marketing_opt_in, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             username,
             password_hash,
@@ -124,6 +145,10 @@ def insert_user(
             gender,
             birth_date_enc,
             interests_enc,
+            disability_status_enc,
+            veteran_status_enc,
+            income_bracket_enc,
+            household_types_enc,
             1 if marketing_opt_in else 0,
             now,
             now,
@@ -203,6 +228,10 @@ def update_profile_fields(
     gender: object = _UNSET,
     birth_date_enc: object = _UNSET,
     interests_enc: object = _UNSET,
+    disability_status_enc: object = _UNSET,
+    veteran_status_enc: object = _UNSET,
+    income_bracket_enc: object = _UNSET,
+    household_types_enc: object = _UNSET,
 ) -> None:
     """전달된 컬럼만 UPDATE 한다. ``_UNSET`` 인자는 손대지 않는다."""
 
@@ -214,6 +243,10 @@ def update_profile_fields(
         ("gender", gender),
         ("birth_date_enc", birth_date_enc),
         ("interests_enc", interests_enc),
+        ("disability_status_enc", disability_status_enc),
+        ("veteran_status_enc", veteran_status_enc),
+        ("income_bracket_enc", income_bracket_enc),
+        ("household_types_enc", household_types_enc),
     ):
         if value is not _UNSET:
             sets.append(f"{column} = ?")

@@ -109,6 +109,33 @@ class HouseholdType(str, Enum):
     NORTH_KOREAN_DEFECTOR = "north_korean_defector"
     CARE_LEAVER = "care_leaver"
     FACILITY_LEAVER = "facility_leaver"
+    # 강사님 주제 컨펌(2026-09-14): 신혼부부는 별도 슬롯을 새로 만들지 않고
+    # 이 가구유형 목록의 값 하나로 포함한다(보훈대상자는 성격이 달라
+    # VeteranStatus로 별도 슬롯을 둔다 - 아래 참고).
+    NEWLYWED = "newlywed"
+
+
+class VeteranStatus(str, Enum):
+    """국가유공자/보훈대상자 여부.
+
+    가구유형(household_types)과는 성격이 다른 별개의 법적 지위라서(강사님
+    주제 컨펌, 2026-09-14) 가구유형에 끼워넣지 않고 별도 슬롯으로 둔다.
+    다만 이 슬롯은 ``HARD_GATE_SLOTS``에도 ``FILTERABLE_SLOTS``에도 **의도적으로
+    넣지 않는다** - N3가 대화 중 다시 묻지도, N4가 검색 필터로 걸지도 않는다.
+    정부24 raw 지원조건 sidecar(``policy_conditions.py``)의 JA 코드 중 어느
+    것이 보훈에 대응하는지 이 코드베이스 어디에도 검증 가능한 형태로 없고
+    원본 raw JSON도 확인할 수 없어서, 추측한 코드로 필터를 걸면 검증 안 된
+    조건으로 정책이 조용히 탈락/통과할 위험이 있다 - "지어내지 않는다"는
+    이 모듈 전반의 fail-open/fail-closed 원칙과 어긋난다. 그래서 이 값은
+    ``service.ask()``가 회원가입 때 저장된 값을 ``interests``(소프트 검색
+    키워드, 자격 판정에 관여하지 않음)에만 반영한다. 나중에 실제 JA 코드가
+    확인되면 ``policy_conditions.matches_profile()``에 다섯 번째 범주로
+    추가하는 국소적 후속 작업으로 확장할 것 - 이 슬롯을 빠뜨린 게 아니다.
+    """
+
+    REGISTERED = "registered"
+    NOT_REGISTERED = "not_registered"
+    UNKNOWN = UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +205,12 @@ SLOT_ENUMS: dict[str, type[Enum]] = {
     "employment_status": EmploymentStatus,
     "marital_status": MaritalStatus,
     "pregnancy_status": PregnancyStatus,
+    # HARD_GATE_SLOTS/FILTERABLE_SLOTS에는 넣지 않는다 - VeteranStatus
+    # 클래스 docstring 참고. is_valid_slot_value("veteran_status", ...)
+    # 재사용만을 위해 등록한다. llm_gateway._LLM_ENUM_DESCRIPTIONS(수동
+    # 관리 dict)에 이 필드를 추가하지 않는 한 LLM/규칙 기반 추출에는
+    # 영향이 없다(SLOT_ENUMS를 직접 순회해 프롬프트를 만들지 않음).
+    "veteran_status": VeteranStatus,
 }
 
 # 같은 슬롯을 몇 번까지 되물을지. 이 횟수를 넘기면 센티넬(UNKNOWN)로 확정하고
