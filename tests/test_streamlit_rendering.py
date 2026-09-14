@@ -24,6 +24,16 @@ def _expander_labels(app) -> list[str]:
     ]
 
 
+def _html_values(app) -> list[str]:
+    """정책 카드/상세/비교 화면은 배지·칩을 ``st.html``로 그린다.
+
+    ``AppTest``는 이 노드를 ``get('html')``로만 꺼낼 수 있다(전용 accessor 없음).
+    반환되는 ``UnknownElement``의 실제 텍스트는 ``.body``(protobuf 필드)에 있다.
+    """
+
+    return [str(element.proto.body) for element in app.get("html")]
+
+
 def test_needs_input_renders_question_and_missing_slot_labels() -> None:
     app = _render(
         {
@@ -45,10 +55,11 @@ def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
     app = _render(
         {
             "status": "answered",
+            "session_id": "session-1",
             "answer_status": "complete",
             "final_answer": "확인된 범위의 안내입니다.",
             "final_citations": [
-                {"label": "정책 공식 페이지", "source_url": "https://gov.example/p1"}
+                {"policy_id": "p1", "label": "정책 공식 페이지", "source_url": "https://gov.example/p1"}
             ],
             "policies": [
                 {
@@ -82,106 +93,282 @@ def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
     )
 
     markdown = " ".join(_values(app.markdown))
-    info = " ".join(_values(app.info))
     captions = " ".join(_values(app.caption))
-    metrics = " ".join(_values(app.metric))
+    grid_html = " ".join(_html_values(app))
 
-    assert "확인된 범위의 안내입니다." in markdown
-    assert "청년 주거 지원" in markdown
-    assert "연령만 확인" in info
-    assert "확인한 조건: 연령" in captions
-    assert "확인하지 못한 조건: 소득" in captions
-    assert "월 최대 200,000원" in metrics
-    assert "조건부" in metrics
-    assert "정책 공식 페이지" in markdown
+    # final_answer 문장은 카드가 있을 때는 중복이라 더 보여주지 않는다.
+    assert "확인된 범위의 안내입니다." not in markdown
+    assert "청년 주거 지원" in grid_html
+    assert "연령만 확인" in grid_html  # 카드 소개문 = verification_note
+    assert "월 최대 200,000원" in grid_html
     assert "AI 분석 적용" in captions
 
+    # 지원자격 확인 조건·중복수급 상세는 "자세히 보기"를 눌러야 나온다.
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
+    detail_html = " ".join(_html_values(app))
+    assert "확인함 · 연령" in detail_html
+    assert "미확인 · 소득" in detail_html
+    assert "조건부" in detail_html
 
-def test_policies_are_shown_one_card_at_a_time_with_arrows() -> None:
+
+def _two_policy_response() -> dict:
+    return {
+        "status": "answered",
+        "session_id": "session-1",
+        "answer_status": "complete",
+        "final_answer": "두 정책을 확인했습니다.",
+        "final_citations": [],
+        "policies": [
+            {
+                "policy_id": "p1",
+                "title": "정책 1",
+                "eligibility_status": "충족",
+                "amount_label": "10만원",
+                "duplicate_status": "가능",
+            },
+            {
+                "policy_id": "p2",
+                "title": "정책 2",
+                "eligibility_status": "미확인",
+                "amount_label": "20만원",
+                "duplicate_status": "확인 필요",
+            },
+        ],
+        "llm_status": {"enabled": False},
+    }
+
+
+def test_policy_list_shows_every_card_with_a_detail_button() -> None:
+    """시안(정책 상세 화면 시안)처럼 정책을 한 장씩 넘기지 않고 목록으로 다 보여준다."""
+
+    app = _render(_two_policy_response())
+
+    assert not app.exception
+    grid_html = " ".join(_html_values(app))
+    assert "정책 1" in grid_html
+    assert "정책 2" in grid_html
+    detail_buttons = {b.key for b in app.button if b.key and b.key.startswith("policy_open_")}
+    assert detail_buttons == {"policy_open_session-1_p1", "policy_open_session-1_p2"}
+    # 2개 미만 선택 상태에서는 "비교하기"가 비활성화돼 있다.
+    compare_btn = next(b for b in app.button if b.key == "policy_compare_btn_session-1")
+    assert compare_btn.disabled is True
+
+
+def test_detail_button_opens_single_policy_view_with_back_link() -> None:
+    app = _render(_two_policy_response())
+
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p2").click().run(timeout=10)
+
+    assert not app.exception
+    detail_html = " ".join(_html_values(app))
+    assert "정책 2" in detail_html
+    assert "정책 1" not in detail_html
+    back_buttons = [b for b in app.button if "목록으로" in (b.label or "")]
+    assert len(back_buttons) == 1
+
+    app = back_buttons[0].click().run(timeout=10)
+    assert not app.exception
+    grid_html = " ".join(_html_values(app))
+    assert "정책 1" in grid_html
+    assert "정책 2" in grid_html
+
+
+def test_required_documents_render_as_uniform_bulleted_bars_regardless_of_line_length() -> None:
+    """구비서류 항목은 짧든 길든(괄호 설명이 붙어 60자를 넘든) 전부 "○" 접두사가
+    붙은 회색 바 목록으로 통일해서 보여준다 - 정책마다 어떤 서류는 칩으로,
+    어떤 서류는 문단으로 갈려 보이던 문제를 없앤다."""
+
+    app = _render(
+        {
+            "status": "answered",
+            "session_id": "session-1",
+            "answer_status": "complete",
+            "final_answer": "확인했습니다.",
+            "policies": [
+                {
+                    "policy_id": "p1",
+                    "title": "정책 A",
+                    "detail": {
+                        "required_documents": (
+                            "정부지원 아이돌봄서비스 지원결정서(해당년도 2월 이후 발행분)\n"
+                            "(아동과 4촌이내의 친인척 확인 가능한)가족관계증명서\n"
+                            "수급자 또는 양육자 통장 사본"
+                        )
+                    },
+                }
+            ],
+        }
+    )
+
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
+    assert not app.exception
+    detail_html = " ".join(_html_values(app))
+    assert '<div class="bkw-doclist-row">○ 정부지원 아이돌봄서비스 지원결정서(해당년도 2월 이후 발행분)</div>' in detail_html
+    assert '<div class="bkw-doclist-row">○ 수급자 또는 양육자 통장 사본</div>' in detail_html
+    # 문단 fallback(md_text로 그냥 뿌리는 경로)으로 빠지지 않는다.
+    assert "**구비서류**" not in " ".join(_values(app.markdown))
+
+
+def test_required_documents_group_headers_are_not_bulleted_like_leaf_items() -> None:
+    """"□ 유형별 제출 서류", "1) 세대원 변경..." 같은 상위 구분 줄은 실제
+    서류가 아니므로 동그라미 칩이 아니라 굵은 구분 텍스트로 따로 보여준다."""
+
+    app = _render(
+        {
+            "status": "answered",
+            "session_id": "session-1",
+            "answer_status": "complete",
+            "final_answer": "확인했습니다.",
+            "policies": [
+                {
+                    "policy_id": "p1",
+                    "title": "정책 A",
+                    "detail": {
+                        "required_documents": (
+                            "□ 유형별 제출 서류\n"
+                            "1) 세대원 변경[전입·전출·출산(입양)·사망 등]\n"
+                            "세대 주민등록등본 (주소 변동 포함)\n"
+                            "2) 혼인, 이혼, 출산(입양) 등 가족관계 변동\n"
+                            "혼인관계증명서 (상세)"
+                        )
+                    },
+                }
+            ],
+        }
+    )
+
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
+    assert not app.exception
+    detail_html = " ".join(_html_values(app))
+    assert '<div class="bkw-doclist-subhead">□ 유형별 제출 서류</div>' in detail_html
+    assert '<div class="bkw-doclist-subhead">1) 세대원 변경[전입·전출·출산(입양)·사망 등]</div>' in detail_html
+    assert '<div class="bkw-doclist-subhead">2) 혼인, 이혼, 출산(입양) 등 가족관계 변동</div>' in detail_html
+    # 실제 서류 항목은 그대로 동그라미 칩이다.
+    assert '<div class="bkw-doclist-row">○ 세대 주민등록등본 (주소 변동 포함)</div>' in detail_html
+    assert '<div class="bkw-doclist-row">○ 혼인관계증명서 (상세)</div>' in detail_html
+    # 구분 줄은 동그라미 칩으로 이중 렌더링되지 않는다.
+    assert '<div class="bkw-doclist-row">○ □ 유형별 제출 서류</div>' not in detail_html
+
+
+def test_eligibility_reasons_are_not_shown_as_a_separate_section() -> None:
+    """"자격 근거" 절은 시안에 없는 요소라 뺐다 - eligibility_reasons를 화면에
+    별도 글머리 목록으로 그대로 쏟아내지 않는다."""
+
+    app = _render(
+        {
+            "status": "answered",
+            "session_id": "session-1",
+            "answer_status": "complete",
+            "final_answer": "확인했습니다.",
+            "policies": [
+                {
+                    "policy_id": "p1",
+                    "title": "정책 A",
+                    "eligibility_reasons": [
+                        "「평생함께 청년모두가 주거비 지원」 사업의 지원 대상자로 선정된 후 신고 의무가 있음"
+                    ],
+                }
+            ],
+        }
+    )
+
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
+    assert not app.exception
+    markdown = " ".join(_values(app.markdown))
+    assert "자격 근거" not in markdown
+    assert "평생함께 청년모두가 주거비 지원" not in markdown
+
+
+def test_selecting_two_policies_enables_compare_view() -> None:
+    app = _render(_two_policy_response())
+
+    app = next(c for c in app.checkbox if c.key == "policy_selcb_session-1_p1").set_value(True).run(timeout=10)
+    app = next(c for c in app.checkbox if c.key == "policy_selcb_session-1_p2").set_value(True).run(timeout=10)
+    compare_btn = next(b for b in app.button if b.key == "policy_compare_btn_session-1")
+    assert compare_btn.disabled is False
+
+    app = compare_btn.click().run(timeout=10)
+    assert not app.exception
+    compare_html = " ".join(_html_values(app))
+    assert "정책 1" in compare_html
+    assert "정책 2" in compare_html
+    assert "선택한 정책 비교" in compare_html
+    # 자격 상태가 다르므로 비교표에 "다름" 표시가 붙는다.
+    assert "다름" in compare_html
+
+
+def test_compare_view_shows_documents_row_and_eligibility_in_mockup_style() -> None:
+    """비교표의 "지원자격"은 건수(0건/5건)가 아니라 시안처럼 확인된 조건 이름과
+    "그 외 N개 항목 미확인"으로 보여준다. "구비서류" 행도 비교표에 있어야 한다."""
+
     app = _render(
         {
             "status": "answered",
             "session_id": "session-1",
             "answer_status": "complete",
             "final_answer": "두 정책을 확인했습니다.",
-            "final_citations": [],
             "policies": [
                 {
                     "policy_id": "p1",
                     "title": "정책 1",
-                    "amount_label": "10만원",
-                    "duplicate_status": "가능",
+                    "eligibility_status": "충족",
+                    "verification_checked": ["연령"],
+                    "verification_unchecked": ["장애 여부", "성별", "소득 수준", "취업 상태"],
+                    "related_law": [{"law_name": "지방세특례제한법", "source_url": None}],
+                    "detail": {"required_documents": "신분증\n주민등록등본\n가족관계증명서"},
                 },
                 {
                     "policy_id": "p2",
                     "title": "정책 2",
-                    "amount_label": "20만원",
-                    "duplicate_status": "확인 필요",
+                    "eligibility_status": "미확인",
+                    "verification_checked": [],
+                    "verification_unchecked": ["연령", "장애 여부", "성별", "소득 수준", "취업 상태"],
+                    "detail": {},
                 },
             ],
-            "llm_status": {"enabled": False},
         }
     )
 
-    assert not app.exception
-    # 요약 카드 3개 + "지금 보고 있는 정책 1건"의 지원금·중복수급 2개 = 5.
-    # 두 정책이 한꺼번에 쌓이지 않는다.
-    assert len(app.metric) == 5
-    assert [metric.label for metric in app.metric][:3] == [
-        "확인한 제도", "자격 충족", "미충족·미확인"
-    ]
-    markdown = " ".join(_values(app.markdown))
-    assert "정책 1" in markdown
-    assert "정책 2" not in markdown
-    assert "1 / 2" in markdown
-    # 좌우 화살표가 있고, 첫 장에서는 "이전"이 눌리지 않는다.
-    arrows = {button.label: button for button in app.button}
-    assert set(arrows) == {"◀", "▶"}
-    assert arrows["◀"].disabled is True
-    assert arrows["▶"].disabled is False
-
-
-def test_carousel_arrow_moves_to_the_next_policy() -> None:
-    app = _render(
-        {
-            "status": "answered",
-            "session_id": "session-1",
-            "answer_status": "complete",
-            "final_answer": "두 정책을 확인했습니다.",
-            "policies": [
-                {"policy_id": "p1", "title": "정책 1"},
-                {"policy_id": "p2", "title": "정책 2"},
-            ],
-        }
-    )
-
-    app = next(b for b in app.button if b.label == "▶").click().run(timeout=10)
+    app = next(c for c in app.checkbox if c.key == "policy_selcb_session-1_p1").set_value(True).run(timeout=10)
+    app = next(c for c in app.checkbox if c.key == "policy_selcb_session-1_p2").set_value(True).run(timeout=10)
+    app = next(b for b in app.button if b.key == "policy_compare_btn_session-1").click().run(timeout=10)
 
     assert not app.exception
-    markdown = " ".join(_values(app.markdown))
-    assert "정책 2" in markdown
-    assert "정책 1" not in markdown
-    assert "2 / 2" in markdown
-    arrows = {button.label: button for button in app.button}
-    assert arrows["◀"].disabled is False
-    assert arrows["▶"].disabled is True
+    compare_html = " ".join(_html_values(app))
+    assert "확인함 · 연령" in compare_html
+    assert "그 외 4개 항목 미확인" in compare_html
+    assert "확인된 조건 없음" in compare_html
+    assert "0건" not in compare_html
+    assert "구비서류" in compare_html
+    assert "신분증" in compare_html
+    assert "확인된 구비서류 없음" in compare_html
+    # 구비서류·관련 법령 모두 시안처럼 글자 길이에 맞춘 회색 바로 하나씩 쌓는다
+    # (쉼표로 한 줄에 몰아넣지 않는다). 구비서류만 "○" 접두사로 통일한다.
+    doc_row = next(v for v in _html_values(app) if "구비서류" in v)
+    assert '<div class="bkw-doclist-row">○ 신분증</div>' in doc_row
+    assert '<div class="bkw-doclist-row">○ 주민등록등본</div>' in doc_row
+    assert "신분증, 주민등록등본" not in doc_row
+    law_row = next(v for v in _html_values(app) if "관련 법령" in v)
+    assert '<div class="bkw-doclist-row">지방세특례제한법</div>' in law_row
+    assert "확인된 법령 없음" in law_row
 
 
-def test_single_policy_renders_without_arrows() -> None:
+def test_single_policy_grid_has_no_compare_bar_selection_needed() -> None:
     app = _render(
         {
             "status": "answered",
             "session_id": "session-1",
             "answer_status": "complete",
             "final_answer": "한 건입니다.",
-            "policies": [{"policy_id": "p1", "title": "정책 1"}],
+            "policies": [{"policy_id": "p1", "title": "정책 1", "eligibility_status": "충족"}],
         }
     )
 
     assert not app.exception
-    # 정책이 하나면 좌우 화살표는 없다("이 정책에 대해 물어보기" 버튼은 있음).
-    assert not any(button.label in ("◀", "▶") for button in app.button)
-    assert "정책 1" in " ".join(_values(app.markdown))
+    grid_html = " ".join(_html_values(app))
+    assert "정책 1" in grid_html
+    compare_btn = next(b for b in app.button if b.key == "policy_compare_btn_session-1")
+    assert compare_btn.disabled is True
 
 
 def test_summary_cards_count_unmet_and_unknown_together() -> None:
@@ -389,12 +576,14 @@ def test_answer_without_output_fields_renders_no_raw_output_section() -> None:
     assert len(app.json) == 0
 
 
-# ── 근거 링크 위치 · Markdown ``~`` 처리 ────────────────────────────
+# ── 근거 문서 링크 · Markdown ``~`` 처리 ────────────────────────────
 
 
-def test_citations_render_inside_the_matching_policy_card() -> None:
-    """근거 링크는 답변 아래 한 덩어리가 아니라 해당 정책 카드 안에 있어야
-    어느 정책의 근거인지 알 수 있다."""
+def test_final_citations_do_not_drive_the_evidence_document_block() -> None:
+    """``final_citations``(청크 단위 근거 목록) 자체는 화면 어디에도 그대로
+    나열되지 않는다 - 근거 문서 접이식은 policy_id 매칭과 무관하게 detail.
+    source_url 하나만 본다. p2는 source_url이 없으니 final_citations에
+    항목이 있어도 근거 문서가 나오지 않는다."""
 
     app = _render(
         {
@@ -404,29 +593,33 @@ def test_citations_render_inside_the_matching_policy_card() -> None:
             "final_answer": "확인했습니다.",
             "final_citations": [
                 {"policy_id": "p1", "label": "정책 A 공식 페이지", "source_url": "https://gov.example/a"},
-                {"policy_id": "p1", "label": "근거 법령", "source_url": "https://law.go.kr/a"},
-                {"policy_id": "p2", "label": "정책 B 공식 페이지", "source_url": "https://gov.example/b"},
+                {"label": "출처 미상", "source_url": "https://gov.example/x"},
+                {"policy_id": "p2", "label": "정책 B 공식 페이지", "source_url": "https://gov.example/b-citation"},
             ],
             "policies": [
-                {"policy_id": "p1", "title": "정책 A"},
+                {"policy_id": "p1", "title": "정책 A", "detail": {"source_url": "https://gov.example/a"}},
                 {"policy_id": "p2", "title": "정책 B"},
             ],
         }
     )
 
     assert not app.exception
-    labels = _expander_labels(app)
-    # 지금 보이는 카드(p1)의 근거 2건만 카드 안에 있다.
-    assert "근거 문서 확인 (2건)" in labels
-    markdown = " ".join(_values(app.markdown))
-    assert "[정책 A 공식 페이지](https://gov.example/a)" in markdown
-    assert "정책 B 공식 페이지" not in markdown
-    # 카드에 붙은 근거는 "그 밖의 출처"로 중복 노출되지 않는다.
-    assert not any("그 밖의 검증된 출처" in label for label in labels)
+    # 목록 화면에서는 아직 아무 카드도 열지 않았으니 근거 문서 접이식이 없다.
+    assert not any("근거 문서" in label for label in _expander_labels(app))
+
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p2").click().run(timeout=10)
+    assert not app.exception
+    # p2는 detail.source_url이 없다 - final_citations에 p2 항목이 있어도
+    # (엉뚱한 링크 "b-citation"이 새 나오면 안 됨) 근거 문서는 안 뜬다.
+    assert not any("근거 문서" in label for label in _expander_labels(app))
+    assert "b-citation" not in " ".join(_values(app.markdown))
 
 
-def test_citations_without_policy_id_are_not_dropped() -> None:
-    """어느 카드에도 붙지 않는 근거를 화면에서 없애면 "근거가 없다"로 읽힌다."""
+def test_source_link_is_evidence_document_header_with_direct_link_line() -> None:
+    """원문 링크는 시안처럼 "근거 문서 확인 (1건)" 머리글과 그 아래 링크 한 줄이
+    펼치지 않아도 항상 같이 보인다(접이식 아님) - 링크 자체는 한 번 클릭으로
+    바로 이동해야 한다(펼치고 또 눌러야 하는 2클릭이 아님). 관련 법령 칩에는
+    법봉 아이콘을 붙인다. 원문/법령 링크가 없는 정책에서는 둘 다 나오지 않는다."""
 
     app = _render(
         {
@@ -434,18 +627,36 @@ def test_citations_without_policy_id_are_not_dropped() -> None:
             "session_id": "session-1",
             "answer_status": "complete",
             "final_answer": "확인했습니다.",
-            "final_citations": [
-                {"label": "출처 미상", "source_url": "https://gov.example/x"},
-                {"policy_id": "없는정책", "label": "버려질 뻔한 근거", "source_url": "https://gov.example/y"},
+            "policies": [
+                {
+                    "policy_id": "p1",
+                    "title": "정책 A",
+                    "related_law": [{"law_name": "농업기계화 촉진법", "source_url": "https://law.go.kr/a"}],
+                    "detail": {"source_url": "https://gov.example/a", "organization": "농림축산식품부"},
+                },
+                {"policy_id": "p2", "title": "정책 B"},
             ],
-            "policies": [{"policy_id": "p1", "title": "정책 A"}],
         }
     )
 
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
     assert not app.exception
-    assert "그 밖의 검증된 출처 (2건)" in _expander_labels(app)
+    # 접이식(expander)이 아니다 - 펼치지 않아도 머리글과 링크가 항상 같이 보인다.
+    assert not any("근거 문서" in label for label in _expander_labels(app))
     markdown = " ".join(_values(app.markdown))
-    assert "버려질 뻔한 근거" in markdown
+    assert "근거 문서 확인 (1건)" in markdown
+    assert "[근거 문서](https://gov.example/a)" in markdown
+    detail_html = " ".join(_html_values(app))
+    assert "⚖️ 농업기계화 촉진법" in detail_html
+
+    # 원문/법령 링크가 없는 p2에서는 두 요소 모두 나오지 않는다.
+    app = next(b for b in app.button if "목록으로" in (b.label or "")).click().run(timeout=10)
+    app = next(
+        b for b in app.button if b.key == "policy_open_session-1_p2"
+    ).click().run(timeout=10)
+    assert not app.exception
+    assert "근거 문서 확인" not in " ".join(_values(app.markdown))
+    assert "⚖️" not in " ".join(_html_values(app))
 
 
 def test_tilde_is_replaced_with_hyphen_in_markdown_output() -> None:
@@ -470,9 +681,11 @@ def test_tilde_is_replaced_with_hyphen_in_markdown_output() -> None:
     )
 
     assert not app.exception
+    # final_answer 문장 자체는 카드가 있어 더 보여주지 않지만(위 테스트 참고),
+    # 같은 md_text() 경로를 타는 카드 쪽 필드에서 "~"가 살아남지 않는지 확인한다.
     markdown = " ".join(_values(app.markdown))
-    assert "중위소득 30-50% 또는 75-100%" in markdown
-    assert "만 3-5세 유아학비" in markdown
-    assert "만 3-5세 아동에 해당" in markdown
+    grid_html = " ".join(_html_values(app))
+    assert "만 3-5세 유아학비" in grid_html
+    assert "월 10-20만원" in grid_html
     assert "~" not in markdown
-    assert any("월 10-20만원" == metric.value for metric in app.metric)
+    assert "~" not in grid_html

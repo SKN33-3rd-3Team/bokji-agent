@@ -143,6 +143,11 @@ def test_clicking_ask_button_opens_chat_dialog(tmp_path) -> None:
     app = _answered_with_policy_app(tmp_path)
     app.chat_input[0].set_value("월세 지원 되나요").run(timeout=10)
 
+    # 목록 화면(grid)에서 "자세히 보기"로 상세 화면에 들어가야 "이 정책에
+    # 대해 물어보기" 버튼이 나온다(정책 상세 채팅방 버튼은 상세 화면에만 있음).
+    detail = next(b for b in app.button if b.label == "자세히 보기")
+    app = detail.click().run(timeout=10)
+
     ask = next(b for b in app.button if b.label == "이 정책에 대해 물어보기")
     app = ask.click().run(timeout=10)
 
