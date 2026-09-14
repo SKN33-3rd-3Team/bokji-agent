@@ -151,6 +151,28 @@ def test_benefit_calculator_conditional_edges_cover_both_routes() -> None:
     assert targets == {"request_calc_info", "result_assembly"}
 
 
+def test_result_assembly_is_deferred_until_benefit_calculator_settles() -> None:
+    # result_assembly(N12)는 benefit_calculator(N10)/duplicate_benefit(N11)
+    # 두 선행 노드로부터 오는 일반 add_edge fan-in이다. LangGraph는 두 엣지 중
+    # 하나라도 result_assembly를 가리키면 그 즉시 실행하는 OR 트리거라서(둘
+    # 다 가리켜야 합쳐지는 게 아니다), defer=True 없이는 N10이 되묻기 루프
+    # (E18a/E18b)로 빠진 라운드에 N11만 먼저 도착해도 result_assembly가
+    # benefit_amounts 없이 조기 실행돼 버린다. list-form
+    # add_edge(["benefit_calculator","duplicate_benefit"], "result_assembly")도
+    # "두 predecessor가 실행을 마쳤는지"만 보지 "이 노드로 라우팅했는지"는
+    # 안 봐서 이 케이스는 못 막는다 - 실제로 통하는 건 이 노드를
+    # defer=True로 등록해 "그래프 전체에 아직 대기 중인 다른 태스크가 있으면
+    # 미룬다"는 배리어를 거는 것뿐이다(LangGraph 1.2.11로 직접 재현해 검증한
+    # 내용, builder.py의 result_assembly add_node 주석 참고). 이 테스트는 그
+    # 플래그가 조립 결과에 실제로 반영됐는지만 구조적으로 확인한다 - N9~N12를
+    # 실제 인터럽트까지 태워서 도는 end-to-end 테스트는 파일 상단 docstring이
+    # 설명하는 것과 같은 이유(N7 evidence_gate 입력 계약 fixture 비용)로
+    # 이번 범위에는 포함하지 않았다.
+    graph = build_graph(_store("defer_result_assembly_test"))
+
+    assert graph.builder.nodes["result_assembly"].defer is True
+
+
 def test_request_calc_info_loops_back_to_eligibility_verdict() -> None:
     # E18b(2026-09-09 변경): request_missing_slots(N3)와 달리 N1(slot_parser)
     # 전체를 다시 돌지 않는다 - 여기서 되묻는 슬롯은 N4~N8의 입력이 아니라

@@ -296,7 +296,25 @@ def build_graph(
     )
     graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client),))
     graph.add_node("duplicate_benefit", timed_node("duplicate_benefit", functools.partial(check_duplicate_benefit, store=store)))
-    graph.add_node("result_assembly", timed_node("result_assembly", functools.partial(assemble_result, store=store)))
+    # defer=True: N10(benefit_calculator)이 되묻기 루프(E18a/E18b)로 빠진
+    # 라운드에는 N11(duplicate_benefit)만 먼저 이 노드로 라우팅하는데,
+    # 일반 add_edge fan-in은 "둘 다 이 노드를 가리켜야" 합쳐지는 게
+    # 아니라 "둘 중 하나라도 가리키면" 그 즉시 실행되는 OR 트리거라서(직접
+    # LangGraph 1.2.11로 재현해 확인함), defer 없이는 N10이 값을 채우기
+    # 전에 이 노드가 먼저 실행돼 버린다 - N11이 N9의 재확인 루프
+    # (E18b)에서 다시 발화하기 전에 이미 한 번 조립이 끝나 있는 상태였던
+    # 것. `add_edge(["benefit_calculator", "duplicate_benefit"],
+    # "result_assembly")`(list-form join)도 이 경우엔 안 통한다 - 그 join은
+    # "두 predecessor가 실행을 마쳤는가"만 보지 "이 노드로 라우팅했는가"는
+    # 안 봐서, N10이 되묻기로 빠져도(그래도 "실행은" 됐으므로) 조건이
+    # 만족돼 버린다(이것도 재현해서 확인함). defer=True는 "그래프 전체에
+    # 아직 대기 중인 다른 태스크가 있으면 미룬다"는 배리어라 N10의
+    # 되묻기 루프가 완전히 끝난 뒤 정확히 한 번만 실행된다.
+    graph.add_node(
+        "result_assembly",
+        timed_node("result_assembly", functools.partial(assemble_result, store=store)),
+        defer=True,
+    )
     graph.add_node("answer_generation", timed_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client)))
     graph.add_node("final_verification", timed_node("final_verification", verify_final_answer))
     graph.add_node("abstain_insufficient_evidence", timed_node("abstain_insufficient_evidence", _abstain_insufficient_evidence))
@@ -341,19 +359,27 @@ def build_graph(
 
     graph.add_edge("eligibility_verdict", "benefit_calculator")  # E16
     graph.add_edge("eligibility_verdict", "duplicate_benefit")  # E17
-    # result_assembly는 benefit_calculator/duplicate_benefit 두 선행 노드가
-    # 모두 "result_assembly로 감"을 끝낸 뒤 한 번만 실행된다(LangGraph의
-    # 기본 join 동작 - 두 엣지가 같은 superstep에 result_assembly를 가리켜야
-    # 한 번에 합쳐진다). benefit_calculator가 이번 라운드에 request_calc_info로
-    # 빠지면(E18a) 그 superstep에는 duplicate_benefit만 result_assembly를
-    # 가리키므로 result_assembly가 실행되지 않는다(join 대기) - request_calc_info가
-    # N9(eligibility_verdict)로 루프백하면(E18b) E16/E17이 그대로 다시 발화해
-    # benefit_calculator/duplicate_benefit이 같은 superstep에서 재실행되고,
-    # 이번에는 benefit_calculator가 "result_assembly"로 갈라지면서 둘 다
-    # join된다. N1(slot_parser)이 아니라 N9로 되돌리는 이유는
-    # request_calc_info.py 모듈 docstring의 "재입력 라우팅" 참고 - N4~N8을
-    # 다시 돌 필요가 없어 N9의 저비용 재확인(policy_id로 좁힌 단건 검색)만
-    # 거치면 된다.
+    # result_assembly는 benefit_calculator/duplicate_benefit 두 선행 노드에서
+    # 오는 일반 add_edge fan-in이다 - 이것만으로는 "둘 다 끝난 뒤 한 번"이
+    # 보장되지 않는다(LangGraph는 두 엣지 중 하나라도 이 노드를 가리키면 그
+    # 즉시 실행하는 OR 트리거다. 두 predecessor가 "실행을 마쳤는지"만 보고
+    # "이 노드로 라우팅했는지"는 안 보는 list-form
+    # add_edge(["benefit_calculator","duplicate_benefit"], ...) 조인도 이
+    # 경우엔 통하지 않는다 - 둘 다 LangGraph 1.2.11로 직접 재현해서 확인함).
+    # benefit_calculator가 이번 라운드에 request_calc_info로 빠지면(E18a)
+    # duplicate_benefit은 그래도 그대로 result_assembly로 가고, 그 순간
+    # benefit_amounts가 아직 안 채워진 채로 result_assembly가 조기 실행될
+    # 수 있다. 이를 막는 건 이 엣지가 아니라 result_assembly 노드 등록 시의
+    # ``defer=True``다(위 add_node 참고) - "그래프 전체에 아직 대기 중인
+    # 다른 태스크가 있으면 미룬다"는 배리어라, benefit_calculator의 되묻기
+    # 루프(E18a/E18b)가 완전히 끝나야만 result_assembly가 실행된다.
+    # request_calc_info가 N9(eligibility_verdict)로 루프백하면(E18b) E16/E17이
+    # 그대로 다시 발화해 benefit_calculator/duplicate_benefit이 재실행되고,
+    # 이번에는 benefit_calculator가 "result_assembly"로 갈라지면서 defer가
+    # 풀려 정확히 한 번 실행된다. N1(slot_parser)이 아니라 N9로 되돌리는
+    # 이유는 request_calc_info.py 모듈 docstring의 "재입력 라우팅" 참고 -
+    # N4~N8을 다시 돌 필요가 없어 N9의 저비용 재확인(policy_id로 좁힌 단건
+    # 검색)만 거치면 된다.
     graph.add_conditional_edges(
         "benefit_calculator",
         route_after_benefit_calculator,
