@@ -89,6 +89,9 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
             "application_method": "..." | None,    # 신청방법
             "application_period": "..." | None,    # 신청기한
             "legal_basis": "..." | None,           # 근거법령
+            "required_documents": "..." | None,           # 구비서류
+            "required_documents_official": "..." | None,  # 공무원 확인 구비서류
+            "required_documents_self": "..." | None,      # 본인확인 필요 구비서류
             "region_names": [...] | None,
             "region_scope": "national"|"regional"|"unknown" | None,
             "age_start": int | None,
