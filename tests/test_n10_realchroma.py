@@ -354,6 +354,57 @@ class AmountRangeTests(unittest.TestCase):
         self.assertEqual(amount_range, (900000.0, 1100000.0))
         self.assertIn("범위", note)
 
+    def test_llm_range_mismatch_is_corrected_from_source_text_not_discarded(
+        self,
+    ) -> None:
+        """P1 리뷰 대응(2026-09-14): 예전에는 원문에 범위 표현이 "있는지"만
+        확인하고 LLM이 준 min_amount/max_amount 숫자 자체는 검증하지
+        않았다 - "90만원 이상 110만원 이하"인데 LLM이 자릿수를 잘못 옮겨
+        9,000,000~11,000,000으로 반환해도 그대로 통과됐다.
+
+        이제는 규칙(_extract_range_by_rules)이 확신 있게 뽑은 값과 다르면
+        그 값으로 정정한다 - 실패(amount_range=None)로 처리하지 않는다
+        (불일치를 fail-close 사유로 쓰면 정상적인 범위 표시 케이스까지
+        불필요하게 "확인 필요"로 떨어뜨리게 된다).
+        """
+        from src.rag_chatbot.graph.nodes.benefit_calculator import _extract_amount_via_llm
+
+        client = FakeLLMClient(
+            json.dumps(
+                {
+                    "amount": None,
+                    "min_amount": 9_000_000,
+                    "max_amount": 11_000_000,
+                    "reason": "",
+                }
+            )
+        )
+        amount, note, consulted, amount_range = _extract_amount_via_llm(
+            "영농정착지원금 월 90만원 이상 110만원 이하 지원", client
+        )
+        self.assertIsNone(amount)
+        self.assertTrue(consulted)
+        # 정정된 값 - LLM이 준 9,000,000~11,000,000이 아니라 원문 그대로의
+        # 900,000~1,100,000이어야 한다.
+        self.assertEqual(amount_range, (900000.0, 1100000.0))
+        self.assertIn("정정", note)
+
+    def test_llm_range_matching_source_text_has_no_correction_note(self) -> None:
+        # 규칙과 LLM 값이 일치하면 정정 문구를 붙이지 않는다 - 매번
+        # "정정함"이 붙으면 실제로 틀렸던 경우와 구분이 안 된다.
+        from src.rag_chatbot.graph.nodes.benefit_calculator import _extract_amount_via_llm
+
+        client = FakeLLMClient(
+            json.dumps(
+                {"amount": None, "min_amount": 900000, "max_amount": 1100000, "reason": ""}
+            )
+        )
+        amount, note, consulted, amount_range = _extract_amount_via_llm(
+            "영농정착지원금 월 90만원 이상 110만원 이하 지원", client
+        )
+        self.assertEqual(amount_range, (900000.0, 1100000.0))
+        self.assertNotIn("정정", note)
+
     def test_range_with_min_greater_than_or_equal_max_is_rejected(self) -> None:
         # 모델이 하한/상한을 뒤집어 반환하거나 같은 값을 넣으면 범위로
         # 신뢰하지 않는다 - 잘못된 범위를 그대로 보여주는 것보다 안전하게
@@ -439,6 +490,42 @@ class AmountRangeTests(unittest.TestCase):
         self.assertEqual(
             _extract_range_by_rules("월 90~110만원 지원"), (900000.0, 1100000.0)
         )
+
+    def test_extract_range_by_rules_reads_isang_iha_notation(self) -> None:
+        # 2026-09-14 추가(P1 리뷰 대응): 대시(-/~)가 아니라 "이상/이하"로
+        # 하한·상한을 나타내는 표기도 범위로 인식해야 한다 - 리뷰가 예로
+        # 든 실제 문구가 이 형태였다.
+        from src.rag_chatbot.graph.nodes.benefit_calculator import _extract_range_by_rules
+
+        self.assertEqual(
+            _extract_range_by_rules("영농정착지원금 월 90만원 이상 110만원 이하 지원"),
+            (900000.0, 1100000.0),
+        )
+        # 상한이 없는 진짜 자격 문턱값("120만원 이상인 자")까지 범위로
+        # 잘못 인식하면 안 된다 - "이하"가 없으면 매치 자체가 안 된다.
+        self.assertIsNone(_extract_range_by_rules("연간 판매액 120만원 이상인 자"))
+
+    def test_extract_range_by_rules_rejects_non_benefit_context(self) -> None:
+        # 2026-09-14 추가: 본인부담금/한도처럼 지원금이 아닌 범위를
+        # "확신 있는 매치"로 잘못 판단하면 안 된다 - 이 반환값이 이제
+        # LLM 값을 실제로 정정하는 데 쓰이므로(_extract_amount_via_llm
+        # 참고), 오탐의 대가가 존재 확인용이었을 때보다 커졌다.
+        from src.rag_chatbot.graph.nodes.benefit_calculator import _extract_range_by_rules
+
+        self.assertIsNone(_extract_range_by_rules("본인부담금 90-110만원 발생"))
+        self.assertIsNone(
+            _extract_range_by_rules("영농정착지원금 본인부담금 90만원 이상 110만원 이하 발생")
+        )
+
+    def test_isang_iha_numbers_are_not_double_counted_as_single_amount(self) -> None:
+        # "90만원 이상 110만원 이하"의 두 숫자가 _extract_amount_by_rules의
+        # 독립 단일 금액 후보로 새면 안 된다(대시 표기에 이미 있던 안전장치를
+        # 이상/이하 표기에도 똑같이 적용해야 한다).
+        amount, note = _extract_amount_by_rules(
+            "영농정착지원금 월 90만원 이상 110만원 이하 지원"
+        )
+        self.assertIsNone(amount)
+        self.assertIn("범위", note)
 
     def test_extract_range_by_rules_rejects_conditional_tiers(self) -> None:
         # "10-30만원"이 대시로 적혀 있어도 근처에 "소득 구간별 차등"이

@@ -1061,6 +1061,18 @@ _RANGE_PATTERN = re.compile(
     r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\s*(억|만)?\s*[-~]\s*"
     r"(\d{1,3}(?:,\d{3})*|\d+)\s*(억|만)?\s*원"
 )
+# "90만원 이상 110만원 이하"처럼 대시가 아니라 "이상/이하"로 하한·상한을
+# 표현하는 범위(2026-09-14 추가, P1 리뷰 대응 - 실제 이슈 예시가 이
+# 표기였다). 그룹 순서(1=하한 숫자, 2=하한 단위, 3=상한 숫자, 4=상한 단위)를
+# _RANGE_PATTERN과 똑같이 맞춰서, 호출자가 어느 패턴에서 매치됐는지 신경
+# 쓰지 않아도 되게 한다. 두 숫자 모두 "원"을 직접 달고 "이하"까지 있어야만
+# 매치되도록 엄격하게 잡는다 - "매출액 1억원 이상"처럼 상한이 아예 없는
+# 진짜 자격 문턱값 표현(_THRESHOLD_TAIL이 걸러내는 대상)과 헷갈리면 안
+# 되기 때문이다.
+_RANGE_PATTERN_ISANG_IHA = re.compile(
+    r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)\s*(억|만)?\s*원\s*이상\s*"
+    r"(\d{1,3}(?:,\d{3})*|\d+)\s*(억|만)?\s*원\s*이하"
+)
 # 이 단어들이 범위 표현 앞뒤 가까이 있으면 "하나의 정책이 폭넓게 주는
 # 금액"이 아니라 "조건별로 다른 두 금액을 우연히 대시(-)로 나열한 것"
 # 일 가능성이 높다 - 그런 경우는 범위로 보지 않고 확정하지 않는다
@@ -1088,8 +1100,13 @@ def _extract_amount_by_rules(chunk_text: str) -> tuple[float | None, str]:
     # 금액 후보로 세지 않는다 - 세면 하한(90만원)을 버리고 상한만 확정
     # 금액인 것처럼 잘못 보여주게 된다(2026-09-11 T1 실사용 중 확인:
     # "90-110만원/월"이 "최대 110만원"으로 표시됨). 범위 자체는
-    # _extract_range_by_rules가 별도로 다룬다.
-    range_spans = [m.span() for m in _RANGE_PATTERN.finditer(chunk_text)]
+    # _extract_range_by_rules가 별도로 다룬다. "90만원 이상 110만원 이하"
+    # 같은 이상/이하 표기도 2026-09-14부터 범위로 인식하므로 같이 뺀다 -
+    # 안 빼면 하한(90만원)이 "이상" 바로 앞이라 밑의 _THRESHOLD_TAIL
+    # 체크에 걸려 조용히 사라지고, 상한(110만원)만 독립 후보로 남는다.
+    range_spans = [m.span() for m in _RANGE_PATTERN.finditer(chunk_text)] + [
+        m.span() for m in _RANGE_PATTERN_ISANG_IHA.finditer(chunk_text)
+    ]
     for match in _AMOUNT_PATTERN.finditer(chunk_text):
         if any(start <= match.start() < end for start, end in range_spans):
             continue
@@ -1135,20 +1152,29 @@ def _extract_amount_by_rules(chunk_text: str) -> tuple[float | None, str]:
 
 
 def _extract_range_by_rules(chunk_text: str) -> tuple[float, float] | None:
-    """'90-110만원'처럼 조건 구분 없는 범위(하한~상한)를 정규식으로 뽑는다
-    (2026-09-11 추가).
+    """'90-110만원' 또는 '90만원 이상 110만원 이하'처럼 조건 구분 없는
+    범위(하한~상한)를 정규식으로 뽑는다(2026-09-11 추가, 2026-09-14
+    이상/이하 표기·문맥 필터 확장).
 
-    두 군데서 쓴다: (1) LLM을 못 쓰는 상황에서 오프라인 범위 표시,
-    (2) LLM이 min_amount/max_amount를 줬을 때 원문에 실제로 범위
-    표현이 있는지 교차 검증(_extract_amount_via_llm 참고) - LLM 혼자만의
-    판단을 그대로 믿지 않는다.
+    세 군데서 쓴다: (1) LLM을 못 쓰는 상황에서 오프라인 범위 표시,
+    (2) LLM이 min_amount/max_amount를 줬을 때 그 값이 원문과 실제로
+    일치하는지 대조(_extract_amount_via_llm 참고) - 다르면 이 함수가 뽑은
+    값으로 정정한다(P1 리뷰 대응: 예전에는 원문에 범위 표현이 "있는지"만
+    보고 LLM 숫자를 그대로 믿었다 - 그래서 LLM이 자릿수를 잘못 옮겨도
+    안 걸러졌다). (3) 위 재확인 경로에서 이 함수의 반환값이 이제 LLM
+    판단을 실제로 뒤집을 수 있으므로, 존재 확인용이었을 때보다 오탐의
+    대가가 커졌다 - 그래서 _extract_amount_by_rules와 같은 비-지원금
+    문맥 필터(본인부담금/한도 등)도 여기서 함께 적용한다.
 
     매치가 정확히 하나가 아니거나(없거나 여러 개), 소득/취업/장애/혼인/
-    임신 등 조건을 가르는 단어가 근처에 있으면(조건별 차등을 범위로
-    착각할 위험) ``None``을 돌려준다 - 안전한 쪽으로만 판단한다.
+    임신 등 조건을 가르는 단어가 근처에 있거나(조건별 차등을 범위로
+    착각할 위험), 본인부담금·대출한도 같은 비-지원금 문맥이면 ``None``을
+    돌려준다 - 안전한 쪽으로만 판단한다.
     """
 
-    matches = list(_RANGE_PATTERN.finditer(chunk_text))
+    matches = list(_RANGE_PATTERN.finditer(chunk_text)) + list(
+        _RANGE_PATTERN_ISANG_IHA.finditer(chunk_text)
+    )
     if len(matches) != 1:
         return None
     match = matches[0]
@@ -1157,6 +1183,18 @@ def _extract_range_by_rules(chunk_text: str) -> tuple[float, float] | None:
     window_end = min(len(chunk_text), match.end() + _TIER_CONTEXT_WINDOW)
     surrounding = chunk_text[window_start:match.start()] + chunk_text[match.end():window_end]
     if any(word in surrounding for word in _TIER_CONTEXT_KEYWORDS):
+        return None
+
+    # (2026-09-14 추가) _extract_amount_by_rules와 같은 비-지원금 문맥
+    # 필터. "본인부담금 90-110만원"처럼 지원금이 아닌 범위를 "확신 있는
+    # 매치"로 잘못 판단해 정상적인 LLM 값을 엉뚱한 숫자로 덮어쓰는 것을
+    # 막는다.
+    head = chunk_text[max(0, match.start() - _NON_BENEFIT_WINDOW) : match.start()]
+    if any(word in head for word in _NON_BENEFIT_CONTEXT):
+        return None
+    line_start = chunk_text.rfind("\n", 0, match.start()) + 1
+    line_head = _WHITESPACE.sub("", chunk_text[line_start : match.start()])
+    if any(label in line_head for label in _LIMIT_LABELS):
         return None
 
     low_digits = match.group(1).replace(",", "")
@@ -1260,14 +1298,45 @@ def _extract_amount_via_llm(
         # 필요"로 뭉개지 않는다. 둘 다 숫자이고 하한 < 상한일 때만 믿는다.
         #
         # 다만 LLM 혼자만의 판단은 믿지 않는다 - "소득 구간별 10-30만원
-        # 차등"처럼 진짜 조건부인 걸 범위로 착각해 min/max를 채울 위험이
-        # 있다(_extract_tiered_rule_via_llm이 먼저 걸러내지만, 그쪽도
-        # LLM 판단이라 실패할 수 있다). 그래서 원문에 실제로 범위 형태
-        # 표현이 있는지 규칙(_extract_range_by_rules)으로 교차 검증하고,
-        # 검증에 실패하면(원문에서 범위 패턴을 못 찾으면) LLM이 준
-        # min/max는 버린다 - 틀린 범위를 보여주느니 "확인 필요"로 남기는
-        # 편이 안전하다.
+        # 차등"처럼 진짜 조건부인 걸 범위로 착각해 min/max를 채울 위험도
+        # 있고(_extract_tiered_rule_via_llm이 먼저 걸러내지만, 그쪽도 LLM
+        # 판단이라 실패할 수 있다), 무엇보다 "90-110만원"을 자릿수를 잘못
+        # 옮겨 900000/1100000이 아니라 9000000/11000000처럼 반환하는
+        # 단위 변환 실수도 있을 수 있다(2026-09-14 P1 리뷰 대응 - T1
+        # 실사용 중 이미 비슷한 사고가 한 번 있었다: '90-110만원'을
+        # '최대 90원'으로 표시. 프롬프트에 변환 예시를 넣어 그 사고
+        # 자체는 막았지만, 그건 재발 확률을 낮춘 것이지 구조적 방지가
+        # 아니다). 그래서 예전에는 원문에 범위 형태 표현이 "있는지"만
+        # 규칙(_extract_range_by_rules)으로 확인했는데, 이제는 그 함수가
+        # 뽑은 실제 (하한, 상한) 값까지 받아서 LLM 값과 정말 같은지
+        # 비교한다.
+        #
+        # "규칙이 확신하는지"에 따라 서로 다른 위험을 다르게 처리한다 -
+        # 이 둘을 섞으면 안 된다.
+        #
+        # (A) 규칙이 정확히 하나의 범위 표현을 확신 있게 찾은 경우: 이때는
+        # "범위인지 아닌지"는 이미 원문으로 확인된 것이고, 남은 위험은
+        # LLM이 그 숫자를 잘못 옮기는 것뿐이다(자릿수 실수 등). 다르면
+        # 곧바로 실패시키지 않는다 - _extract_range_by_rules는 정규식으로
+        # 원문 숫자를 그대로 곱한 결정론적 값이라(매치만 되면
+        # "만=10000배"를 틀릴 수 없다), 확률적으로 답을 생성하는 LLM보다
+        # 이 좁은 "단위 변환" 작업 하나에는 더 믿을 수 있다. 그래서 LLM
+        # 판단(범위 형태라는 것)은 유지한 채 숫자만 규칙 값으로 정정하고,
+        # 그 사실을 calculation_note에 투명하게 남긴다(실패로 처리해
+        # fail-close 케이스를 늘리지 않는다).
+        #
+        # (B) 규칙이 확신하지 못한 경우(패턴이 아예 없거나, 매치가
+        # 여럿이거나, 조건부/비-지원금 문맥 근처라 스스로 포기한 경우):
+        # 이건 "숫자가 틀렸다"가 아니라 "애초에 범위라는 판단 자체가
+        # 의심스럽다"는 신호다 - "소득 구간별 10-30만원 차등"처럼 진짜
+        # 조건부인 걸 LLM이 범위로 착각했을 위험이 여전히 남아있으므로
+        # (_extract_tiered_rule_via_llm이 먼저 걸러내지만 그쪽도 LLM
+        # 판단이라 실패할 수 있다), 이 경우는 (A)와 달리 fail-close 완화
+        # 대상이 아니다 - 예전처럼 LLM의 범위 주장을 그대로 버린다
+        # (test_llm_claimed_range_is_discarded_without_corroborating_text
+        # 가 이 안전장치를 고정한다).
         amount_range: tuple[float, float] | None = None
+        range_note_suffix = ""
         min_amount = parsed.get("min_amount")
         max_amount = parsed.get("max_amount")
         if (
@@ -1276,14 +1345,29 @@ def _extract_amount_via_llm(
             and isinstance(max_amount, (int, float))
             and not isinstance(max_amount, bool)
             and float(min_amount) < float(max_amount)
-            and _extract_range_by_rules(chunk_text) is not None
         ):
-            amount_range = (float(min_amount), float(max_amount))
+            rule_range = _extract_range_by_rules(chunk_text)
+            if rule_range is not None:
+                amount_range = rule_range
+                if (
+                    abs(rule_range[0] - float(min_amount)) >= 1
+                    or abs(rule_range[1] - float(max_amount)) >= 1
+                ):
+                    range_note_suffix = (
+                        f" (LLM 추출값 {min_amount:,.0f}~{max_amount:,.0f}원이 "
+                        "원문 대조 결과와 달라 원문 기준 "
+                        f"{rule_range[0]:,.0f}~{rule_range[1]:,.0f}원으로 정정함)"
+                    )
+            # rule_range가 None이면 amount_range는 그대로 None으로 남겨
+            # LLM의 범위 주장 자체를 버린다(위 (B) 참고).
         if amount_range is not None:
             return (
                 None,
-                reason
-                or "원문에 범위(하한~상한)로만 금액이 명시되어 단일 금액을 확정할 수 없음",
+                (
+                    reason
+                    or "원문에 범위(하한~상한)로만 금액이 명시되어 단일 금액을 확정할 수 없음"
+                )
+                + range_note_suffix,
                 True,
                 amount_range,
             )
