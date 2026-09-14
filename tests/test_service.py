@@ -113,6 +113,10 @@ def test_get_graph_loads_support_conditions_once_and_injects_them():
     store = object()
     llm_client = object()
     conditions = {"service-1": {"JA0101": "Y"}}
+    # 2026-09-11: user_types 색인(policy_conditions.load_policy_user_types)이
+    # startup에 추가됐다 - support_conditions와 별개 소스(처리된 subsidy
+    # jsonl)에서 읽는 사용자구분("개인"/"법인/시설/단체" 등)매핑이다.
+    user_types = {"service-1": frozenset({"개인"})}
     graph = object()
     try:
         with (
@@ -126,6 +130,11 @@ def test_get_graph_loads_support_conditions_once_and_injects_them():
                 return_value=conditions,
             ) as load_mock,
             patch.object(
+                service_module,
+                "load_policy_user_types",
+                return_value=user_types,
+            ) as load_user_types_mock,
+            patch.object(
                 service_module, "build_graph", return_value=graph
             ) as build_mock,
         ):
@@ -133,10 +142,14 @@ def test_get_graph_loads_support_conditions_once_and_injects_them():
             assert service_module.get_graph() is graph
 
         load_mock.assert_called_once_with(service_module._REAL_SUPPORT_CONDITIONS_PATH)
+        load_user_types_mock.assert_called_once_with(
+            service_module._REAL_SUBSIDY_DOCUMENTS_PATH
+        )
         build_mock.assert_called_once_with(
             store,
             llm_client=llm_client,
             support_conditions=conditions,
+            user_types=user_types,
         )
     finally:
         service_module._runtime_cache.clear()
@@ -232,6 +245,7 @@ def test_concurrent_first_requests_share_runtime_and_followup_checkpointer():
         patch.object(service_module, "connect_store", side_effect=connect_store),
         patch.object(service_module, "build_llm_client", return_value=None),
         patch.object(service_module, "load_support_conditions", return_value={}),
+        patch.object(service_module, "load_policy_user_types", return_value={}),
         patch.object(service_module, "build_graph", side_effect=build_graph),
         patch.object(service_module, "run_graph", side_effect=run_graph),
         patch.object(service_module, "resume_graph", side_effect=resume_graph),
@@ -277,7 +291,7 @@ def test_simultaneous_ask_and_followup_keep_llm_status_separate():
         def __init__(self):
             self.barrier = Barrier(2)
 
-        def complete(self, prompt, *, system=None):
+        def complete(self, prompt, *, system=None, max_tokens=None):
             self.barrier.wait(timeout=5)
             if prompt == "failure-b":
                 raise LLMCallError("failure-b")
@@ -496,9 +510,109 @@ def test_build_policy_view_badge_for_non_top_and_uncertain_verdict():
 
     assert view["badge"] == "확인 필요"
     assert view["amount"] is None
-    assert view["amount_label"] == "정보 부족: 지원금 계산 결과 없음"
+    # amount_label은 st.metric 위젯용으로 고정된 짧은 문구만 담는다(2026-09-11) -
+    # 실제 사유는 needs_confirmation에서 보여준다.
+    assert view["amount_label"] == "지원금액 확인 필요"
     assert "재검색에서 해당 정책 근거를 다시 찾지 못함" in view["needs_confirmation"]
+    assert "정보 부족: 지원금 계산 결과 없음" in view["needs_confirmation"]
     assert view["title"] == "policy-b"  # 상세 섹션을 하나도 못 찾으면 policy_id로 대체
+
+
+def test_build_policy_view_amount_note_does_not_leak_into_duplicate_note():
+    """금액 계산 실패 사유가 중복수급 캡션 자리로 새면 안 된다 (2026-09-11 회귀).
+
+    이 정책에는 중복수급 조항이 아예 없다(duplicate=None). 그런데도 예전
+    코드는 duplicate가 비어 있으면 entry["status_note"](금액 계산 실패 사유,
+    예: 대출 한도라 확정 불가)를 duplicate_note 자리에 채워 넣었다 - 그
+    결과 화면의 "중복수급" 캡션에 대출 한도 얘기가 뜨는, 맥락이 완전히
+    다른 문구가 노출됐다(streamlit_ui/rendering.py가 duplicate_note를
+    중복수급 캡션으로 그린다). status_note는 needs_confirmation이 올바른
+    자리에서 보여주므로(아래 test_build_policy_view_amount_note_moves_to_
+    needs_confirmation 참고), duplicate_note는 실제 중복수급 조항이
+    있을 때만 채워야 한다.
+    """
+    store = FakeDetailStore({})
+    entry = {
+        "eligibility": {"policy_id": "policy-e", "verdict": "충족", "reasons": [], "checked": ["연령"]},
+        "benefit_amount": {"policy_id": "policy-e", "amount": None},
+        "status_note": (
+            "금액처럼 보이는 값이 대출·보증 한도이거나 자격 문턱값이라 "
+            "지원금으로 확정할 수 없음 (규칙 추출)"
+        ),
+        "duplicate": None,
+    }
+    view = _build_policy_view("policy-e", entry, store=store, query_id="q1", rank=1, is_top=False)
+
+    assert view["duplicate_note"] is None
+    assert view["duplicate_status"] == "미확인"
+    # 금액 계산 실패 사유는 사라지지 않는다 - needs_confirmation이라는
+    # 올바른 자리로 옮겨서 그대로 보인다(2026-09-11: amount_label 자리는
+    # st.metric 위젯용으로 고정된 짧은 문구만 남기도록 바꿨다 - 아래
+    # test_build_policy_view_amount_note_moves_to_needs_confirmation 참고).
+    assert "대출·보증 한도" not in view["amount_label"]
+    assert any("대출·보증 한도" in item for item in (view["needs_confirmation"] or []))
+
+
+def test_build_policy_view_amount_note_moves_to_needs_confirmation():
+    """금액 미확정 사유는 amount_label이 아니라 needs_confirmation에 담긴다
+    (2026-09-11 추가).
+
+    streamlit_ui/rendering.py는 amount_label을 st.metric 위젯 값으로
+    그린다 - 이 위젯은 짧은 값 한 줄용이다. amount가 None일 때
+    status_note를 그대로 amount_label에 넣으면(예전 동작), LLM이 자유
+    서술형으로 쓴 사유나 LLM 호출 실패 메시지처럼 길이가 들쭉날쭉한
+    문장이 위젯 안에 그대로 들어가 카드 레이아웃이 깨진다. 이제
+    amount_label은 amount가 없을 때 고정된 짧은 문구만 담고, 실제
+    사유는 needs_confirmation(문장 길이 제약이 없는 자리)으로 옮긴다 -
+    정보는 그대로 보여주되 위젯이 깨지지 않는 자리로 보낸다.
+    """
+    store = FakeDetailStore({})
+    entry = {
+        "eligibility": {"policy_id": "policy-f", "verdict": "충족", "reasons": [], "checked": ["연령"]},
+        "benefit_amount": {"policy_id": "policy-f", "amount": None},
+        "status_note": (
+            "LLM이 원문에서 확정 금액을 추출하지 못함(조건부이거나 명시 안 됨): "
+            "소득 구간에 따라 10만원 또는 30만원으로 차등 지급되어 원문만으로는 "
+            "단일 금액을 확정할 수 없음"
+        ),
+        "duplicate": {"status": "없음"},
+    }
+    view = _build_policy_view("policy-f", entry, store=store, query_id="q1", rank=1, is_top=False)
+
+    assert view["amount_label"] == "지원금액 확인 필요"
+    assert "소득 구간에 따라" in " ".join(view["needs_confirmation"] or [])
+
+
+def test_build_policy_view_shows_range_when_amount_is_unconfirmed_but_bounded():
+    """T1 실사용 후속 요청(2026-09-11): '90-110만원'처럼 원문에 범위로만
+    적힌 금액은 "확인 필요" 대신 범위 그대로 보여준다.
+
+    amount는 여전히 None이다(대표값을 임의로 고르지 않는다는 원칙은
+    유지) - 대신 benefit_amount에 실려온 amount_min/amount_max로
+    amount_label을 채운다.
+    """
+    store = FakeDetailStore({})
+    entry = {
+        "eligibility": {"policy_id": "policy-g", "verdict": "충족", "reasons": [], "checked": ["연령"]},
+        "benefit_amount": {
+            "policy_id": "policy-g",
+            "amount": None,
+            "amount_min": 900000.0,
+            "amount_max": 1100000.0,
+            "period": "month",
+        },
+        "status_note": "원문에 범위(하한~상한)로만 금액이 명시되어 단일 금액을 확정할 수 없음",
+        "duplicate": {"status": "없음"},
+    }
+    view = _build_policy_view("policy-g", entry, store=store, query_id="q1", rank=1, is_top=False)
+
+    assert view["amount_label"] == "월 900,000원~1,100,000원"
+    assert view["amount"] is None
+    assert view["amount_min"] == 900000.0
+    assert view["amount_max"] == 1100000.0
+    # 사유도 needs_confirmation에 그대로 남아, 왜 대표값이 아니라 범위인지
+    # 설명한다.
+    assert "범위" in " ".join(view["needs_confirmation"] or [])
 
 
 def test_rank_policies_prefers_충족_then_larger_amount():
@@ -633,7 +747,7 @@ def test_recording_client_exposes_inner_model_name():
     class _Inner:
         model = "some/model"
 
-        def complete(self, prompt, *, system=None):
+        def complete(self, prompt, *, system=None, max_tokens=None):
             return "{}"
 
     assert RecordingLLMClient(_Inner()).summary()["model"] == "some/model"
@@ -644,7 +758,7 @@ def test_recording_client_isolates_overlapping_request_scopes():
         def __init__(self):
             self.barrier = Barrier(2)
 
-        def complete(self, prompt, *, system=None):
+        def complete(self, prompt, *, system=None, max_tokens=None):
             self.barrier.wait(timeout=5)
             if prompt == "failure-b":
                 raise LLMCallError("failure-b")
@@ -971,8 +1085,15 @@ class _StubResponse:
         self.choices = [_StubChoice(content, finish_reason)]
 
 
-def _complete_with(content, finish_reason):
-    """HuggingFaceInferenceClient.complete()를 네트워크 없이 한 번 돌린다."""
+def _complete_with(content, finish_reason, max_tokens=None, captured_kwargs=None):
+    """HuggingFaceInferenceClient.complete()를 네트워크 없이 한 번 돌린다.
+
+    max_tokens: 2026-09-11 추가 - complete() 호출 시 이번 호출에만 넘길
+    per-call 오버라이드. None이면 인스턴스 기본값(max_new_tokens=1024)이
+    그대로 쓰인다.
+    captured_kwargs: 넘기면 실제 chat_completion()에 전달된 kwargs를
+    이 dict에 채워 넣어 테스트에서 검증할 수 있게 한다.
+    """
 
     import huggingface_hub
 
@@ -986,11 +1107,13 @@ def _complete_with(content, finish_reason):
         def __init__(self, **_kwargs):
             pass
 
-        def chat_completion(self, **_kwargs):
+        def chat_completion(self, **kwargs):
+            if captured_kwargs is not None:
+                captured_kwargs.update(kwargs)
             return _StubResponse(content, finish_reason)
 
     with patch.object(huggingface_hub, "InferenceClient", _StubInferenceClient):
-        return client.complete("prompt")
+        return client.complete("prompt", max_tokens=max_tokens)
 
 
 def test_truncated_llm_answer_is_treated_as_a_failure_not_returned():
@@ -1020,3 +1143,34 @@ def test_empty_llm_answer_from_length_limit_still_explains_reasoning_tokens():
 
 def test_completed_llm_answer_is_returned_as_is():
     assert _complete_with("완결된 답변입니다.", "stop") == "완결된 답변입니다."
+
+
+# ── max_tokens per-call 오버라이드 (2026-09-11 추가) ───────────────────────
+
+
+def test_complete_uses_instance_default_when_max_tokens_not_given():
+    captured: dict = {}
+    _complete_with("완결된 답변입니다.", "stop", captured_kwargs=captured)
+    assert captured["max_tokens"] == 1024
+
+
+def test_complete_max_tokens_override_is_passed_through_to_chat_completion():
+    """benefit_calculator.py의 두 LLM 호출은 전역 기본값(1024)보다 높은
+    예산을 이 파라미터로 넘겨야 한다 - 다른 노드(N1/N5/N9/N13)의
+    속도는 그대로 유지하면서 이 호출만 더 넉넉한 토큰 예산을
+    쓰게 하는 수단이다.
+    """
+    captured: dict = {}
+    _complete_with("완결된 답변입니다.", "stop", max_tokens=8192, captured_kwargs=captured)
+    assert captured["max_tokens"] == 8192
+
+
+def test_length_truncation_error_message_reflects_overridden_max_tokens():
+    """오류 메시지가 인스턴스 기본값(1024)이 아니라 실제로 쓴
+    예산(오버라이드값)을 보고해야 운영자가 혼동하지 않는다."""
+    with pytest.raises(LLMCallError) as caught:
+        _complete_with("중간에 끊긴 답변", "length", max_tokens=8192)
+
+    message = str(caught.value)
+    assert "max_new_tokens=8192" in message
+    assert "max_new_tokens=1024" not in message

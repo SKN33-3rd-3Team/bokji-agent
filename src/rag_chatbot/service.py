@@ -158,7 +158,6 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import os
-from math import isfinite
 
 from dotenv import load_dotenv
 
@@ -175,7 +174,7 @@ from rag_design.vector_store import (
 )
 
 from .graph import build_graph, resume_graph, run_graph
-from .graph.policy_conditions import load_support_conditions
+from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
 from .llm import HuggingFaceInferenceClient, RecordingLLMClient
 from .timing import TIMER, node_title
@@ -190,6 +189,12 @@ load_dotenv(_REPO_ROOT / ".env")
 _REAL_VECTOR_DB_PATH = _REPO_ROOT / "data" / "vector_db"
 _REAL_SUPPORT_CONDITIONS_PATH = (
     _REPO_ROOT / "data" / "raw" / "gov24_support_conditions.json"
+)
+# 2026-09-11 추가: 사용자구분("개인"/"법인/시설/단체" 등)은 위 JA
+# 코드 sidecar에는 없고 처리된 문서 코퍼스에만 있다(policy_conditions.
+# load_policy_user_types docstring 참고).
+_REAL_SUBSIDY_DOCUMENTS_PATH = (
+    _REPO_ROOT / "data" / "processed" / "subsidy_documents.jsonl"
 )
 _REAL_COLLECTION_PREFIX = "bokji_rag"
 _HASH_EMBEDDING_DIMENSION = 128
@@ -256,9 +261,7 @@ def connect_store() -> ChromaVectorStore:
 
 
 def build_llm_client() -> RecordingLLMClient | None:
-    """LLM_BACKEND=ollama는 로컬 설정으로 호환 chat endpoint를 사용한다.
-
-    기본 HF 경로는 ``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 붙일 클라이언트를
+    """``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
     만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
     기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
     성질은 그대로 유지한다.
@@ -267,26 +270,6 @@ def build_llm_client() -> RecordingLLMClient | None:
     ``LLM_HF_MODEL``(``scripts/interactive_console_chat.py``가 쓰던 이름 -
     하위 호환으로 계속 지원), 그것도 없으면 ``_DEFAULT_HF_MODEL``을 쓴다.
     """
-
-    backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
-    if backend == "ollama":
-        model = (os.environ.get("OLLAMA_MODEL") or "").strip()
-        if not model:
-            raise ValueError("OLLAMA_MODEL is required for the ollama backend")
-        base_url = (os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
-        if not base_url.endswith("/v1"):
-            base_url += "/v1"
-        timeout = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or 120)
-        max_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
-        if not isfinite(timeout) or timeout <= 0 or max_tokens <= 0:
-            raise ValueError("Ollama timeout and token limit must be positive and finite")
-        return RecordingLLMClient(HuggingFaceInferenceClient(
-            model=model, token="ollama", base_url=base_url,
-            timeout_seconds=timeout, max_new_tokens=max_tokens,
-            extra_body={"reasoning_effort": "none"},
-        ))
-    if backend not in {"hf", "huggingface"}:
-        raise ValueError("LLM_BACKEND must be hf, huggingface, or ollama")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
@@ -352,16 +335,22 @@ def get_graph() -> Any:
                     support_conditions = load_support_conditions(
                         _REAL_SUPPORT_CONDITIONS_PATH
                     )
+                with TIMER.measure("startup:policy_user_types"):
+                    user_types = load_policy_user_types(
+                        _REAL_SUBSIDY_DOCUMENTS_PATH
+                    )
                 with TIMER.measure("startup:graph_build"):
                     graph = build_graph(
                         store,
                         llm_client=llm_client,
                         support_conditions=support_conditions,
+                        user_types=user_types,
                     )
                 _runtime_cache = {
                     "store": store,
                     "llm_client": llm_client,
                     "support_conditions": support_conditions,
+                    "user_types": user_types,
                     "graph": graph,
                 }
     return _runtime_cache["graph"]
@@ -413,6 +402,15 @@ class PolicyView(TypedDict, total=False):
     amount_is_maximum: bool
     amount_per_unit: str | None
     amount_total: float | None
+    # "90-110만원"처럼 조건 구분 없는 범위로만 원문에 적혀 있을 때(둘 다
+    # 있을 때만 유효, 2026-09-11 추가) - amount는 이때 None이고
+    # amount_label에 이미 범위로 반영돼 있다.
+    amount_min: float | None
+    amount_max: float | None
+    # amount_min/amount_max에 근거(개월수/가구원수)가 있을 때만 채워지는
+    # 총액 범위(2026-09-11 추가) - amount_total과 짝을 이룬다.
+    total_amount_min: float | None
+    total_amount_max: float | None
     duplicate_status: str
     duplicate_note: str | None
     # 조항의 성격("other"/"household"/"header"/None)과, 그에 따라 화면에
@@ -582,12 +580,34 @@ def _format_amount_label(
     (``period``/``is_maximum``/``per_unit``/``total_amount``)을 그대로 붙인다.
 
     예: ``"월 최대 200,000원 (12개월 기준 총 2,400,000원)"``
+
+    amount가 없어도 benefit에 amount_min/amount_max(2026-09-11 추가)가
+    둘 다 있으면 범위로 보여준다 - 예: ``"월 900,000원~1,100,000원"``.
+    "90-110만원"처럼 조건 구분 없는 범위는 원문에 이미 있는 정보라,
+    대표값 하나를 못 고른다고 "지원금액 확인 필요"로 뭉갤 이유가 없다.
     """
 
-    if not isinstance(amount, (int, float)):
-        return status_note or "지원금액 확인 필요"
-
     benefit = benefit or {}
+
+    if not isinstance(amount, (int, float)):
+        amount_min = benefit.get("amount_min")
+        amount_max = benefit.get("amount_max")
+        if isinstance(amount_min, (int, float)) and isinstance(amount_max, (int, float)):
+            range_parts: list[str] = []
+            per_unit = _PER_UNIT_LABELS.get(benefit.get("per_unit") or "")
+            if per_unit:
+                range_parts.append(per_unit)
+            period = _PERIOD_LABELS.get(benefit.get("period") or "")
+            if period:
+                range_parts.append(period)
+            range_parts.append(f"{_won(float(amount_min))}~{_won(float(amount_max))}")
+            label = " ".join(range_parts)
+            total_min = benefit.get("total_amount_min")
+            total_max = benefit.get("total_amount_max")
+            if isinstance(total_min, (int, float)) and isinstance(total_max, (int, float)):
+                label += f" (총 {_won(float(total_min))}~{_won(float(total_max))})"
+            return label
+        return status_note or "지원금액 확인 필요"
     parts: list[str] = []
     per_unit = _PER_UNIT_LABELS.get(benefit.get("per_unit") or "")
     if per_unit:
@@ -615,11 +635,29 @@ def _build_policy_view(
 
     benefit = entry.get("benefit_amount")
     amount = benefit.get("amount") if benefit else None
-    amount_label = _format_amount_label(amount, entry.get("status_note"), benefit)
+    amount_note = entry.get("status_note")
+    # st.metric 위젯(streamlit_ui/rendering.py의 _metric)은 짧은 값 한 줄만
+    # 보여주도록 만들어졌다. amount가 None이면 amount_note에는 길이가
+    # 들쭉날쭉한 문구가 들어갈 수 있다 - LLM이 자유 서술형으로 쓴 사유
+    # (예: "이 금액은 융자 한도로 지원금이 아님")이거나, 실패를 숨기지
+    # 않는다는 원칙 때문에 그대로 남겨둔 LLM 호출 실패/응답 파싱 실패
+    # 메시지(benefit_calculator.py 참고)다. 이걸 그대로 금액 위젯 안에
+    # 밀어넣으면 카드마다 레이아웃이 깨지므로, 위젯에는 고정된 짧은
+    # 문구만 넣고 실제 사유는 아래에서 needs_confirmation(문장 길이
+    # 제약이 없는 자리)으로 옮긴다.
+    amount_label = _format_amount_label(amount, None, benefit)
 
     duplicate = entry.get("duplicate") or {}
     duplicate_status = duplicate.get("status") if duplicate else "미확인"
-    duplicate_note = duplicate.get("condition_note") if duplicate else entry.get("status_note")
+    # entry["status_note"](amount_note)는 "지원금 계산이 왜 안 됐는지"를
+    # 설명하는 문구다(대출 한도라 확정 불가, 정보 부족 등) - 중복수급과는
+    # 무관한 사유인데, 예전에는 duplicate가 비어 있으면(그 정책에 중복수급
+    # 조항 자체가 없으면) 이 자리로 새어 들어와 "중복수급 안내" 캡션에
+    # 금액 사유가 떴다(streamlit_ui/rendering.py의 duplicate_note 캡션
+    # 렌더링 참고). 그 정보는 이미 needs_confirmation(위 amount_note 처리
+    # 참고)이 올바른 자리에서 보여주고 있으므로, 여기서는 실제 중복수급
+    # 조항이 있을 때만 채운다.
+    duplicate_note = duplicate.get("condition_note") if duplicate else None
     duplicate_clause_kind = duplicate.get("clause_kind")
     household_limit_clauses = [
         str(item) for item in duplicate.get("household_clauses") or []
@@ -628,6 +666,8 @@ def _build_policy_view(
     needs_confirmation: list[str] = []
     if verdict == "미확인":
         needs_confirmation.extend(reasons)
+    if not isinstance(amount, (int, float)) and amount_note:
+        needs_confirmation.append(amount_note)
     if duplicate_status in ("미확인", "조건부") and duplicate_note:
         needs_confirmation.append(duplicate_note)
     # 자격 미확인 사유와 중복수급 미확인 사유가 우연히 같은 문장일 수 있다
@@ -672,6 +712,10 @@ def _build_policy_view(
         "amount_is_maximum": bool((benefit or {}).get("is_maximum")),
         "amount_per_unit": (benefit or {}).get("per_unit"),
         "amount_total": (benefit or {}).get("total_amount"),
+        "amount_min": (benefit or {}).get("amount_min"),
+        "amount_max": (benefit or {}).get("amount_max"),
+        "total_amount_min": (benefit or {}).get("total_amount_min"),
+        "total_amount_max": (benefit or {}).get("total_amount_max"),
         "duplicate_status": duplicate_status,
         "duplicate_note": duplicate_note,
         "duplicate_clause_kind": duplicate_clause_kind,

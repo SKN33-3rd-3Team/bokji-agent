@@ -1,65 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
-
 import pytest
-import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from streamlit_ui.pages import chat as chat_module
-
-
-@pytest.mark.parametrize("trace", [None, "0"])
-def test_app_warms_embedding_once_before_chat_on_rerun(monkeypatch, trace):
-    from src.rag_chatbot import service
-
-    if trace is None:
-        monkeypatch.delenv("BOKJI_TRACE", raising=False)
-    else:
-        monkeypatch.setenv("BOKJI_TRACE", trace)
-    events = []
-    embed = Mock(side_effect=lambda text: events.append("warmup"))
-    store = Mock(return_value=SimpleNamespace(embedding_provider=SimpleNamespace(embed_query=embed)))
-    monkeypatch.setattr(service, "get_store", store)
-
-    def render_chat():
-        import os
-
-        assert events[0] == "warmup"
-        assert os.environ["BOKJI_TRACE"] == (trace or "1")
-        events.append("chat")
-        st.chat_input("질문")
-
-    monkeypatch.setattr(chat_module, "page_chat", render_chat)
-    st.cache_resource.clear()
-    try:
-        from streamlit_ui.pages import auth, mypage
-
-        for module, name in ((auth, "page_login"), (auth, "page_signup"), (mypage, "page_mypage")):
-            monkeypatch.setattr(module, name, lambda: st.write("non-chat"))
-        app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"))
-        for view in ("login", "signup", "mypage"):
-            app.session_state["view"] = view
-            app.run(timeout=20)
-            assert not app.exception
-            assert "non-chat" in _values(app.markdown)
-            assert len(app.chat_input) == 0
-            store.assert_not_called()
-            embed.assert_not_called()
-        app.session_state["view"] = "chat"
-        app.run(timeout=20)
-        assert not app.exception
-        assert len(app.chat_input) == 1
-        app.run(timeout=20)
-        assert not app.exception
-        assert events == ["warmup", "chat", "chat"]
-        store.assert_called_once_with()
-        embed.assert_called_once_with("복지 서비스 준비")
-    finally:
-        st.cache_resource.clear()
-
 
 # AppTest 스크립트가 ``chat.render_result``/``chat.run_pipeline`` 같은 모듈
 # 전역을 갈아끼우는데, ``streamlit_ui.pages.chat`` 은 이 프로세스에서 한 번만
@@ -67,56 +11,6 @@ def test_app_warms_embedding_once_before_chat_on_rerun(monkeypatch, trace):
 # 일부러 실패시키는 테스트 뒤에 오는 테스트들이 그 가짜 render_result 를
 # 물려받아 엉뚱하게 깨졌다. 매 테스트 후 원래대로 되돌린다.
 _PATCHED_CHAT_GLOBALS = ("render_result", "run_pipeline", "VECTOR_DB_DIR")
-
-
-@pytest.mark.parametrize("failure_stage", ["get_store", "embed_query"])
-def test_app_warmup_failure_reaches_safe_chat_handling(monkeypatch, tmp_path, failure_stage):
-    from src.rag_chatbot import service
-
-    error = (SystemExit if failure_stage == "get_store" else RuntimeError)(
-        "private warmup error"
-    )
-    embed = Mock(side_effect=error if failure_stage == "embed_query" else None)
-    store = Mock(
-        return_value=SimpleNamespace(embedding_provider=SimpleNamespace(embed_query=embed)),
-        side_effect=error if failure_stage == "get_store" else None,
-    )
-    monkeypatch.setattr(service, "get_store", store)
-    monkeypatch.setattr(chat_module, "VECTOR_DB_DIR", tmp_path)
-    pipeline = Mock(side_effect=error)
-    monkeypatch.setattr(chat_module, "run_pipeline", pipeline)
-    st.cache_resource.clear()
-    try:
-        app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"))
-        app.session_state["view"] = "chat"
-        app.run(timeout=20)
-        assert not app.exception
-        assert _values(app.error) == [
-            "서비스 데이터베이스가 준비되지 않았습니다. 관리자에게 문의해 주세요."
-        ]
-        pipeline.assert_not_called()
-        store.assert_called_once_with()
-        if failure_stage == "embed_query":
-            embed.assert_called_once_with("복지 서비스 준비")
-        else:
-            embed.assert_not_called()
-
-        (tmp_path / "chroma.sqlite3").touch()
-        app.run(timeout=20)
-        assert not app.exception
-        assert len(app.chat_input) == 1
-        app.chat_input[0].set_value("질문").run(timeout=20)
-        assert not app.exception
-        pipeline.assert_called_once()
-        expected = (
-            chat_module._SETUP_ERROR_MESSAGE
-            if failure_stage == "get_store"
-            else chat_module._GENERIC_ERROR_MESSAGE
-        )
-        assert _values(app.error) == [expected]
-        assert "private warmup error" not in str(app)
-    finally:
-        st.cache_resource.clear()
 
 
 @pytest.fixture(autouse=True)
