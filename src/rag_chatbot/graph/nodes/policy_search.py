@@ -29,7 +29,11 @@ from rag_design.contracts import Chunk, RetrievedChunk, SourceType
 from rag_design.vector_store import ChromaVectorStore, VectorSearchFilter
 
 from ..llm_gateway import redact_sensitive_text
-from ..policy_conditions import SupportConditionsIndex, filter_candidates
+from ..policy_conditions import (
+    PolicyUserTypeIndex,
+    SupportConditionsIndex,
+    filter_candidates,
+)
 from ..slot_schema import resolve_filter_slots
 from ..state import GraphState
 
@@ -202,6 +206,7 @@ def search_policies(
     *,
     top_k: int | None = None,
     support_conditions: SupportConditionsIndex | None = None,
+    user_types: PolicyUserTypeIndex | None = None,
 ) -> dict:
     """slots 기반으로 지원제도 후보를 검색해 subsidy_chunks를 채운다.
 
@@ -255,7 +260,9 @@ def search_policies(
         top_k=SEMANTIC_CANDIDATE_LIMIT,
         search_filter=search_filter,
     )
-    filtered = filter_candidates(results, support_conditions, filter_plan)
+    filtered = filter_candidates(
+        results, support_conditions, filter_plan, user_types=user_types
+    )
     selected = _select_top_policies(filtered, resolved_top_k)
     return {
         "subsidy_chunks": selected,

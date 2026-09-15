@@ -34,6 +34,7 @@ import re
 import threading
 import time
 from typing import Iterator, Protocol
+from urllib.parse import urlsplit
 
 from ..timing import TIMER
 
@@ -41,12 +42,22 @@ from ..timing import TIMER
 class LLMClient(Protocol):
     """N1/N5/N9/N10/N13이 의존하는 최소 인터페이스. 구현체는 이것만 만족하면 된다."""
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
         """prompt(+ system)를 LLM에 보내고 생성된 텍스트를 그대로 반환한다.
 
         구조화된 출력(JSON 등)이 필요하면 호출하는 쪽(N5/N9/N13)이 프롬프트에서
         JSON으로 답하라고 지시하고 반환된 문자열을 직접 파싱한다 - 이 계층은
         파싱을 책임지지 않는다(프롬프트/스키마가 아직 안 정해졌기 때문).
+
+        max_tokens(2026-09-11 추가): 이번 호출 하나에만 적용할 출력 토큰
+        한도. None이면(기본값) 구현체 생성 시 정한 기본값을 그대로 쓴다.
+        호출부마다 프롬프트 무게가 다른데(예: N5는 claim 3종을 한 번에
+        뽑아 무겁고, N10 조건부 규칙 인식은 실패 시 대체 경로가 아예
+        없다) 전역 환경변수(LLM_MAX_NEW_TOKENS) 하나로는 "전체를 낮춰
+        속도를 올리기"와 "실패하면 안 되는 호출은 예산을 지키기"를 동시에
+        만족할 수 없어서 추가했다.
         """
         ...
 
@@ -297,13 +308,15 @@ class RecordingLLMClient:
         with self._lock:
             self._default_stats = _RecordingStats()
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
         with self._lock:
             stats = self._current_stats()
             stats.call_count += 1
         started = time.perf_counter()
         try:
-            result = self.inner.complete(prompt, system=system)
+            result = self.inner.complete(prompt, system=system, max_tokens=max_tokens)
         except LLMCallError as exc:
             message = str(exc)
             with self._lock:
@@ -378,7 +391,12 @@ class RunPodServerlessClient:
                 "생성자 인자로 직접 전달하세요)."
             )
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        # TODO: worker(handler.py) payload에 토큰 한도 필드가 아직 없다 -
+        # 실제 handler를 배포하면 max_tokens를 여기 payload에도 반영해야
+        # 한다(지금은 RunPod 경로가 실제로 쓰이지 않아 우선순위가 낮다).
         import requests
 
         url = f"https://api.runpod.ai/v2/{self.endpoint_id}/runsync"
@@ -487,7 +505,14 @@ class HuggingFaceInferenceClient:
         timeout_seconds: float = 60.0,
         max_new_tokens: int = 8192,
         extra_body: dict | None = None,
+        base_url: str | None = None,
     ):
+        if base_url is not None:
+            parsed = urlsplit(base_url)
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.query or parsed.fragment):
+                raise ValueError("base_url must be an HTTP(S) endpoint without credentials")
+        self.base_url = base_url
         self.model = model
         self.token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
         if not self.token:
@@ -505,7 +530,12 @@ class HuggingFaceInferenceClient:
         # 참고. None이면 아무것도 얹지 않는다(기본 동작 그대로).
         self.extra_body = extra_body
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        effective_max_tokens = (
+            max_tokens if max_tokens is not None else self.max_new_tokens
+        )
         try:
             from huggingface_hub import InferenceClient
             from huggingface_hub.errors import HfHubHTTPError
@@ -516,7 +546,7 @@ class HuggingFaceInferenceClient:
             ) from exc
 
         client = InferenceClient(
-            model=self.model,
+            model=self.base_url or self.model,
             token=self.token,
             provider=self.provider,
             timeout=self.timeout_seconds,
@@ -530,8 +560,9 @@ class HuggingFaceInferenceClient:
         try:
             response = client.chat_completion(
                 messages=messages,
-                max_tokens=self.max_new_tokens,
+                max_tokens=effective_max_tokens,
                 extra_body=self.extra_body,
+                **({"model": self.model} if self.base_url else {}),
             )
         except (HfHubHTTPError, Exception) as exc:
             # 상태코드별로 "무엇을 확인하면 되는지"까지 담아 던진다.
@@ -539,12 +570,16 @@ class HuggingFaceInferenceClient:
             # requests의 HTTPError 등 다른 예외가 그대로 올라오는 경우가 있어
             # (실측 2026-08-31의 403이 그랬다), 종류와 무관하게 같은 진단을
             # 적용하는 편이 실제로 도움이 된다.
+            if self.base_url:
+                raise LLMCallError("Ollama 호환 엔드포인트 호출 실패") from exc
             raise LLMCallError(diagnose_hf_error(exc, self.model)) from exc
 
         try:
             choice = response.choices[0]
             content = choice.message.content
         except (AttributeError, IndexError, TypeError) as exc:
+            if self.base_url:
+                raise LLMCallError("Ollama 응답 형식 오류") from exc
             raise LLMCallError(f"HuggingFace 응답을 파싱하지 못함: {response!r}") from exc
         finish_reason = getattr(choice, "finish_reason", None)
         if finish_reason == "length":
@@ -562,10 +597,11 @@ class HuggingFaceInferenceClient:
                 else "답을 시작도 못 함(추론형 모델이면 사고 과정에 토큰을 다 썼을 수 있음)"
             )
             raise LLMCallError(
-                f"HuggingFace 응답이 잘림(모델={self.model!r}) - "
-                f"finish_reason='length'로 max_new_tokens={self.max_new_tokens} 안에 "
-                f"{detail}. max_new_tokens를 늘려보세요."
+                    f"{'Ollama' if self.base_url else 'HuggingFace'} 응답이 잘림(모델={self.model!r}) - "
+                f"finish_reason='length'로 max_new_tokens={effective_max_tokens} 안에 "
             )
+        if self.base_url and (not isinstance(content, str) or not content.strip()):
+            raise LLMCallError("Ollama 응답이 비어 있거나 문자열이 아님")
         if not content:
             raise LLMCallError(f"HuggingFace 응답이 비어 있음: {response!r}")
         return content
@@ -582,8 +618,10 @@ class FakeLLMClient:
         self.response = response
         self.calls: list[dict] = []
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
-        self.calls.append({"prompt": prompt, "system": system})
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
         return self.response
 
 
@@ -593,5 +631,7 @@ class FailingLLMClient:
     def __init__(self, message: str = "테스트용 강제 실패"):
         self.message = message
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
         raise LLMCallError(self.message)

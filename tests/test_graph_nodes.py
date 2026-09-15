@@ -236,6 +236,77 @@ def test_no_age_slot_or_no_age_metadata_defaults_to_충족():
     assert result["eligibility_verdicts"][0]["verdict"] == "충족"
 
 
+class _ExplodingStore:
+    """재검색을 시도하면 실패한다 - subsidy_full_chunks만으로 판정하는지 확인용.
+
+    duplicate_benefit.py에 있던 것과 같은 패턴이다(tests/test_duplicate_
+    benefit_clauses.py 참고) - N9에도 같은 최적화를 넣었으니 같은 방식으로
+    검증한다.
+    """
+
+    def search(self, *args, **kwargs):  # pragma: no cover - 호출되면 테스트 실패
+        raise AssertionError("subsidy_full_chunks 가 있으면 재검색하면 안 된다")
+
+
+def test_uses_subsidy_full_chunks_without_researching_vectordb() -> None:
+    """N10a 되묻기 후 E18b로 N9가 다시 실행될 때 매번 vectorDB를 다시
+    치면 안 된다 (2026-09-11 추가).
+
+    N10a(request_calc_info)가 혼인 상태 같은 계산용 소프트 슬롯만 되물어도
+    E18b가 N9(eligibility_verdict) 전체를 다시 태운다(result_assembly의
+    조인 조건 때문 - builder.py의 route_after_benefit_calculator 참고).
+    그런데 N9가 대조하는 조건은 연령뿐이라 그 슬롯과 무관하게 결과가
+    똑같은데, 예전에는 정책마다 매번 vectorDB를 다시 검색했다(관찰된 실행
+    에서 이 노드 하나가 30초 걸렸다). N4가 이미 실어 보낸 subsidy_full_
+    chunks를 쓰면 이 재검색이 사라진다.
+    """
+
+    state = {
+        "slots": {"age": 70},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+        "subsidy_full_chunks": [
+            _retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})
+        ],
+    }
+
+    result = determine_eligibility(state, _ExplodingStore())
+
+    assert result["eligibility_verdicts"] == [
+        {
+            "policy_id": "policy-a",
+            "verdict": "충족",
+            "reasons": ["근거 문장"],
+            "checked": ["연령"],
+            "unchecked": ["장애 여부", "성별", "소득 수준", "취업 상태"],
+        }
+    ]
+
+
+def test_retried_policy_still_researches_despite_full_chunks() -> None:
+    """N6 재시도로 보존된 청크는 전체 문서라는 보장이 없다 - full_chunks가
+    있어도 doc_retry_count > 0이면 재검색해야 한다(duplicate_benefit.py의
+    같은 안전장치와 동일한 이유).
+    """
+
+    claim = _claim("policy-a", EvidenceStatus.SUPPORTED)
+    claim["doc_retry_count"] = 1
+    state = {
+        "slots": {"age": 70},
+        "claim_plan": [claim],
+        # 이 청크는 나이 조건이 없어서, 재검색으로 받은 아래 FakeStore의
+        # 청크가 실제로 쓰였는지(=재검색이 일어났는지) 결과로 구분할 수 있다.
+        "subsidy_full_chunks": [_retrieved_chunk("policy-a", {})],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": 65, "age_end": None})]}
+    )
+
+    result = determine_eligibility(state, store)
+
+    assert store.calls, "doc_retry_count > 0이면 재검색해야 한다"
+    assert result["eligibility_verdicts"][0]["checked"] == ["연령"]
+
+
 def test_no_eligibility_claims_for_policy_yields_empty_list():
     state = {
         "slots": {},
@@ -343,3 +414,84 @@ def test_llm_not_called_when_verdict_is_충족():
 
     assert result["eligibility_verdicts"][0]["verdict"] == "충족"
     assert llm.calls == []  # 위반이 없으면 자연어화할 것도 없으니 LLM 자체를 안 부름
+
+
+def _support_row(*active_codes: str) -> dict:
+    """policy_conditions._CODES 전체를 명시적으로 채운 정부24 JA 코드 row.
+
+    지정한 코드만 "Y", 나머지는 None - _active_codes가 "코드 결측"으로
+    보지 않도록 관련 코드를 전부 채워야 한다(tests/test_policy_conditions.py의
+    _row와 같은 방식).
+    """
+    codes = (
+        "JA0101", "JA0102",
+        "JA0201", "JA0202", "JA0203", "JA0204", "JA0205",
+        "JA0326", "JA0327", "JA0328",
+        "JA0313", "JA0314", "JA0315", "JA0316", "JA0317", "JA0318",
+        "JA0319", "JA0320", "JA0322", "JA1101", "JA1102", "JA1103",
+    )
+    return {code: ("Y" if code in active_codes else None) for code in codes}
+
+
+def test_support_conditions_lets_n9_confirm_more_than_age_when_matching():
+    """2026-09-12 추가: 정부24 지원조건(JA코드)이 있으면 연령 말고도
+    성별·장애 여부를 실제로 대조해서 "확인함"으로 옮길 수 있어야 한다 -
+    "장애 여부, 성별, 소득 수준, 취업 상태는 확인하지 못했다"는 문구가
+    실제로는 확인 가능한 경우에도 항상 뜨던 문제의 수정 대상.
+    """
+    state = {
+        "slots": {"gender": "female", "disability_status": "registered"},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": None, "age_end": None})]}
+    )
+    support_conditions = {"policy-a": _support_row("JA0102", "JA0328")}  # 여성·등록장애인 대상
+
+    result = determine_eligibility(state, store, support_conditions=support_conditions)
+
+    verdict = result["eligibility_verdicts"][0]
+    assert verdict["verdict"] == "충족"
+    assert set(verdict["checked"]) == {"성별", "장애 여부"}
+    assert "소득 수준" in verdict["unchecked"]
+    assert "취업 상태" in verdict["unchecked"]
+
+
+def test_support_conditions_mismatch_flips_verdict_to_미충족():
+    """정부24 코드가 사용자와 명백히 어긋나면(남성 전용인데 여성) 위반으로
+    확정하고 판정이 "미충족"으로 바뀌어야 한다."""
+    state = {
+        "slots": {"gender": "female"},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": None, "age_end": None})]}
+    )
+    support_conditions = {"policy-a": _support_row("JA0101")}  # 남성만 대상
+
+    result = determine_eligibility(state, store, support_conditions=support_conditions)
+
+    verdict = result["eligibility_verdicts"][0]
+    assert verdict["verdict"] == "미충족"
+    assert "성별" in verdict["checked"]
+    assert any("성별 조건 미충족" in reason for reason in verdict["reasons"])
+
+
+def test_without_support_conditions_behavior_is_unchanged():
+    """support_conditions를 안 넘기면(기본값 None) 이전과 완전히 동일하게
+    동작해야 한다 - 슬롯에 성별·장애 여부가 있어도 대조하지 않는다."""
+    state = {
+        "slots": {"gender": "female", "disability_status": "registered"},
+        "claim_plan": [_claim("policy-a", EvidenceStatus.SUPPORTED)],
+    }
+    store = FakeStore(
+        {"policy-a": [_retrieved_chunk("policy-a", {"age_start": None, "age_end": None})]}
+    )
+
+    result = determine_eligibility(state, store)
+
+    verdict = result["eligibility_verdicts"][0]
+    assert verdict["verdict"] == "충족"
+    assert verdict["checked"] == []
+    assert set(verdict["unchecked"]) == {"연령", "장애 여부", "성별", "소득 수준", "취업 상태"}
+
