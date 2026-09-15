@@ -8,12 +8,16 @@
 상세 문의).
 
 핵심 원칙(``README.md``): "검색된 공적 근거로 명확히 입증된 내용만 답한다."
-- LLM에게 대상 정책 텍스트만 컨텍스트로 주고, 그 밖의 내용은 만들어내지 말라고
-  강제한다.
-- LLM이 근거로 제시한 원문 발췌(``evidence_quotes``)가 컨텍스트에 실제로 있는지
-  코드가 문자열 대조로 다시 확인한다(``verify_light_answer``). N6
-  document_verification과 같은 원리 - 발췌를 원문 그대로 내게 하고 포함 여부만
-  본다.
+검증은 두 단계다 - 하나만으로는 "진짜 원문을 인용했지만 결론은 다른 말을 하는"
+경우를 못 잡는다(PR #59 리뷰 피드백, blocker로 지적됨):
+1. LLM이 근거로 제시한 원문 발췌(``evidence_quotes``)가 컨텍스트에 실제로
+   있는지 코드가 문자열 대조로 확인한다(``verify_light_answer``). N6
+   document_verification과 같은 원리 - 발췌를 원문 그대로 내게 하고 포함
+   여부만 본다. **발췌가 진짜라는 것만 보장하지, LLM이 쓴 답변 문장이 그
+   발췌와 같은 말을 하는지는 안 본다.**
+2. 그래서 1번을 통과해도, 답변 문장(``light["answer"]``)이 근거 발췌와
+   내용상 어긋나지 않는지 별도 LLM 호출로 한 번 더 판정한다
+   (``verify_answer_consistency``). 둘 다 통과해야만 사용자에게 노출한다.
 
 참고:
 - ``service.answer_followup()``은 N3 interrupt(되묻기) 재개용이라 이 모듈과 다르다.
@@ -194,6 +198,15 @@ _GUIDANCE_TEMPLATE = (
 )
 
 
+# 이 키는 "사용자 정보"(확정된 사실)로 프롬프트에 넣지 않는다. interests는
+# 검색 질의를 넓히려고 사용자가 고른 힌트일 뿐 자격 판정 조건이 아니다
+# (streamlit_ui/pages/chat.py 사이드바 help 문구, service._build_profile
+# 참고) - "사용자 정보 - 관심 분야: 청년"처럼 다른 슬롯(나이·소득 등)과
+# 같은 형식으로 넣으면 LLM이 "이 사용자는 청년이다"를 확정된 사실로
+# 오해해 답변에 반영할 수 있다(2026-09-15, PR #59 리뷰 피드백 반영).
+_PROFILE_FACT_EXCLUDE_KEYS = frozenset({"interests"})
+
+
 def _profile_facts(user_profile: Iterable | None) -> list[str]:
     """사이드바 "파악한 정보"(``st.session_state["profile"]``)를 컨텍스트 문장으로.
 
@@ -209,6 +222,8 @@ def _profile_facts(user_profile: Iterable | None) -> list[str]:
     facts: list[str] = []
     for item in user_profile or []:
         if not isinstance(item, Mapping):
+            continue
+        if item.get("key") in _PROFILE_FACT_EXCLUDE_KEYS:
             continue
         label = str(item.get("label") or "").strip()
         value = str(item.get("value") or "").strip()
@@ -262,6 +277,10 @@ def respond_to_policy_question(
         return guidance
     if not verify_light_answer(light["evidence_quotes"], context):
         return guidance
+    if not verify_answer_consistency(
+        light["answer"], light["evidence_quotes"], llm_client=llm_client
+    ):
+        return guidance
     return {
         "kind": "answer",
         "text": light["answer"],
@@ -294,3 +313,67 @@ def verify_light_answer(evidence_quotes: Iterable, context_text: object) -> bool
     if not quotes:
         return False
     return all(quote in haystack for quote in quotes)
+
+
+_CONSISTENCY_SYSTEM_PROMPT = (
+    "너는 두 텍스트가 같은 내용을 말하는지 판정하는 검증 도구다. 근거 문장이 "
+    "뒷받침하지 않는 내용(다른 숫자, 다른 조건, 근거에 없는 결론 등)이 답변에 "
+    "하나라도 있으면 반드시 false로 판정한다. 의심스러우면 true가 아니라 "
+    "false로 판정한다."
+)
+
+
+def verify_answer_consistency(
+    answer: str, evidence_quotes: Iterable, *, llm_client: LLMClient, attempts: int = 2,
+) -> bool:
+    """LLM이 실제로 쓴 답변 문장(``answer``)이 자신이 근거로 제시한 발췌
+    (``evidence_quotes``)와 내용상 어긋나지 않는지 별도 LLM 호출로 확인한다.
+
+    ``verify_light_answer``는 발췌 자체가 원문에 진짜 있는지만 본다 - 발췌는
+    진짜인데 답변 문장이 그 발췌와 다른 말(다른 금액, 다른 조건, 근거에 없는
+    결론)을 할 가능성은 잡지 못한다. 이 함수가 그 틈을 메운다(PR #59 리뷰
+    피드백, blocker로 지적됨).
+
+    ``answer_light_followup``과 같은 이유로 재시도한다(무료/공용 LLM
+    엔드포인트의 간헐적 실패). LLM 호출 실패·응답 파싱 실패·형식 위반이면
+    실패(``False``)로 본다 - 이 검증 자체가 다른 검증 함수들과 같은
+    fail-closed 원칙을 따른다. "확인 못 함"을 "통과"로 잘못 처리하면 검증을
+    추가한 의미가 없다.
+    """
+
+    answer = (answer or "").strip()
+    quotes = [
+        q.strip() for q in (evidence_quotes or []) if isinstance(q, str) and q.strip()
+    ]
+    if not answer or not quotes:
+        return False
+
+    evidence_block = "\n".join(f"- {q}" for q in quotes)
+    prompt = (
+        "다음은 근거 문장 목록과, 그 근거를 바탕으로 썼다고 주장하는 답변이다. "
+        "답변에 있는 모든 내용(숫자·조건·결론 포함)이 근거 문장들로 실제로 "
+        "뒷받침되면 consistent를 true로, 근거에 없거나 근거와 다른 내용이 "
+        "답변에 하나라도 있으면 false로 판정하라.\n\n"
+        "예시 1 (일치):\n[근거]\n- 월 최대 20만원을 최대 12개월 지원한다.\n"
+        "[답변]\n월 최대 20만원을 최대 12개월 지원합니다.\n"
+        '출력: {"consistent": true}\n\n'
+        "예시 2 (불일치 - 금액이 다름):\n[근거]\n- 월 최대 20만원을 최대 12개월 지원한다.\n"
+        "[답변]\n월 최대 30만원을 지원합니다.\n"
+        '출력: {"consistent": false}\n\n'
+        "출력 형식(다른 텍스트 없이 이 JSON 하나만): "
+        '{"consistent": <true 또는 false>}\n\n'
+        f"[근거]\n{evidence_block}\n\n[답변]\n{answer}"
+    )
+
+    for attempt in range(max(attempts, 1)):
+        if attempt > 0:
+            time.sleep(_RETRY_BACKOFF_SECONDS)
+        try:
+            response = llm_client.complete(prompt, system=_CONSISTENCY_SYSTEM_PROMPT)
+            data = loads_json_object(response)
+        except (LLMCallError, ValueError, TypeError):
+            continue
+        verdict = data.get("consistent") if isinstance(data, Mapping) else None
+        if isinstance(verdict, bool):
+            return verdict
+    return False
