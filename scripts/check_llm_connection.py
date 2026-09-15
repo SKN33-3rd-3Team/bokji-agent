@@ -145,8 +145,17 @@ def _check_inference(token: str, model: str, max_tokens: int) -> bool:
 
     from src.rag_chatbot.llm import HuggingFaceInferenceClient
 
-    print(f"\n{_INFO} 실제 호출 테스트 - 모델 {model!r}, max_new_tokens={max_tokens}")
-    client = HuggingFaceInferenceClient(model=model, token=token, max_new_tokens=max_tokens)
+    # 서비스와 같은 provider로 찔러야 진단이 실제 동작과 일치한다. 비워두면 auto
+    # 라우팅이라, 여기서 성공해도 서비스는 다른 provider로 붙어 실패할 수 있다
+    # (2026-09-14 실측: auto가 extra_body를 거부하는 provider로 붙어 모든 호출
+    # 400. 이 스크립트는 extra_body를 안 보내서 그때도 성공했고, 그래서 "연결
+    # 정상"이라는 진단이 실제와 어긋났다).
+    provider = (os.environ.get("LLM_PROVIDER") or "").strip() or None
+    where = f", provider={provider!r}" if provider else ", provider=auto(고정 안 함)"
+    print(f"\n{_INFO} 실제 호출 테스트 - 모델 {model!r}, max_new_tokens={max_tokens}{where}")
+    client = HuggingFaceInferenceClient(
+        model=model, token=token, max_new_tokens=max_tokens, provider=provider
+    )
     prompt = '아래 JSON 형식으로만 답하세요. {"ok": true}'
     try:
         response = client.complete(prompt, system="당신은 JSON만 출력하는 도구입니다.")
