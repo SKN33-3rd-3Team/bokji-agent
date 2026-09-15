@@ -31,9 +31,12 @@ from rag_chatbot.graph.slot_schema import (  # noqa: E402
     SKIP_NOT_CONFIRMED,
     SKIP_SUBJECT_NOT_SELF,
     HARD_FILTER_SLOTS,
+    HouseholdType,
     MAX_SLOT_ASKS,
+    SLOT_ENUMS,
     SOFT_FILTER_SLOTS,
     calculate_ages,
+    is_valid_slot_value,
     parse_birth_date,
     resolve_filter_slots,
 )
@@ -907,6 +910,16 @@ class ProfileSlotExtractionTests(unittest.TestCase):
             sorted(result["household_types"]), ["multi_child", "multicultural"]
         )
 
+    def test_stating_newlywed_status_sets_household_type(self) -> None:
+        # 신혼부부(HouseholdType.NEWLYWED)도 다른 가구유형과 같은 규칙기반
+        # 커버리지를 갖는다 - 자기서술일 때만 잡고 대상 질문은 잡지 않는다.
+        result = llm_gateway.extract_slots("저희는 신혼부부입니다", {})
+        self.assertEqual(result["household_types"], ["newlywed"])
+
+    def test_asking_about_newlywed_support_does_not_set_household_type(self) -> None:
+        result = llm_gateway.extract_slots("신혼부부 대상 지원 제도 알려주세요", {})
+        self.assertEqual(result["household_types"], [])
+
     def test_median_income_percentage_maps_to_a_bracket(self) -> None:
         for text, expected in (
             ("중위소득 30% 이하입니다", "under_30"),
@@ -1252,6 +1265,34 @@ class RegionAskLimitTests(unittest.TestCase):
         self.assertNotIn("region_fallback_applied", result)
 
 
+class SignupRegionOptionsSatisfyHardGateTests(unittest.TestCase):
+    """회원가입 지역 선택지(``streamlit_ui.constants.SIDO_OPTIONS``)가 전부
+    N1의 지역 정규화(``normalize_region_input``, ``service.ask()``의
+    ``known_region``도 같은 함수를 쓴다)를 통과해 하드 게이트를 만족시키는지.
+
+    두 목록이 서로 다른 파일에 있어서(회원가입 화면의 선택지 vs N1의
+    ``_SIDO_ALIASES``/``rag_design.contracts.CANONICAL_SIDO_NAMES``), 행정
+    구역 개편처럼 한쪽만 갱신되면 회원가입 때 고른 지역이 조용히
+    ``UNKNOWN``으로 떨어져 자동 연동이 아무 효과 없이 매번 대화로 다시
+    묻게 된다. 광주·전남 통합(2026-07-01)처럼 이미 한 번 실제로 있었던
+    개편이라 회귀 가능성이 낮지 않다."""
+
+    def test_every_signup_region_option_normalizes(self) -> None:
+        from streamlit_ui.constants import SIDO_OPTIONS
+
+        from rag_design.contracts import RegionScope
+        from rag_chatbot.graph.nodes.slot_parser import normalize_region_input
+
+        for option in SIDO_OPTIONS:
+            with self.subTest(option=option):
+                scope, names = normalize_region_input(option)
+                self.assertIs(
+                    scope, RegionScope.REGIONAL,
+                    f"{option!r} did not normalize to a confirmed region (got {scope!r})",
+                )
+                self.assertTrue(names, f"{option!r} normalized with empty region_names")
+
+
 class GateLoopTerminationTests(unittest.TestCase):
     def test_the_n1_n2_n3_loop_always_terminates(self) -> None:
         """사용자가 끝까지 답하지 않아도 루프가 끝나는지 실제로 돌려본다.
@@ -1363,6 +1404,26 @@ class AgeSubjectTests(unittest.TestCase):
         self.assertNotIn("age_subject", HARD_GATE_SLOTS)
         missing = check_slot_completeness({"slots": {}})["missing_slots"]
         self.assertNotIn("age_subject", missing)
+
+    def test_veteran_status_is_not_a_hard_gate_or_filter_slot(self) -> None:
+        """보훈대상자(veteran_status)는 대화 재질문도, 검색 필터도 하지 않는다
+        (정부24 raw JA 코드 미검증 - graph.slot_schema.VeteranStatus docstring
+        참고). service.ask()가 known_veteran_status를 interests로만 반영한다.
+        이 테스트는 그 결정이 나중에 실수로 뒤집히지 않게 못박는다."""
+
+        self.assertNotIn("veteran_status", HARD_GATE_SLOTS)
+        self.assertNotIn("veteran_status", HARD_FILTER_SLOTS)
+        self.assertNotIn("veteran_status", SOFT_FILTER_SLOTS)
+        # is_valid_slot_value 재사용을 위해 SLOT_ENUMS에는 등록돼 있다.
+        self.assertIn("veteran_status", SLOT_ENUMS)
+        self.assertTrue(is_valid_slot_value("veteran_status", "registered"))
+        self.assertFalse(is_valid_slot_value("veteran_status", "alien"))
+        missing = check_slot_completeness({"slots": {}})["missing_slots"]
+        self.assertNotIn("veteran_status", missing)
+
+    def test_household_type_includes_newlywed(self) -> None:
+        # 신혼부부는 별도 슬롯이 아니라 가구유형 목록의 값 하나다.
+        self.assertEqual(HouseholdType.NEWLYWED.value, "newlywed")
 
 
 if __name__ == "__main__":

@@ -244,6 +244,11 @@ _HOUSEHOLD_TYPE_RULES = (
         ("혼자 살", "혼자 삽니다"),
         ("1인 가구", "1인가구"),
     ),
+    # 강사님 주제 컨펌(2026-09-14)으로 추가된 값. 다른 가구유형과 같은
+    # 규칙기반 커버리지를 맞춘다 - 이 규칙이 없으면 HF_TOKEN 미설정 등으로
+    # LLM 없이 규칙기반만 도는 환경(project-status 메모 참고)에서 "신혼
+    # 부부입니다"처럼 말해도 이 값만 추출되지 않는 비대칭이 생긴다.
+    (HouseholdType.NEWLYWED, (), ("신혼부부",)),
 )
 # 소득은 금액이 아니라 구간으로만 받는다. 사용자가 아는 것("기초생활수급자",
 # "차상위")과 제도가 쓰는 기준(소득인정액)을 이어주는 표현만 매핑한다.
@@ -287,7 +292,7 @@ _INTEREST_KEYWORDS = (
 # 그래서 후보 어휘를 공식 시/도 전체 명칭(``CANONICAL_SIDO_NAMES``)과 자주
 # 쓰는 축약형(``_BARE_SIDO_NAMES``)의 리터럴 목록으로 한정한다. 시군구
 # 단독 명칭(예: "강남구", "중구")은 이 목록에 없으므로 애초에 region_raw로
-# 잡히지 않고, 결과적으로 정규화 단계(``slot_parser._normalize_region``)에서
+# 잡히지 않고, 결과적으로 정규화 단계(``slot_parser.normalize_region_input``)에서
 # unknown으로 처리되는 것과 동일한 결과를 유지한다(공통 validator에 시군구
 # registry가 없어 임의로 해석하지 않는다는 팀 결정과 일치).
 _BARE_SIDO_NAMES = (
@@ -566,7 +571,7 @@ def _validated_llm_slots(
 
     region_raw = data.get("region_raw")
     if isinstance(region_raw, str) and region_raw.strip():
-        # 정규화/검증은 N1의 _normalize_region이 한다(규칙 경로와 동일).
+        # 정규화/검증은 N1의 normalize_region_input이 한다(규칙 경로와 동일).
         validated["region_raw"] = region_raw.strip()
 
     for field in _LLM_ENUM_FIELDS:

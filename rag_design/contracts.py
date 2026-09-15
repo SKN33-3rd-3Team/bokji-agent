@@ -30,6 +30,29 @@ LEGAL_METADATA_FIELDS = (
 )
 LEGAL_SECTION_HEADING = ("기본정보",)
 LEGAL_SECTION_TYPE = "basic_info"
+
+# 정책(SUBSIDY) 상세의 section_type 전체 목록 — 여기 하나만 보고 수집기
+# (gov_24/to_document.py의 SECTION_FIELDS), 서비스(service.py의 검색+응답
+# 조립), 화면(streamlit_ui의 표시 라벨)이 같은 section_type 집합을 다루게
+# 한다. 세 번째 값(search_hint_ko)은 vectorDB 재검색 쿼리에 덧붙는 텍스트,
+# 네 번째 값(display_label_ko)은 화면 표시용 — 구비서류 3종처럼 수집기 쪽
+# 필드명을 그대로 쓰는 게 아니면 다를 수 있다. 새 section_type을 추가할 때
+# 이 목록에 없으면 검색도, 화면 표시도 되지 않으니(#48에서 실제로 깜빡해
+# 두 파일을 따로 고쳤던 문제) 여기만 고치면 되게 만든 것이다.
+SubsidyDetailSection = tuple[str, str, str]  # (section_type, search_hint_ko, display_label_ko)
+
+SUBSIDY_DETAIL_SECTIONS: tuple[SubsidyDetailSection, ...] = (
+    ("purpose", "목적", "목적"),
+    ("support_target", "지원대상", "지원 대상"),
+    ("eligibility_criteria", "선정기준", "선정 기준"),
+    ("support_details", "지원내용", "지원 내용"),
+    ("application_method", "신청방법", "신청 방법"),
+    ("application_period", "신청기한", "신청 기간"),
+    ("legal_basis", "근거법령", "근거 법령"),
+    ("required_documents", "구비서류", "구비서류"),
+    ("required_documents_official", "공무원 확인 구비서류", "공무원 확인 구비서류"),
+    ("required_documents_self", "본인확인 필요 구비서류", "본인확인 필요 구비서류"),
+)
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _CANONICAL_DATE_PATTERN = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 _DECIMAL_IDENTIFIER_PATTERN = re.compile(r"^[0-9]+$")
