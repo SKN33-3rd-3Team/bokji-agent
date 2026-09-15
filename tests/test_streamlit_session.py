@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+from streamlit.testing.v1 import AppTest
+
 from streamlit_ui.session import get_last_answered_result, new_conversation
 
 
@@ -99,3 +101,46 @@ def test_get_last_answered_result_returns_a_copy() -> None:
     result["final_answer"] = "바뀐 값"
 
     assert stored["final_answer"] == "원본"
+
+
+# ── 개발용 자동 로그인 호출 경로 분리 (PR #60 리뷰 회귀 테스트) ──────────
+#
+# app.py(실서비스 진입점)는 init_session()만 부르고, DEV_AUTOLOGIN_EMAIL이
+# 운영 환경에 실수로 남아 있어도 자동 로그인이 실행되지 않아야 한다.
+# demo_ui_fake.py 같은 명시적 개발용 진입점만 maybe_dev_autologin()을 따로
+# 불러 자동 로그인을 켠다. 계정이 실제로 존재하는지와 무관하게,
+# ``_dev_autologin_done`` 플래그가 찍혔는지로 "이 함수가 실행을 시도했는지"
+# 를 판별한다(계정이 없으면 예외를 삼키고도 이 플래그는 남긴다).
+
+
+def test_init_session_alone_never_attempts_dev_autologin(monkeypatch) -> None:
+    monkeypatch.setenv("DEV_AUTOLOGIN_EMAIL", "dev@example.com")
+    monkeypatch.delenv("AUTH_DB_URL", raising=False)
+
+    script = """\
+from streamlit_ui.session import init_session
+
+init_session()
+"""
+    app = AppTest.from_string(script).run(timeout=10)
+
+    assert app.session_state["auth_user"] is None
+    assert "_dev_autologin_done" not in app.session_state
+
+
+def test_explicit_maybe_dev_autologin_call_still_runs(monkeypatch) -> None:
+    monkeypatch.setenv("DEV_AUTOLOGIN_EMAIL", "dev@example.com")
+    monkeypatch.delenv("AUTH_DB_URL", raising=False)
+
+    script = """\
+from streamlit_ui.session import init_session, maybe_dev_autologin
+
+init_session()
+maybe_dev_autologin()
+"""
+    app = AppTest.from_string(script).run(timeout=10)
+
+    # 이 이메일로 가입된 계정이 없어 로그인 자체는 실패하지만(예외를
+    # 삼킨다), 함수가 실제로 실행을 시도했다는 표시는 남는다 - init_session
+    # 단독 호출과 구분하는 것이 이 테스트의 목적이다.
+    assert app.session_state["_dev_autologin_done"] is True

@@ -21,6 +21,7 @@ SLOT_LABELS_KO: dict[str, str] = {
     "income_bracket": "소득 수준",
     "disability_status": "장애 등록 여부",
     "employment_status": "취업 상태",
+    "household_types": "가구 유형",
 }
 
 # 성별 선택지 (회원가입/마이페이지). 코드값("male"/"female")은 하드게이트

@@ -18,12 +18,35 @@ from streamlit_ui.pages import home as home_module
 _PATCHED_HOME_GLOBALS = ("ask", "answer_followup", "VECTOR_DB_DIR")
 
 
+def _html_values(app) -> list[str]:
+    """정책 카드/목록 머리글은 ``st.html``로 그린다(test_streamlit_rendering.py
+    의 동명 헬퍼와 같은 이유 - AppTest는 이 노드를 ``get('html')``로만 꺼낼
+    수 있고, 실제 텍스트는 ``.proto.body``에 있다)."""
+
+    return [str(element.proto.body) for element in app.get("html")]
+
+
 @pytest.fixture(autouse=True)
 def _restore_home_module_globals():
     saved = {name: getattr(home_module, name) for name in _PATCHED_HOME_GLOBALS}
     yield
     for name, value in saved.items():
         setattr(home_module, name, value)
+
+
+@pytest.fixture(autouse=True)
+def _no_dev_autologin(monkeypatch):
+    """개발자 로컬 ``.env``의 ``DEV_AUTOLOGIN_EMAIL``이 이 파일 테스트에 새지
+    않게 한다. ``src/rag_chatbot/service.py``가 import 시점에 ``load_dotenv()``
+    를 부르므로, 이 테스트들이 ``auth_user=None``을 명시적으로 넣어도
+    ``init_session()``이 그걸 조용히 실제 dev 계정으로 덮어써버려
+    ``test_home_requires_login``이 로그인 게이트를 아예 못 보는 등 결과가
+    개발자 로컬 상태에 따라 달라졌다(2026-09-15, merge 후 전체 스위트 정리
+    중 발견). ``monkeypatch``라 테스트가 끝나면 자동으로 원래 값이 복원돼
+    이 값에 의존하는 다른 테스트 파일에는 영향이 없다.
+    """
+
+    monkeypatch.delenv("DEV_AUTOLOGIN_EMAIL", raising=False)
 
 
 _AUTH_USER = {
@@ -131,8 +154,11 @@ def fake_ask(user_input, session_id, *, top_k=5, extra_interests=None,
         "known_household_types": ["single_parent", "newlywed"],
         "known_veteran_status": "registered",
     }
-    assert any("확인한 정책입니다." in str(item.value) for item in app.markdown)
-    assert any("확인한 정책 1건" in str(item.value) for item in app.markdown)
+    # final_answer 문장은 정책 카드가 있으면 카드가 이미 구조화해서 보여주는
+    # 내용과 중복이라 markdown으로 따로 보여주지 않는다(rendering.py
+    # `_render_answer` 참고) - 카드 목록 머리글(HTML)이 대신 뜬다.
+    assert any("확인한 정책 1건" in html for html in _html_values(app))
+    assert any("청년월세지원" in html for html in _html_values(app))
 
 
 def test_home_needs_input_flow_uses_answer_followup(tmp_path) -> None:
@@ -164,7 +190,8 @@ home.answer_followup = fake_answer_followup
     app = app.run(timeout=10)
 
     assert app.session_state["_followup_calls"][-1][1] == "무직입니다"
-    assert any("확인한 정책입니다." in str(item.value) for item in app.markdown)
+    # 위와 같은 이유로 final_answer 대신 정책 카드(HTML)로 확인한다.
+    assert any("청년월세지원" in html for html in _html_values(app))
 
 
 def test_home_sidebar_back_button_returns_to_chat(tmp_path) -> None:

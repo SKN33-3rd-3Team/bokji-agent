@@ -6,17 +6,21 @@ import logging
 import threading
 import time
 from collections.abc import Mapping
+from datetime import date
 
 import streamlit as st
 
-from src.rag_chatbot.timing import EXPECTED_NODE_COUNT, TIMER, node_title
+from src.rag_chatbot.timing import EXPECTED_NODE_COUNT, TIMER
 
 from ..constants import (
     BOT_AVATAR,
     DEFAULT_TOP_K,
     EXAMPLE_PROMPTS,
+    HOUSEHOLD_TYPE_LABELS_KO,
     INTEREST_FIELD_OPTIONS,
     INTEREST_OPTIONS,
+    SIDO_OPTIONS,
+    SLOT_LABELS_KO,
     USER_AVATAR,
     VECTOR_DB_DIR,
 )
@@ -24,6 +28,7 @@ from ..nav import goto
 from ..pipeline import run_pipeline
 from ..rendering import render_result
 from ..session import clear_conversation_state, escape_md, logout, md_text, new_conversation
+from ..theme import render_avatar
 
 _GENERIC_ERROR_MESSAGE = (
     "상담 처리 중 오류가 발생했습니다. 잠시 후 다시 시도하거나 대화를 초기화해 주세요."
@@ -43,6 +48,31 @@ _PROGRESS_POLL_SECONDS = 0.4
 
 def _reset_conversation() -> None:
     clear_conversation_state()
+
+
+@st.dialog("새 상담을 시작할까요?", width="small")
+def _confirm_reset_dialog() -> None:
+    """"새 상담 시작" 확인 팝업 - 실수로 눌러 대화가 통째로 사라지는 걸
+    막는다(2026-09-15, PR 리뷰 피드백 반영). 취소/시작 둘 다 명시적으로
+    골라야 닫히므로 ``dismissible``은 기본값(True)으로 둔다 - 여기선 실수
+    방지가 목적이라, 바깥 클릭으로 취소되는 것도 자연스럽다.
+    """
+
+    st.warning(
+        "지금까지의 대화 내용이 모두 사라져요. 계속할까요?",
+        icon=":material/delete_sweep:",
+    )
+    col1, col2 = st.columns(2)
+    if col1.button("취소", key="confirm_reset_cancel", width="stretch"):
+        st.session_state.pop("confirm_new_chat", None)
+        st.rerun()
+    if col2.button(
+        "새 상담 시작", key="confirm_reset_go", width="stretch",
+        type="primary", icon=":material/delete_sweep:",
+    ):
+        st.session_state.pop("confirm_new_chat", None)
+        _reset_conversation()
+        st.rerun()
 
 
 def _render_intro() -> None:
@@ -65,29 +95,19 @@ def _render_intro() -> None:
                 st.rerun()
 
 
-def _signed_up_interest_defaults(auth_user: dict | None) -> list[str]:
-    """로그인 사용자가 회원가입 때 고른 지원조건 중, 지금도 유효한 선택지만.
+def _render_sidebar() -> tuple[int, list[str]]:
+    """계정 영역 + (로그인 시) 상담 관리·검색 설정을 담은 사이드바.
 
-    ``INTEREST_OPTIONS``가 나중에 바뀌어도(항목 추가/삭제) 예전에 저장된
-    값이 지금 선택지에 없으면 ``st.multiselect``가 그 값을 ``default``로
-    받는 순간 예외를 낸다 - 필터링 없이 그대로 넘기면 로그인 자체가 화면
-    오류로 이어진다.
-    """
-
-    if not auth_user:
-        return []
-    saved = auth_user.get("interests") or []
-    return [item for item in saved if item in INTEREST_OPTIONS]
-
-
-def _render_sidebar(auth_user: dict | None) -> tuple[int, list[str]]:
-    """설정 사이드바. ``(top_k, extra_interests)``를 돌려준다.
+    ``(top_k, extra_interests)``를 돌려준다. 로그인 여부와 무관하게 항상 한
+    번만 그린다 - 로그인 전에는 로그인/회원가입 버튼만, 로그인 후에는
+    아바타·이름·마이페이지·로그아웃에 더해 "새 상담 시작"과 접어둔 "검색
+    범위 조정"(지원조건·관심 분야 pills, 정책 후보 수)까지 보여준다.
 
     지원조건·관심 분야는 **검색 질의를 넓히는 힌트**이지 자격 판정 조건이
     아니다. interests는 소프트 슬롯이라 하드 게이트나 검색 필터에 쓰이지
     않는다 - 고른다고 해서 "그 조건에 해당한다"고 판정되지 않는다.
 
-    로그인 사용자는 "지원조건" 멀티셀렉트의 기본 선택값을 회원가입 때 저장한
+    로그인 사용자는 "지원조건" pills의 기본 선택값을 회원가입 때 저장한
     값으로 미리 채운다(``default=``는 위젯이 이 세션에서 처음 그려질 때만
     쓰이므로, 로그인 직후 한 번만 적용되고 이후엔 사용자가 고른 값이
     session_state에 남아 그대로 유지된다 - 로그인/로그아웃 경계에서
@@ -97,83 +117,63 @@ def _render_sidebar(auth_user: dict | None) -> tuple[int, list[str]]:
     적용되고 회원 프로필 자체를 바꾸지 않는다.
     """
 
+    auth_user = st.session_state.get("auth_user")
+    selected_conditions: list[str] = []
+    selected_fields: list[str] = []
+    top_k = DEFAULT_TOP_K
+
     with st.sidebar:
-        st.subheader(":material/tune: 설정")
-        selected_conditions = st.multiselect(
-            "지원조건",
-            INTEREST_OPTIONS,
-            default=_signed_up_interest_defaults(auth_user),
-            key="interests_pick",
-            placeholder="조건 선택 (여러 개 선택 가능)",
-            help="해당하는 조건을 골라 주세요. 여러 개 선택할 수 있고, "
-                 "정책 검색 쿼리에 더해집니다. 자격 판정 조건은 아닙니다. "
-                 "로그인 상태면 회원가입 때 표시한 조건이 기본으로 선택돼 "
-                 "있습니다 - 더하거나 빼도 이번 상담에서만 적용됩니다.",
-        )
-        selected_fields = st.multiselect(
-            "관심 분야",
-            INTEREST_FIELD_OPTIONS,
-            default=[],
-            key="fields_pick",
-            placeholder="분야 선택 (여러 개 선택 가능)",
-            help="관심 있는 지원 분야를 골라 주세요. 지원조건과 함께 "
-                 "정책 검색 쿼리에 반영됩니다.",
-        )
-        top_k = st.slider(
-            "정책 후보 수",
-            min_value=3,
-            max_value=15,
-            value=DEFAULT_TOP_K,
-            key="topk",
-            help="검색이 가져오는 후보 정책 청크 수. 늘리면 더 많은 제도를 훑습니다.",
-        )
-
-        if st.button(
-            "대화 초기화",
-            icon=":material/delete_sweep:",
-            width="stretch",
-            type="secondary",
-        ):
-            _reset_conversation()
-            st.rerun()
-
-        st.markdown(":material/account_circle: **계정**")
         if auth_user:
             name = auth_user.get("display_name") or auth_user.get("username", "")
-            st.caption(f":material/check_circle: {escape_md(name)} 님으로 로그인됨")
-        account = st.container(horizontal=True)
-        if not auth_user:
-            if account.button(
-                "로그인",
-                icon=":material/login:",
-                width="stretch",
-                key="sb_login",
-            ):
-                goto("login")
-            if account.button(
-                "회원가입",
-                icon=":material/person_add:",
-                width="stretch",
-                key="sb_signup",
-            ):
-                goto("signup")
-        if st.button(
-            "마이페이지",
-            icon=":material/person:",
-            width="stretch",
-            key="sb_mypage",
-        ):
-            goto("mypage")
-        if auth_user:
+            acc_row = st.container(horizontal=True, vertical_alignment="center")
+            render_avatar(acc_row, name=name, size=40)
+            acc_row.markdown(f"**{escape_md(name)} 님**")
+            if st.button("마이페이지", icon=":material/person:", width="stretch", key="sb_mypage"):
+                goto("mypage")
             if st.button(
-                "로그아웃",
-                icon=":material/logout:",
-                width="stretch",
-                key="sb_logout",
-                type="secondary",
+                "로그아웃", icon=":material/logout:", width="stretch",
+                key="sb_logout", type="secondary",
             ):
                 logout()
                 st.rerun()
+        else:
+            account = st.container(horizontal=True)
+            if account.button("로그인", icon=":material/login:", width="stretch", key="sb_login"):
+                goto("login")
+            if account.button("회원가입", icon=":material/person_add:", width="stretch", key="sb_signup"):
+                goto("signup")
+
+        # 로그인한 사용자에게만: 상담 관리 + (접어둔) 검색 범위 조정.
+        if auth_user:
+            st.divider()
+            if st.button(
+                "새 상담 시작", icon=":material/delete_sweep:",
+                width="stretch", type="secondary", key="sb_new_chat",
+            ):
+                st.session_state["confirm_new_chat"] = True
+                st.rerun()
+
+            with st.expander(":material/tune: 검색 범위 조정 (선택)", expanded=False):
+                # 회원가입 때 고른 지원조건을 기본값으로 - 로그인 직후 첫
+                # 렌더에서만 적용된다(2026-09-15, PR 리뷰 피드백 반영).
+                # st.pills는 key에 이미 값이 있으면 default를 무시하므로,
+                # 로그인 이후 사용자가 직접 바꾼 선택은 그대로 유지된다.
+                signup_interests = [
+                    i for i in (auth_user.get("interests") or []) if i in INTEREST_OPTIONS
+                ]
+                selected_conditions = st.pills(
+                    "지원조건", INTEREST_OPTIONS, selection_mode="multi",
+                    default=signup_interests, key="interests_pick",
+                    help="검색 질의를 넓히는 힌트입니다. 자격 판정 조건은 아닙니다.",
+                ) or []
+                selected_fields = st.pills(
+                    "관심 분야", INTEREST_FIELD_OPTIONS, selection_mode="multi",
+                    default=[], key="fields_pick",
+                ) or []
+                top_k = st.slider(
+                    "정책 후보 수", min_value=3, max_value=15,
+                    value=DEFAULT_TOP_K, key="topk",
+                )
 
     # 같은 값을 두 번 고른 경우(예: 두 목록에 다 있는 "장애인")를 합치되
     # 사용자가 고른 순서는 유지한다.
@@ -276,28 +276,19 @@ def _remember_profile(result: Mapping[str, object]) -> None:
         st.session_state.profile = list(profile) if isinstance(profile, list) else []
 
 
-def _progress_lines(done: list[tuple[str, float]], current: str | None) -> str:
-    lines = [f"{node_title(name)}  ({seconds:.2f}초)" for name, seconds in done]
-    if current:
-        lines.append(f"{node_title(current)}  ... 진행 중")
-    return "\n".join(lines) or "그래프를 시작하는 중..."
-
-
 def _run_with_progress(**kwargs):
-    """파이프라인을 워커 스레드에서 돌리고, 메인 스레드는 진행 상황을 그린다.
+    """파이프라인을 워커 스레드에서 돌리고, 메인 스레드는 진행률만 그린다.
 
-    ``run_pipeline``은 한 번 부르면 수 분간 돌아오지 않는다. 그동안 화면에
-    스피너만 있으면 멈춘 건지 도는 건지 알 수 없어서, 노드가 끝날 때마다
-    ``TIMER``에 쌓이는 기록을 폴링해 막대와 로그로 보여준다. 워커 스레드는
-    Streamlit API를 전혀 건드리지 않는다(그리는 건 메인 스레드만).
+    ``run_pipeline``은 한 번 부르면 수 분간 돌아오지 않는다. 멈춘 건지 도는
+    건지 알 수 있게 진행 막대와 경과 시간만 보여준다 - 노드 이름·개수 같은
+    내부 정보는 화면에 내지 않는다(사용자에게 필요한 것만). 워커 스레드는
+    Streamlit API를 전혀 건드리지 않는다.
 
-    진행률은 **어림값**이다 - 그래프가 조건부 분기를 타서 전체 노드 수는
-    끝나봐야 알기 때문에, 끝나기 전에는 95%를 넘기지 않는다.
+    진행률은 **어림값**이다 - 조건부 분기 때문에 전체 노드 수는 끝나봐야
+    알므로, 끝나기 전에는 95%를 넘기지 않는다.
     """
 
-    status = st.status("상담을 진행하고 있어요", expanded=False)
-    log_slot = status.empty()
-    bar = st.progress(0.0, text="그래프를 시작하는 중...")
+    bar = st.progress(0.0, text="지원 제도를 찾고 있어요…")
 
     # 이전 요청의 기록이 남아 있으면 시작하자마자 진행률이 100%로 보인다.
     TIMER.reset()
@@ -315,27 +306,21 @@ def _run_with_progress(**kwargs):
     worker.start()
 
     while True:
-        done = TIMER.path()
-        current = TIMER.current()
         alive = worker.is_alive()
-        fraction = min(len(done) / EXPECTED_NODE_COUNT, 0.95) if alive else 1.0
-        label = node_title(current) if current else "마무리하는 중..."
-        bar.progress(fraction, text=f"{label}  ({time.perf_counter() - started:.0f}초)")
-        log_slot.code(_progress_lines(done, current if alive else None), language="text")
+        fraction = (
+            min(len(TIMER.path()) / EXPECTED_NODE_COUNT, 0.95) if alive else 1.0
+        )
+        bar.progress(
+            fraction,
+            text=f"지원 제도를 찾고 있어요…  ({time.perf_counter() - started:.0f}초)",
+        )
         if not alive:
             break
         worker.join(timeout=_PROGRESS_POLL_SECONDS)
 
-    elapsed = time.perf_counter() - started
     bar.empty()
     if "error" in outcome:
-        status.update(label=f"상담 중 오류가 발생했어요 ({elapsed:.1f}초)", state="error")
         raise outcome["error"]
-
-    status.update(
-        label=f"상담을 마쳤어요 · {elapsed:.1f}초 · 노드 {len(TIMER.path())}개",
-        state="complete",
-    )
     return outcome.get("result")
 
 
@@ -409,22 +394,55 @@ def _clear_detail_chat() -> None:
     st.session_state.pop("_detail_chat_opened", None)
 
 
-@st.dialog("정책 문의 채팅방", width="large", on_dismiss=_clear_detail_chat)
+@st.dialog("정책 문의 채팅방", width="large", dismissible=False)
 def _detail_chat_dialog(policy: Mapping[str, object]) -> None:
     """정책 상세 문의를 화면 한가운데 뜨는 채팅방(모달)으로 띄운다.
 
     메인 대화(``messages``)와 분리해 ``detail_chat_history``에 쌓는다 - 추천
     결과 화면은 그대로 두고, 특정 정책 하나만 이어서 물어본다. 모달이라
-    "어디 열렸는지" 헷갈릴 일이 없다. X 또는 "닫기"로 나간다.
+    "어디 열렸는지" 헷갈릴 일이 없다.
+
+    ``dismissible=False``로 X 버튼·바깥 클릭·ESC를 전부 막는다(2026-09-15,
+    PR 리뷰 피드백 반영) - 채팅 중간에 바깥을 실수로 클릭해 대화가 통째로
+    날아가는 게 원래 문제였는데, Streamlit ``dismissible``은 세 경로를 한
+    스위치로만 켜고 끌 수 있어 "바깥 클릭만" 막는 옵션은 없다. 그래서 셋 다
+    막고, 닫는 길은 아래 "닫기" 버튼(``_clear_detail_chat`` 직접 호출) 하나로
+    남긴다.
     """
 
     history = st.session_state.setdefault("detail_chat_history", [])
     title = md_text(policy.get("title") or policy.get("policy_id") or "이 정책")
 
-    st.markdown(f"##### :material/chat: {title}")
+    # dismissible=False라 Streamlit 기본 X 버튼이 없다 - 그 자리(우상단)에
+    # "닫기"를 직접 놓는다(2026-09-15, 사용자 피드백 반영. 원래는 채팅
+    # 입력창 아래에 있어서 눈에 잘 안 띄었다). 컨테이너 자체엔 좌우 정렬
+    # 옵션이 없어 st-key 클래스에 CSS로 space-between을 건다(theme.py
+    # 헤더·rendering.py 비교 바와 같은 패턴).
+    title_row_key = "detail_chat_title_row"
+    st.html(
+        f"<style>[class*='st-key-{title_row_key}']{{justify-content:space-between;}}"
+        f"[class*='st-key-{title_row_key}'] [data-testid='stMarkdownContainer']"
+        "{margin-top:0;}</style>"
+    )
+    title_row = st.container(horizontal=True, vertical_alignment="center", key=title_row_key)
+    title_row.markdown(f"##### :material/chat: {title}")
+    if title_row.button("", key="detail_chat_exit", icon=":material/close:", type="tertiary"):
+        _clear_detail_chat()
+        st.rerun()
+
     st.caption("이 정책 전용 채팅방이에요. 신청·자격·서류 등을 물어보세요.")
 
+    # box는 미리 만들어 두고, chat_input으로 새 질문을 먼저 history에 얹은
+    # 뒤에 채운다 - 그래야 엔터 치자마자(=이번 rerun 안에서 바로) 내 질문이
+    # 답변보다 먼저 화면에 보인다(2026-09-15, PR 리뷰 피드백 반영). box를
+    # chat_input보다 먼저 만들어도(컨테이너는 나중에 채워도 그 자리에 그려짐)
+    # 코드 순서상 chat_input은 그대로 아래쪽이라 도킹 위치는 안 바뀐다.
     box = st.container(height=360)
+
+    typed = st.chat_input(f"{title}에 대해 물어보세요", key="detail_chat_input")
+    if typed:
+        history.append({"role": "user", "content": typed})
+
     if not history:
         box.caption("예: “신청은 어디서 하나요?”, “제가 서울 사는데 대상인가요?”")
     for message in history:
@@ -435,27 +453,30 @@ def _detail_chat_dialog(policy: Mapping[str, object]) -> None:
             else:
                 st.markdown(message["content"])
 
-    typed = st.chat_input(f"{title}에 대해 물어보세요", key="detail_chat_input")
-    if st.button("닫기", key="detail_chat_exit", icon=":material/close:"):
-        _clear_detail_chat()
-        st.rerun()
+    # 마지막 메시지가 아직 답 없는 사용자 질문이면(= 방금 얹혔으면) 로딩
+    # 말풍선을 먼저 그린 뒤(이 시점에 이미 브라우저로 전송된다 - Streamlit은
+    # 스크립트가 끝나길 기다리지 않고 만들어지는 대로 델타를 보낸다) 무거운
+    # 호출을 이어서 한다. 답이 오면 rerun해서 로딩 말풍선을 실제 답으로
+    # 바꾼다.
+    if history and history[-1]["role"] == "user":
+        with box.chat_message("assistant", avatar=BOT_AVATAR):
+            st.markdown(":material/search: 정책 검색 중…")
+        _answer_detail_chat_turn(policy, history)
 
-    if typed:
-        _handle_detail_chat_turn(policy, typed)
 
+def _answer_detail_chat_turn(policy: Mapping[str, object], history: list) -> None:
+    """직전에 쌓인 사용자 질문 한 턴에 답한다 - 무거운 파이프라인 없이 경량
+    응답으로.
 
-def _handle_detail_chat_turn(policy: Mapping[str, object], prompt: str) -> None:
-    """정책 상세 문의 한 턴 - 무거운 파이프라인 없이 경량 응답으로 답한다.
-
-    결과는 ``detail_chat_history``에만 쌓고 rerun한다. 모달이 다음 실행에서
-    그 기록을 다시 그린다.
+    호출 시점에는 이미 로딩 말풍선이 그려진 뒤다(``_detail_chat_dialog``
+    참고). 답이 오면 history에 붙이고 rerun해서 로딩 말풍선을 실제 답으로
+    바꾼다.
     """
 
     from src.rag_chatbot.light_followup import respond_to_policy_question
     from src.rag_chatbot.service import get_llm_client
 
-    history = st.session_state.setdefault("detail_chat_history", [])
-    history.append({"role": "user", "content": prompt})
+    prompt = str(history[-1]["content"])
 
     # 사이드바 "파악한 정보"(지역·나이·소득 등)를 함께 넘겨 "우리 지역도
     # 되나요?" 같은 질문에 답할 수 있게 한다. 답변 완료 후에도 세션에 남는다
@@ -464,10 +485,9 @@ def _handle_detail_chat_turn(policy: Mapping[str, object], prompt: str) -> None:
 
     try:
         client = get_llm_client()
-        with st.spinner("정책 내용을 확인하고 있어요"):
-            out = respond_to_policy_question(
-                policy, prompt, llm_client=client, user_profile=profile
-            )
+        out = respond_to_policy_question(
+            policy, prompt, llm_client=client, user_profile=profile
+        )
     except Exception:  # 내부 정보·비밀값은 화면에 노출하지 않는다.
         _LOG.exception("정책 상세 채팅 응답 실패")
         out = {
@@ -480,13 +500,216 @@ def _handle_detail_chat_turn(policy: Mapping[str, object], prompt: str) -> None:
     st.rerun()
 
 
+# ── 로그인 게이트 ─────────────────────────────────────────────────────
+
+
+def _render_login_required() -> None:
+    """로그인 전에는 상담 화면 대신 안내만 보여준다."""
+
+    with st.container(border=True):
+        st.markdown(
+            "#### :material/lock: 로그인이 필요해요\n"
+            "상담을 시작하려면 먼저 로그인해 주세요. 회원가입 때 입력한 지역·"
+            "관심사가 상담에 자동으로 반영됩니다."
+        )
+        row = st.container(horizontal=True)
+        if row.button("로그인", icon=":material/login:", type="primary", key="gate_login"):
+            goto("login")
+        if row.button("회원가입", icon=":material/person_add:", key="gate_signup"):
+            goto("signup")
+
+
+# ── 추가 정보 위젯 폼 (needs_input) ───────────────────────────────────
+
+_INCOME_CHOICES = (
+    "기초생활수급 수준(중위소득 30% 이하)",
+    "차상위 수준(중위소득 30-50%)",
+    "중위소득 50-75%",
+    "중위소득 75-100%",
+    "중위소득 100-150%",
+    "중위소득 150% 초과",
+)
+_EMPLOYMENT_CHOICES = ("재직", "구직", "자영업", "학생", "무직")
+
+# 기준중위소득 대비 비율(소득인정액)은 가구원 수·공제·재산환산에 따라 달라져서
+# 우리가 "연봉 얼마"로 직접 환산해 보여줄 수 없다(IncomeBracket 참고,
+# src/rag_chatbot/graph/slot_schema.py). 대신 복지로의 공식 모의계산 페이지로
+# 안내한다 - 가구 정보를 입력하면 실제 소득 분위를 계산해 준다.
+_INCOME_CALCULATOR_URL = "https://www.bokjiro.go.kr/ssis-tbu/twatbz/mkclAsis/mkclPage.do"
+
+
+def _slot_widget(slot: str, label: str, *, default: object = None):
+    """missing_slot 하나를 알맞은 위젯으로 그린다(자유 입력 대신).
+
+    ``default``는 프로필-채팅 충돌(``slot_conflicts``) 재확인 때만 쓴다 -
+    채팅에서 사용자가 직접 말한 값을 빈 선택지가 아니라 이미 체크된
+    상태로 보여주고, 그래도 수정할 수 있게 선택형 위젯 그대로 둔다
+    (2026-09-15, 사용자 요청 반영 - 원래는 충돌 시 빈 선택지로 되물었는데,
+    사용자가 방금 채팅에 직접 입력한 값이니 자동으로 골라져 있는 게 더
+    자연스럽다는 피드백. 처음엔 지역 전용이었다가 다른 프로필 슬롯까지
+    넓혔다). ``household_types``만 리스트를 받는다(다중 선택) - 나머지는
+    문자열 하나다.
+    """
+
+    if slot == "region":
+        options = ("선택하세요", *SIDO_OPTIONS)
+        index = options.index(default) if default in SIDO_OPTIONS else 0
+        return st.selectbox(label, options, index=index, key=f"slotw_{slot}")
+    if slot == "birth_date":
+        return st.date_input(
+            label, value=None, min_value=date(1920, 1, 1), max_value=date.today(),
+            format="YYYY-MM-DD", key=f"slotw_{slot}",
+        )
+    if slot == "gender":
+        gender_options = ("남성", "여성")
+        index = gender_options.index(default) if default in gender_options else None
+        return st.radio(label, gender_options, index=index, horizontal=True, key=f"slotw_{slot}")
+    if slot == "income_bracket":
+        options = ("선택하세요", *_INCOME_CHOICES)
+        index = options.index(default) if default in _INCOME_CHOICES else 0
+        value = st.selectbox(label, options, index=index, key=f"slotw_{slot}")
+        st.caption(
+            "본인 소득 분위를 모르면 "
+            f"[나의 소득 분위 알아보기]({_INCOME_CALCULATOR_URL})에서 확인할 수 있어요."
+        )
+        return value
+    if slot == "disability_status":
+        disability_options = ("장애 없음", "장애 등록", "모름")
+        index = disability_options.index(default) if default in disability_options else None
+        return st.radio(
+            label, disability_options, index=index, horizontal=True,
+            key=f"slotw_{slot}",
+        )
+    if slot == "employment_status":
+        return st.radio(label, _EMPLOYMENT_CHOICES, index=None, horizontal=True, key=f"slotw_{slot}")
+    if slot == "household_types":
+        household_options = list(HOUSEHOLD_TYPE_LABELS_KO.values())
+        default_selection = [
+            v for v in (default or []) if v in household_options
+        ] if isinstance(default, list) else []
+        return st.pills(
+            label, household_options, selection_mode="multi",
+            default=default_selection, key=f"slotw_{slot}",
+        )
+    return st.text_input(label, key=f"slotw_{slot}")
+
+
+def _render_slot_form(
+    missing_slots: list[str],
+    slot_conflicts: Mapping[str, Mapping[str, str]] | None = None,
+) -> str | None:
+    """되묻기(needs_input)에 자유 입력 대신 위젯 폼으로 답하게 한다.
+
+    제출하면 각 값을 ``라벨: 값`` 줄로 이어붙여 돌려준다(파이프라인 N1이 다시
+    파싱). 폼을 안 쓰고 아래 채팅창에 직접 입력해도 된다.
+
+    질문 문구 자체는 이 폼이 아니라 바로 위 채팅 말풍선(``_render_history``
+    -> ``render_result``)이 이미 보여준다 - 예전엔 이 폼도 같은 문구를 헤더로
+    한 번 더 찍어서, 특히 충돌 재확인처럼 문구가 길 때 화면에 똑같은 문장이
+    두 번 나왔다(2026-09-15, 사용자 피드백 - "이게 반복되는거 보여?" 지적
+    반영). 폼 바로 위에 그 문구가 이미 있으므로 여기서는 위젯만 그린다.
+
+    회원가입 때 이미 알고 있는 값(예: ``auth_user.region``)이라도, 이 슬롯이
+    ``missing_slots``에 실제로 들어와 있으면 위젯을 그대로 그려서 묻는다 -
+    프로필 값을 위젯 없이 자동으로 재제출하는 지름길(``skip_region``)을
+    한때 뒀었지만 삭제했다(2026-09-15, PR #60 리뷰 반영). 그 지름길은
+    "region이 missing인데 slot_conflicts엔 없음"을 전부 "그냥 아직 안
+    물어봤을 뿐"으로 해석했는데, 실제로는 N1(``slot_parser.parse_slots``)이
+    채팅에서 새로 말한 지역 텍스트의 정규화에 실패했을 때도 같은 조합이
+    만들어진다(충돌로 판정할 두 값 중 하나가 없어 ``slot_conflicts``에는
+    못 싣고, 지역은 ``unknown``으로 되돌아가 missing에는 들어간다). 이
+    상태에서 위젯을 숨기고 프로필 값을 조용히 재제출하면, 사용자가 방금
+    입력해 파싱에 실패한 지역이 안내 없이 프로필 값으로 덮여 사라진다.
+    프로필 값을 처음부터 자동으로 채우는 동작 자체는 ``service.ask()``의
+    ``known_region`` 시딩이 이미 담당하므로(그 덕에 애초에 이 슬롯이
+    missing으로 잡히지 않는다), 여기서 지름길을 없애도 "회원가입 때 입력한
+    지역이 자동으로 반영됩니다"라는 로그인 안내 문구는 그대로 지켜진다.
+
+    ``slot_conflicts``에 있는 슬롯은(채팅에서 말한 값이 회원 프로필과 달라
+    파이프라인이 되묻는 경우, service.ChatResponse.slot_conflicts 참고)
+    자동 채움(위젯 없이 프로필 값을 바로 재제출)을 끈다(2026-09-15 추가,
+    지역 전용이었다가 다른 프로필 슬롯까지 확장) - 안 그러면 사용자가 충돌
+    사실을 확인할 기회도 없이 조용히 "해결"돼버린다. 대신 위젯은 그리되,
+    채팅에서 방금 말한 값(``slot_conflicts[slot]["chat"]``)을 기본
+    선택값으로 미리 체크해 둔다(2026-09-15, 사용자 요청 반영 - 처음엔 빈
+    선택지로 되물었는데, "다시 물어보되 채팅에서 입력한 값으로 자동
+    체크돼서 수정 가능하게" 해달라는 피드백을 받음). 충돌 사실은 위 채팅
+    말풍선의 문구(request_missing_slots.py가 조립)로 이미 알려줬으니,
+    사용자는 필요하면 선택값을 프로필 쪽 값으로 직접 바꾸면 된다.
+    """
+
+    slots = [s for s in missing_slots if isinstance(s, str)]
+    if not slots:
+        return None
+
+    slot_conflicts = slot_conflicts or {}
+
+    with st.container(border=True):
+        with st.form("slot_form", border=False, clear_on_submit=True):
+            values: dict[str, object] = {}
+            for slot in slots:
+                conflict = slot_conflicts.get(slot)
+                default: object = None
+                if conflict and slot == "household_types":
+                    default = [v.strip() for v in conflict["chat"].split(",") if v.strip()]
+                elif conflict:
+                    default = conflict.get("chat")
+                values[slot] = _slot_widget(
+                    slot, SLOT_LABELS_KO.get(slot, slot), default=default
+                )
+            submitted = st.form_submit_button(
+                "이 정보로 계속", type="primary", width="stretch"
+            )
+
+    if not submitted:
+        return None
+
+    parts: list[str] = []
+    for slot, val in values.items():
+        if isinstance(val, list):
+            if not val:
+                continue
+            val = ", ".join(val)
+        elif val in (None, "", "선택하세요"):
+            continue
+        label = SLOT_LABELS_KO.get(slot, slot)
+        parts.append(f"{label}: {val.isoformat() if isinstance(val, date) else val}")
+    return "\n".join(parts) or None
+
+
+def _active_needs_input() -> Mapping[str, object] | None:
+    """직전 응답이 아직 답 안 한 되묻기면 그 result를 돌려준다."""
+
+    if not st.session_state.get("awaiting_followup"):
+        return None
+    messages = st.session_state.get("messages") or []
+    if not messages:
+        return None
+    result = messages[-1].get("result") if isinstance(messages[-1], Mapping) else None
+    if isinstance(result, Mapping) and result.get("status") == "needs_input":
+        return result
+    return None
+
+
 def page_chat() -> None:
+    # 사이드바(계정 버튼 + 로그인 시 검색 설정)는 항상 한 번만 그린다.
+    top_k, extra_interests = _render_sidebar()
+
+    # "새 상담 시작" 확인 팝업 - detail_chat_policy와 같은 패턴(세션 상태
+    # 플래그로 열림 여부를 표시하고, 매 rerun마다 여기서 다시 확인한다).
+    if st.session_state.get("confirm_new_chat"):
+        _confirm_reset_dialog()
+
+    # 로그인 게이트 - 로그인 전에는 상담 불가.
+    if not st.session_state.get("auth_user"):
+        st.caption("복지 에이전트")
+        _render_login_required()
+        return
+
     st.caption(
         "거주 지역·기본 정보를 바탕으로 지원 제도를 찾아 자격·지원금·중복수급을 "
         "근거와 함께 확인합니다."
     )
-    auth_user = st.session_state.get("auth_user")
-    top_k, extra_interests = _render_sidebar(auth_user)
     _render_profile_sidebar()
 
     if not (VECTOR_DB_DIR / "chroma.sqlite3").is_file():
@@ -494,22 +717,36 @@ def page_chat() -> None:
             "서비스 데이터베이스가 준비되지 않았습니다. 관리자에게 문의해 주세요.",
             icon=":material/database_off:",
         )
-        st.caption("사전 구축된 `data/vector_db`가 필요하며 샘플 데이터는 자동 색인하지 않습니다.")
         return
 
     _render_history()
     if not st.session_state.messages and not st.session_state.pending_prompt:
         _render_intro()
 
+    # 되묻기는 위젯 폼으로 - 자유 입력 대신 골라서 답한다.
+    needs_input = _active_needs_input()
+    form_answer = (
+        _render_slot_form(
+            list(needs_input.get("missing_slots") or []),
+            needs_input.get("slot_conflicts"),
+        )
+        if needs_input
+        else None
+    )
+
     # 정책 상세 문의는 화면 한가운데 뜨는 채팅방(모달)으로.
     if st.session_state.get("detail_chat_policy"):
         _detail_chat_dialog(st.session_state["detail_chat_policy"])
 
-    typed = st.chat_input(
-        "메시지를 입력하세요 (예: 서울 사는 2021년 3월생 아이 유아학비 지원 되나요?)"
+    # 메인 채팅 입력창을 포인트 컬러 테두리 + 그림자로 눈에 띄게 한다 - 기본
+    # 상태로는 연한 회색 테두리라 화면 맨 아래로 시선이 잘 안 간다.
+    st.html(
+        "<style>[data-testid='stChatInput']{border:1.5px solid #4F46E5;"
+        "border-radius:14px;box-shadow:0 2px 10px rgba(79,70,229,.12);}</style>"
     )
+    typed = st.chat_input("메시지를 입력하세요 (예: 서울에 사는 30대 직장인입니다)")
     pending = st.session_state.pop("pending_prompt", None)
-    prompt = typed or pending
+    prompt = typed or form_answer or pending
     if not prompt:
         return
 
@@ -522,6 +759,7 @@ def page_chat() -> None:
     with st.chat_message("assistant", avatar=BOT_AVATAR):
         started = time.perf_counter()
         try:
+            auth_user = st.session_state.get("auth_user") or {}
             result = _run_with_progress(
                 user_input=prompt,
                 session_id=st.session_state.conversation_id,
