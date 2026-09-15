@@ -147,6 +147,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import ExitStack, nullcontext
+from datetime import date
 import sys
 from pathlib import Path
 from threading import Lock
@@ -164,7 +165,7 @@ import os
 
 from dotenv import load_dotenv
 
-from rag_design.contracts import SourceType
+from rag_design.contracts import RegionScope, SUBSIDY_DETAIL_SECTIONS, SourceType
 from rag_design.embeddings import (
     HashEmbeddingProvider,
     SentenceTransformerKoreanProvider,
@@ -177,6 +178,13 @@ from rag_design.vector_store import (
 )
 
 from .graph import build_graph, resume_graph, run_graph
+from .graph.nodes.slot_parser import normalize_region_input
+from .graph.slot_schema import (
+    UNKNOWN,
+    HouseholdType,
+    is_valid_slot_value,
+    parse_birth_date,
+)
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
 from .llm import HuggingFaceInferenceClient, RecordingLLMClient
@@ -454,19 +462,12 @@ class ChatResponse(TypedDict, total=False):
     timing: dict
 
 
-# --- 정책 상세 섹션 재검색 (목적/지원대상/선정기준/지원내용/신청방법/신청기한/근거법령) ---
-
+# --- 정책 상세 섹션 재검색 (목적/지원대상/선정기준/지원내용/신청방법/신청기한/근거법령/구비서류) ---
+# section_type 목록 자체는 rag_design.contracts.SUBSIDY_DETAIL_SECTIONS가
+# 유일한 출처다(streamlit_ui/constants.py의 SECTION_LABELS_KO도 같은 곳에서
+# 가져온다) - 검색 힌트 텍스트만 여기서 뽑아 쓴다.
 _DETAIL_SECTION_TYPES: list[tuple[str, str]] = [
-    ("purpose", "목적"),
-    ("support_target", "지원대상"),
-    ("eligibility_criteria", "선정기준"),
-    ("support_details", "지원내용"),
-    ("application_method", "신청방법"),
-    ("application_period", "신청기한"),
-    ("legal_basis", "근거법령"),
-    ("required_documents", "구비서류"),
-    ("required_documents_official", "공무원 확인 구비서류"),
-    ("required_documents_self", "본인확인 필요 구비서류"),
+    (section_type, search_hint) for section_type, search_hint, _ in SUBSIDY_DETAIL_SECTIONS
 ]
 
 
@@ -731,16 +732,10 @@ def _build_policy_view(
         "needs_confirmation": needs_confirmation,
         "related_law": entry.get("related_law", []),
         "detail": {
-            "purpose": sections.get("purpose"),
-            "support_target": sections.get("support_target"),
-            "eligibility_criteria": sections.get("eligibility_criteria"),
-            "support_details": sections.get("support_details"),
-            "application_method": sections.get("application_method"),
-            "application_period": sections.get("application_period"),
-            "legal_basis": sections.get("legal_basis"),
-            "required_documents": sections.get("required_documents"),
-            "required_documents_official": sections.get("required_documents_official"),
-            "required_documents_self": sections.get("required_documents_self"),
+            # section_type 키 집합은 _DETAIL_SECTION_TYPES(=SUBSIDY_DETAIL_SECTIONS)
+            # 순서를 그대로 따른다 - 새 section_type을 추가했는데 여기 반영을
+            # 깜빡해 검색은 되는데 응답엔 안 실리는 일(#48)을 막는다.
+            **{section_type: sections.get(section_type) for section_type, _ in _DETAIL_SECTION_TYPES},
             "region_names": detail_raw.get("region_names"),
             "region_scope": detail_raw.get("region_scope"),
             "age_start": detail_raw.get("age_start"),
@@ -873,8 +868,14 @@ _HOUSEHOLD_KO = {
     "single_parent": "한부모", "multi_child": "다자녀", "multicultural": "다문화",
     "grandparent": "조손", "single_person": "1인 가구",
     "north_korean_defector": "북한이탈주민", "care_leaver": "자립준비청년",
-    "facility_leaver": "시설퇴소",
+    "facility_leaver": "시설퇴소", "newlywed": "신혼부부",
 }
+# veteran_status는 하드 게이트 슬롯이 아니라 known_veteran_status로 채워진
+# interests 텍스트("국가유공자/보훈")로만 검색에 반영되므로(service.ask()
+# docstring 참고), 이 슬롯 자체는 대화 중 채워지지 않는다. 그래도 프로필
+# 표시용 라벨은 남겨둔다 - 다른 경로로 slots에 실릴 가능성까지 막지 않기
+# 위함(예: 향후 회원 정보를 그대로 slots에 얹는 경로가 생길 경우).
+_VETERAN_KO = {"registered": "보훈대상자", "not_registered": "해당 없음"}
 
 
 def _build_profile(slots: Any) -> list[dict]:
@@ -913,6 +914,7 @@ def _build_profile(slots: Any) -> list[dict]:
         ("employment_status", _EMPLOYMENT_KO, "취업 상태"),
         ("marital_status", _MARITAL_KO, "혼인"),
         ("pregnancy_status", _PREGNANCY_KO, "임신"),
+        ("veteran_status", _VETERAN_KO, "보훈"),
     ):
         value = slots.get(key)
         if isinstance(value, str) and value != UNKNOWN and value in mapping:
@@ -1118,12 +1120,22 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
     }
 
 
+_VETERAN_INTEREST_KEYWORD = "국가유공자/보훈"
+
+
 def ask(
     user_input: str,
     session_id: str,
     *,
     top_k: int = 5,
     extra_interests: list[str] | None = None,
+    known_region: str | None = None,
+    known_gender: str | None = None,
+    known_birth_date: str | None = None,
+    known_disability_status: str | None = None,
+    known_income_bracket: str | None = None,
+    known_household_types: list[str] | None = None,
+    known_veteran_status: str | None = None,
 ) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
     질문을 입력했을 때 호출한다.
@@ -1136,9 +1148,49 @@ def ask(
     발화에서 뽑은 interests와 **합집합**으로 누적돼 N4 검색 질의에 들어간다
     (slot_parser._MULTI_VALUE_FIELDS). 사용자가 말로 표현하지 못한 범주를
     체크박스로 보완하는 용도이고, 자격 판정에는 쓰이지 않는다 - interests는
-    소프트 슬롯이라 하드 게이트/필터에 관여하지 않는다.
+    소프트 슬롯이라 하드 게이트/필터에 관여하지 않는다. 로그인 사용자는 이
+    선택지의 기본값이 회원가입 때 저장한 관심조건으로 채워져 오는 게
+    보통이지만(화면 쪽 책임), 그래도 값 자체는 매 요청 이 인자로 새로 받는다
+    - 세션에서 고친 값이 회원 프로필을 되돌려 쓰지 않는다.
 
-    ``answer_followup()``에는 이 인자가 없다. 재개 시점에는 이미 체크포인터에
+    ``known_region``은 로그인한 사용자가 회원가입 때 저장해 둔 거주 지역(시/도
+    전체 명칭, 예: ``"서울특별시"``)이다. ``normalize_region_input()``으로
+    N1과 같은 방식으로 정규화해 초기 슬롯에 미리 채운다 - 이미 아는 지역을
+    대화로 또 묻지 않기 위함이다. **대화가 우선한다**: N1은 이번 턴 발화에
+    지역처럼 보이는 말이 있으면 그 값으로 덮어쓰고, 없을 때만 이 초기값을
+    그대로 둔다(``slot_parser.parse_slots`` 참고) - 로그인 사용자가 가족 등
+    다른 지역을 언급해도 무시되지 않는다. 정규화에 실패하면(형식이 이상하거나
+    빈 문자열) 조용히 건너뛰고 기존처럼 대화로 묻는다 - 잘못된 지역으로
+    검색이 진행되는 것보다 한 번 더 묻는 편이 안전하다.
+
+    ``known_gender``/``known_birth_date``도 같은 방식이다 - 회원가입 때
+    저장한 성별("male"/"female")·생년월일(ISO ``YYYY-MM-DD``)을 초기 슬롯에
+    미리 채워 N1이 다시 묻지 않게 한다. 둘 다 ``known_region``과 똑같이
+    **대화가 우선**하고(``slot_parser.parse_slots``의 기존 병합 규칙을 그대로
+    타므로 이 함수는 초기값만 얹는다), 계약에 없는 값이거나(``is_valid_slot_value``)
+    파싱 불가능한 날짜면(``parse_birth_date``) 조용히 건너뛴다.
+
+    ``known_disability_status``/``known_income_bracket``도 같은 방식이다 -
+    회원가입 때 저장한 장애 등록 여부("registered"/"not_registered")·소득
+    구간("under_30" 등)을 초기 슬롯에 미리 채운다. 둘 다 계약에 없는 값이면
+    조용히 건너뛴다.
+
+    ``known_household_types``는 회원가입 때 저장한 가구유형 목록(예:
+    ``["single_parent", "newlywed"]``)이다. 소프트 슬롯(``household_types``)
+    이라 하드 게이트에도 검색 필터에도 관여하지 않고, 계약에 있는 값만 골라
+    초기 슬롯에 채운다.
+
+    ``known_veteran_status``는 회원가입 때 저장한 보훈대상자 여부다. **하드/
+    소프트 필터로 연결하지 않는다** - 정부24 raw 지원조건 sidecar
+    (``policy_conditions.py``)의 JA 코드 중 어느 것이 보훈에 대응하는지
+    검증할 방법이 없어서, 추측한 코드로 필터를 걸면 검증 안 된 조건으로
+    정책이 조용히 잘못 걸러질 위험이 있다(``graph.slot_schema.VeteranStatus``
+    클래스 docstring 참고 - "지어내지 않는다" 원칙). 대신 ``"registered"``면
+    이미 안전하게 검증된 소프트 경로인 ``interests``에
+    ``"국가유공자/보훈"``(``streamlit_ui.constants.INTEREST_OPTIONS``와 동일
+    문자열)을 얹어 검색 질의만 넓힌다 - 자격 판정에는 관여하지 않는다.
+
+    ``answer_followup()``에는 이 인자들이 없다. 재개 시점에는 이미 체크포인터에
     슬롯이 있고, 중간에 초기 슬롯을 갈아끼우면 이전 턴의 판정 근거와
     어긋나기 때문이다 - 화면에서 선택을 바꿨다면 새 상담으로 물어야 한다.
     """
@@ -1150,12 +1202,47 @@ def ask(
         store = get_store()
         with _llm_request_scope():
             interests = [str(item) for item in (extra_interests or []) if item]
+            initial_slots: dict = {}
+            if interests:
+                initial_slots["interests"] = interests
+            if known_region:
+                region_scope, region_names = normalize_region_input(known_region)
+                if region_scope is not RegionScope.UNKNOWN:
+                    initial_slots["region_scope"] = region_scope.value
+                    initial_slots["region_names"] = region_names
+            if known_gender and is_valid_slot_value("gender", known_gender):
+                initial_slots["gender"] = known_gender
+            if known_birth_date and parse_birth_date(known_birth_date, date.today()):
+                initial_slots["birth_date"] = known_birth_date
+            if known_disability_status and is_valid_slot_value(
+                "disability_status", known_disability_status
+            ):
+                initial_slots["disability_status"] = known_disability_status
+            if known_income_bracket and is_valid_slot_value(
+                "income_bracket", known_income_bracket
+            ):
+                initial_slots["income_bracket"] = known_income_bracket
+            if known_household_types:
+                valid_household_types = {member.value for member in HouseholdType}
+                household_types = [
+                    str(item)
+                    for item in known_household_types
+                    if str(item) in valid_household_types
+                ]
+                if household_types:
+                    initial_slots["household_types"] = household_types
+            if known_veteran_status and is_valid_slot_value(
+                "veteran_status", known_veteran_status
+            ) and known_veteran_status == "registered":
+                if _VETERAN_INTEREST_KEYWORD not in interests:
+                    interests.append(_VETERAN_INTEREST_KEYWORD)
+                initial_slots["interests"] = interests
             result = run_graph(
                 graph,
                 user_input=user_input,
                 session_id=session_id,
                 top_k=top_k,
-                slots={"interests": interests} if interests else None,
+                slots=initial_slots or None,
             )
             # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
             request_timer.close()

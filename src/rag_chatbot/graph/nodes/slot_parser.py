@@ -155,7 +155,7 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
         # 언급했지만 이해하지 못함"을 "예전 지역이 여전히 맞음"으로 오인하면
         # 잘못된 지역으로 검색이 진행될 수 있어, 정규화 실패 시 unknown으로
         # 재설정해 N2가 다시 확인을 요청하도록 한다.
-        region_scope, region_names = _normalize_region(region_raw)
+        region_scope, region_names = normalize_region_input(region_raw)
         merged["region_scope"] = region_scope.value
         merged["region_names"] = region_names
     elif "region_scope" not in merged:
@@ -253,8 +253,13 @@ def _apply_birth_date(
     merged["age_ref_date"] = reference_date.isoformat()
 
 
-def _normalize_region(region_raw: str | None) -> tuple[RegionScope, list[str]]:
+def normalize_region_input(region_raw: str | None) -> tuple[RegionScope, list[str]]:
     """원문 지역 텍스트를 계약이 요구하는 정규 지역명으로 변환한다.
+
+    이 노드 내부(대화에서 뽑은 ``region_raw``)뿐 아니라 ``service.ask()``가
+    회원가입 때 저장된 지역으로 초기 슬롯을 미리 채울 때도 이 함수를 그대로
+    쓴다(공개 함수인 이유) - 정규화 규칙이 두 곳에 따로 있으면 한쪽만 고친
+    뒤 어긋나는 일이 section_type 라벨(#48)처럼 반복된다.
 
     ``region_names``는 단일 이름이 아니라 상위 시도부터 누적한 계층
     리스트로 만든다 (``["서울특별시", "서울특별시 강남구"]``).

@@ -16,6 +16,7 @@ import streamlit_ui  # noqa: F401  # import 경로 부트스트랩(rag_design / 
 
 from streamlit_ui.pages.auth import page_login, page_signup
 from streamlit_ui.pages.chat import page_chat
+from streamlit_ui.pages.home import page_home
 from streamlit_ui.pages.mypage import page_mypage
 from streamlit_ui.session import init_session
 from streamlit_ui.theme import localize_menu, render_header
@@ -25,6 +26,7 @@ _PAGES = {
     "signup": page_signup,
     "mypage": page_mypage,
     "chat": page_chat,
+    "home": page_home,
 }
 
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from . import lockout
 from . import repository as repo
@@ -53,6 +53,119 @@ _WS_RE = re.compile(r"\s+")
 # 검증하지는 않고 형태만 본다.
 USERNAME_MAX = 254
 _EMAIL_SHAPE_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# 성별: 하드게이트 슬롯 계약(graph.slot_schema.Gender)과 같은 값("male"/
+# "female")을 그대로 저장한다 - 이 모듈이 graph 패키지를 의존하지는 않되,
+# 값 자체는 한쪽만 고쳐 어긋나지 않도록 문자열을 그대로 맞춰 둔다.
+_GENDER_VALUES = frozenset({"male", "female"})
+
+# 장애 등록 여부/보훈대상자 여부/소득구간/가구유형: graph.slot_schema의
+# DisabilityStatus/VeteranStatus/IncomeBracket/HouseholdType과 같은 값을
+# 그대로 쓴다(위 성별과 같은 이유로 graph 패키지 자체는 import하지 않는다).
+_DISABILITY_VALUES = frozenset({"registered", "not_registered"})
+_VETERAN_VALUES = frozenset({"registered", "not_registered"})
+_INCOME_BRACKET_VALUES = frozenset(
+    {
+        "under_30",
+        "pct_30_50",
+        "pct_50_75",
+        "pct_75_100",
+        "pct_100_150",
+        "over_150",
+    }
+)
+_HOUSEHOLD_TYPE_VALUES = frozenset(
+    {
+        "single_person",
+        "single_parent",
+        "grandparent",
+        "multicultural",
+        "multi_child",
+        "north_korean_defector",
+        "care_leaver",
+        "facility_leaver",
+        "newlywed",
+    }
+)
+
+# 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
+# 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가
+# 하드게이트 슬롯으로 쓰기 직전에 다시 검증한다). 미래 날짜만 걸러
+# 명백히 잘못된 값이 암호화돼 저장되는 것을 막는다.
+_MAX_PLAUSIBLE_AGE_YEARS = 120
+
+
+def _clean_gender(value: object) -> str:
+    """빈 값은 "선택 안 함"으로 허용한다. 계약에 없는 값은 거부한다(fail-closed)."""
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text not in _GENDER_VALUES:
+        raise AuthError("성별 값이 올바르지 않습니다.")
+    return text
+
+
+def _clean_birth_date(value: object) -> str:
+    """ISO ``YYYY-MM-DD`` 형식·개연성만 확인한다. 빈 값은 "선택 안 함"."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise AuthError("생년월일 형식이 올바르지 않습니다.") from exc
+    today = _utcnow_date()
+    if parsed > today:
+        raise AuthError("생년월일이 미래일 수 없습니다.")
+    if today.year - parsed.year > _MAX_PLAUSIBLE_AGE_YEARS:
+        raise AuthError("생년월일이 올바르지 않습니다.")
+    return parsed.isoformat()
+
+
+def _utcnow_date() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _clean_choice(value: object, allowed: frozenset[str], label: str) -> str:
+    """빈 값은 "선택 안 함"으로 허용한다. 계약에 없는 값은 거부한다(fail-closed).
+
+    ``_clean_gender``와 같은 모양을 4개 필드(장애·보훈·소득구간)가 함께
+    쓰도록 일반화했다.
+    """
+
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text not in allowed:
+        raise AuthError(f"{label} 값이 올바르지 않습니다.")
+    return text
+
+
+def _clean_disability_status(value: object) -> str:
+    return _clean_choice(value, _DISABILITY_VALUES, "장애 등록 여부")
+
+
+def _clean_veteran_status(value: object) -> str:
+    return _clean_choice(value, _VETERAN_VALUES, "보훈대상자 여부")
+
+
+def _clean_income_bracket(value: object) -> str:
+    return _clean_choice(value, _INCOME_BRACKET_VALUES, "소득 수준")
+
+
+def _clean_household_types(values: object) -> tuple[str, ...]:
+    """가구유형 목록을 검증한다. 계약 밖 값이 하나라도 있으면 거부한다
+    (폼 위조 방지 - fail-closed). 중복은 제거하고 입력 순서는 유지한다."""
+
+    if values is None:
+        return ()
+    items = [str(x).strip().lower() for x in values if str(x).strip()]
+    for item in items:
+        if item not in _HOUSEHOLD_TYPE_VALUES:
+            raise AuthError("가구 유형 값이 올바르지 않습니다.")
+    return tuple(dict.fromkeys(items))
 
 
 def _clean_display_name(value: object) -> str:
@@ -119,7 +232,13 @@ class AuthUser:
     display_name: str
     created_at: str
     region: str = ""
+    gender: str = ""
+    birth_date: str = ""
     interests: tuple[str, ...] = field(default_factory=tuple)
+    disability_status: str = ""
+    veteran_status: str = ""
+    income_bracket: str = ""
+    household_types: tuple[str, ...] = field(default_factory=tuple)
     marketing_opt_in: bool = False
 
 
@@ -189,6 +308,14 @@ def _parse_ts(value) -> datetime | None:
 # ---------------------------------------------------------------------------
 # 암호화 헬퍼
 # ---------------------------------------------------------------------------
+def _encrypt_string_list(items) -> str | None:
+    """문자열 리스트를 JSON으로 묶어 암호화한다(``interests``/``household_types``
+    공용)."""
+
+    cleaned = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if not cleaned:
+        return None
+    return encrypt_pii(json.dumps(cleaned, ensure_ascii=False))
 def _encrypt_safe(plaintext: str) -> str:
     """``encrypt_pii`` 를 감싸 키 설정 오류를 AuthError 계열로 통일한다.
 
@@ -213,7 +340,7 @@ def _encrypt_interests(interests) -> str | None:
     return _encrypt_safe(json.dumps(items, ensure_ascii=False))
 
 
-def _decrypt_interests(token) -> tuple[str, ...]:
+def _decrypt_string_list(token) -> tuple[str, ...]:
     if not token:
         return ()
     try:
@@ -223,26 +350,78 @@ def _decrypt_interests(token) -> tuple[str, ...]:
     return tuple(str(x) for x in data) if isinstance(data, list) else ()
 
 
-def _safe_decrypt_name(token, uname: str) -> str:
+def _encrypt_interests(interests) -> str | None:
+    return _encrypt_string_list(interests)
+
+
+def _decrypt_interests(token) -> tuple[str, ...]:
+    return _decrypt_string_list(token)
+
+
+def _safe_decrypt_field(token, uname: str, field_label: str) -> str:
+    """단일 문자열 필드를 복호화한다. 실패하면(키 불일치/변조) 그 필드만
+    조용히 비운다 - ``display_name``/``birth_date``/장애·보훈·소득 공용."""
+
     if not token:
         return ""
     try:
         return decrypt_pii(token)
-    except Exception:  # noqa: BLE001 - 키 불일치/변조 시 이름만 비운다
-        _log.warning("display_name 복호화 실패 username=%s", mask_email(uname))
+    except Exception:  # noqa: BLE001 - 키 불일치/변조 시 이 필드만 비운다
+        _log.warning("%s 복호화 실패 username=%s", field_label, mask_email(uname))
         return ""
 
 
-def _row_to_user(row, *, display_name: str) -> AuthUser:
+def _safe_decrypt_name(token, uname: str) -> str:
+    return _safe_decrypt_field(token, uname, "display_name")
+
+
+def _safe_decrypt_birth_date(token, uname: str) -> str:
+    return _safe_decrypt_field(token, uname, "birth_date")
+
+
+def _row_to_user(
+    row,
+    *,
+    display_name: str,
+    birth_date: str,
+    disability_status: str = "",
+    veteran_status: str = "",
+    income_bracket: str = "",
+    household_types: tuple[str, ...] = (),
+) -> AuthUser:
     return AuthUser(
         id=int(row["id"]),
         username=row["username"],
         display_name=display_name,
         created_at=row["created_at"],
         region=row["region"] or "",
+        gender=row["gender"] or "",
+        birth_date=birth_date,
         interests=_decrypt_interests(row["interests_enc"]),
+        disability_status=disability_status,
+        veteran_status=veteran_status,
+        income_bracket=income_bracket,
+        household_types=household_types,
         marketing_opt_in=bool(row["marketing_opt_in"]),
     )
+
+
+def _decrypt_profile_extras(row, uname: str) -> dict[str, object]:
+    """장애·보훈·소득·가구유형을 한 번에 복호화한다(``_row_to_user`` 호출
+    3곳 - authenticate/get_profile/update_profile - 이 공유)."""
+
+    return {
+        "disability_status": _safe_decrypt_field(
+            row["disability_status_enc"], uname, "disability_status"
+        ),
+        "veteran_status": _safe_decrypt_field(
+            row["veteran_status_enc"], uname, "veteran_status"
+        ),
+        "income_bracket": _safe_decrypt_field(
+            row["income_bracket_enc"], uname, "income_bracket"
+        ),
+        "household_types": _decrypt_string_list(row["household_types_enc"]),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +433,13 @@ def sign_up(
     display_name: str = "",
     *,
     region: str = "",
+    gender: str = "",
+    birth_date: str = "",
     interests=None,
+    disability_status: str = "",
+    veteran_status: str = "",
+    income_bracket: str = "",
+    household_types=None,
     marketing_opt_in: bool = False,
     db_path=None,
 ) -> AuthUser:
@@ -266,9 +451,15 @@ def sign_up(
 
     name = _clean_display_name(display_name)
     region = (region or "").strip()
+    gender = _clean_gender(gender)
+    birth_date = _clean_birth_date(birth_date)
     interest_items = tuple(
         str(x).strip() for x in (interests or []) if str(x).strip()
     )
+    disability_status = _clean_disability_status(disability_status)
+    veteran_status = _clean_veteran_status(veteran_status)
+    income_bracket = _clean_income_bracket(income_bracket)
+    household_type_items = _clean_household_types(household_types)
 
     backend, conn = _open(db_path)
     try:
@@ -279,7 +470,19 @@ def sign_up(
                 password_hash=hash_password(password),
                 display_name_enc=_encrypt_safe(name) if name else None,
                 region=region or None,
+                gender=gender or None,
+                birth_date_enc=encrypt_pii(birth_date) if birth_date else None,
                 interests_enc=_encrypt_interests(interest_items),
+                disability_status_enc=(
+                    encrypt_pii(disability_status) if disability_status else None
+                ),
+                veteran_status_enc=(
+                    encrypt_pii(veteran_status) if veteran_status else None
+                ),
+                income_bracket_enc=(
+                    encrypt_pii(income_bracket) if income_bracket else None
+                ),
+                household_types_enc=_encrypt_string_list(household_type_items),
                 marketing_opt_in=marketing_opt_in,
             )
         except repo.DuplicateUsername as exc:
@@ -294,7 +497,13 @@ def sign_up(
         display_name=name,
         created_at=created_at,
         region=region,
+        gender=gender,
+        birth_date=birth_date,
         interests=interest_items,
+        disability_status=disability_status,
+        veteran_status=veteran_status,
+        income_bracket=income_bracket,
+        household_types=household_type_items,
         marketing_opt_in=bool(marketing_opt_in),
     )
 
@@ -356,8 +565,14 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
 
         # 저장 시 암호화한 값들을 로그인 시점에 명시적으로 복호화한다 (요구사항 4).
         display_name = _safe_decrypt_name(row["display_name_enc"], uname)
+        birth_date = _safe_decrypt_birth_date(row["birth_date_enc"], uname)
         _log.info("login ok username=%s", mask_email(uname))
-        return _row_to_user(row, display_name=display_name)
+        return _row_to_user(
+            row,
+            display_name=display_name,
+            birth_date=birth_date,
+            **_decrypt_profile_extras(row, uname),
+        )
     finally:
         conn.close()
 
@@ -374,7 +589,10 @@ def get_profile(username: str, *, db_path=None) -> AuthUser:
     if row is None:
         raise UserNotFoundError("존재하지 않는 사용자입니다.")
     return _row_to_user(
-        row, display_name=_safe_decrypt_name(row["display_name_enc"], uname)
+        row,
+        display_name=_safe_decrypt_name(row["display_name_enc"], uname),
+        birth_date=_safe_decrypt_birth_date(row["birth_date_enc"], uname),
+        **_decrypt_profile_extras(row, uname),
     )
 
 
@@ -383,7 +601,13 @@ def update_profile(
     *,
     display_name: str | None = None,
     region: str | None = None,
+    gender: str | None = None,
+    birth_date: str | None = None,
     interests=None,
+    disability_status: str | None = None,
+    veteran_status: str | None = None,
+    income_bracket: str | None = None,
+    household_types=None,
     db_path=None,
 ) -> AuthUser:
     """전달한 필드만 수정하고 최신 :class:`AuthUser` 를 돌려준다.
@@ -405,8 +629,26 @@ def update_profile(
         if region is not None:
             trimmed = region.strip()
             changes["region"] = trimmed or None
+        if gender is not None:
+            changes["gender"] = _clean_gender(gender) or None
+        if birth_date is not None:
+            cleaned = _clean_birth_date(birth_date)
+            changes["birth_date_enc"] = encrypt_pii(cleaned) if cleaned else None
         if interests is not None:
             changes["interests_enc"] = _encrypt_interests(interests)
+        if disability_status is not None:
+            cleaned = _clean_disability_status(disability_status)
+            changes["disability_status_enc"] = encrypt_pii(cleaned) if cleaned else None
+        if veteran_status is not None:
+            cleaned = _clean_veteran_status(veteran_status)
+            changes["veteran_status_enc"] = encrypt_pii(cleaned) if cleaned else None
+        if income_bracket is not None:
+            cleaned = _clean_income_bracket(income_bracket)
+            changes["income_bracket_enc"] = encrypt_pii(cleaned) if cleaned else None
+        if household_types is not None:
+            changes["household_types_enc"] = _encrypt_string_list(
+                _clean_household_types(household_types)
+            )
 
         backend.update_profile_fields(conn, int(row["id"]), **changes)
         fresh = backend.get_user_by_username(conn, uname)
@@ -415,7 +657,10 @@ def update_profile(
 
     _log.info("profile update ok username=%s", mask_email(uname))
     return _row_to_user(
-        fresh, display_name=_safe_decrypt_name(fresh["display_name_enc"], uname)
+        fresh,
+        display_name=_safe_decrypt_name(fresh["display_name_enc"], uname),
+        birth_date=_safe_decrypt_birth_date(fresh["birth_date_enc"], uname),
+        **_decrypt_profile_extras(fresh, uname),
     )
 
 

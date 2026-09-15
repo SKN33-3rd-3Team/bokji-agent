@@ -187,6 +187,18 @@ def test_required_documents_render_as_uniform_bulleted_bars_regardless_of_line_l
             "policies": [
                 {
                     "policy_id": "p1",
+                    "title": "청년월세지원",
+                    "amount_label": "10만원",
+                    "duplicate_status": "가능",
+                },
+                {
+                    "policy_id": "p2",
+                    "title": "청년구직활동지원금",
+                    "amount_label": "20만원",
+                    "duplicate_status": "확인 필요",
+                },
+                {
+                    "policy_id": "p3",
                     "title": "정책 A",
                     "detail": {
                         "required_documents": (
@@ -202,6 +214,21 @@ def test_required_documents_render_as_uniform_bulleted_bars_regardless_of_line_l
 
     app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
     assert not app.exception
+    # 요약 카드 3개 + "지금 보고 있는 정책 1건"의 지원금·중복수급 2개 = 5.
+    # 두 정책이 한꺼번에 쌓이지 않는다.
+    assert len(app.metric) == 5
+    assert [metric.label for metric in app.metric][:3] == [
+        "확인한 제도", "자격 충족", "미충족·미확인"
+    ]
+    markdown = " ".join(_values(app.markdown))
+    assert "청년월세지원" in markdown
+    assert "청년구직활동지원금" not in markdown
+    assert "1 / 2" in markdown
+    # 좌우 화살표가 있고, 첫 장에서는 "이전"이 눌리지 않는다.
+    arrows = {button.label: button for button in app.button}
+    assert set(arrows) == {"◀", "▶"}
+    assert arrows["◀"].disabled is True
+    assert arrows["▶"].disabled is False
     detail_html = " ".join(_html_values(app))
     assert '<div class="bkw-doclist-row">○ 정부지원 아이돌봄서비스 지원결정서(해당년도 2월 이후 발행분)</div>' in detail_html
     assert '<div class="bkw-doclist-row">○ 수급자 또는 양육자 통장 사본</div>' in detail_html

@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import streamlit as st
 from rag_chatbot.auth import (
     AuthError,
@@ -22,7 +24,25 @@ from rag_chatbot.auth import (
     update_profile,
 )
 
-from ..constants import INTEREST_OPTIONS, SIDO_OPTIONS
+from ..constants import (
+    BIRTH_DATE_MIN,
+    DISABILITY_CODE_BY_LABEL_KO,
+    DISABILITY_LABELS_KO,
+    DISABILITY_NONE,
+    GENDER_CODE_BY_LABEL_KO,
+    GENDER_LABELS_KO,
+    GENDER_NONE,
+    HOUSEHOLD_TYPE_CODE_BY_LABEL_KO,
+    HOUSEHOLD_TYPE_LABELS_KO,
+    INCOME_BRACKET_CODE_BY_LABEL_KO,
+    INCOME_BRACKET_LABELS_KO,
+    INCOME_BRACKET_NONE,
+    SIDO_OPTIONS,
+    SIGNUP_INTEREST_OPTIONS,
+    VETERAN_CODE_BY_LABEL_KO,
+    VETERAN_LABELS_KO,
+    VETERAN_NONE,
+)
 from ..nav import goto
 from ..session import auth_user_dict, escape_md, logout
 
@@ -62,16 +82,33 @@ def _reset_forms_if_user_changed(username: str) -> None:
 
 
 def _handle_profile_edit(username: str, name: str, region_sel: str,
-                         interests: list[str]) -> None:
+                         gender_sel: str, birth_date_sel: date | None,
+                         interests: list[str], disability_sel: str,
+                         household_labels: list[str], veteran_sel: str,
+                         income_sel: str) -> None:
     region = "" if region_sel == _REGION_NONE else region_sel
+    gender = GENDER_CODE_BY_LABEL_KO.get(gender_sel, "")
+    birth_date = birth_date_sel.isoformat() if isinstance(birth_date_sel, date) else ""
+    disability_status = DISABILITY_CODE_BY_LABEL_KO.get(disability_sel, "")
+    veteran_status = VETERAN_CODE_BY_LABEL_KO.get(veteran_sel, "")
+    income_bracket = INCOME_BRACKET_CODE_BY_LABEL_KO.get(income_sel, "")
+    household_types = [
+        HOUSEHOLD_TYPE_CODE_BY_LABEL_KO[label]
+        for label in household_labels
+        if label in HOUSEHOLD_TYPE_CODE_BY_LABEL_KO
+    ]
     try:
         user = update_profile(username, display_name=name.strip(),
-                              region=region, interests=interests)
+                              region=region, gender=gender, birth_date=birth_date,
+                              interests=interests, disability_status=disability_status,
+                              veteran_status=veteran_status, income_bracket=income_bracket,
+                              household_types=household_types)
     except AuthError as exc:
         st.error(str(exc))
         return
     st.session_state.auth_user = auth_user_dict(user)
-    for key in ("pe_name", "pe_region", "pe_interests"):
+    for key in ("pe_name", "pe_region", "pe_gender", "pe_birth_date", "pe_interests",
+                "pe_disability", "pe_household_types", "pe_veteran", "pe_income"):
         st.session_state.pop(key, None)
     st.toast("기본 정보를 저장했습니다.", icon=":material/check_circle:")
     st.rerun()
@@ -129,14 +166,42 @@ def _seed(key: str, value) -> dict:
     return {} if key in st.session_state else {"value": value}
 
 
+def _parse_stored_birth_date(value: object) -> date | None:
+    """DB에 저장된 ISO 문자열을 위젯 기본값용 ``date``로. 깨진 값은 조용히 None."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def _profile_edit_form(user: dict) -> None:
     with st.container(border=True):
         st.markdown("**기본 정보 수정**")
         region = user.get("region") or ""
         region_idx = ([_REGION_NONE, *SIDO_OPTIONS].index(region)
                       if region in SIDO_OPTIONS else 0)
+        gender_labels = [GENDER_NONE, *GENDER_LABELS_KO.values()]
+        gender_idx = gender_labels.index(GENDER_LABELS_KO[user["gender"]]) \
+            if user.get("gender") in GENDER_LABELS_KO else 0
+        saved_birth_date = _parse_stored_birth_date(user.get("birth_date"))
         saved_interests = [i for i in (user.get("interests") or [])
-                           if i in INTEREST_OPTIONS]
+                           if i in SIGNUP_INTEREST_OPTIONS]
+        disability_labels = [DISABILITY_NONE, *DISABILITY_LABELS_KO.values()]
+        disability_idx = disability_labels.index(DISABILITY_LABELS_KO[user["disability_status"]]) \
+            if user.get("disability_status") in DISABILITY_LABELS_KO else 0
+        veteran_labels = [VETERAN_NONE, *VETERAN_LABELS_KO.values()]
+        veteran_idx = veteran_labels.index(VETERAN_LABELS_KO[user["veteran_status"]]) \
+            if user.get("veteran_status") in VETERAN_LABELS_KO else 0
+        income_labels = [INCOME_BRACKET_NONE, *INCOME_BRACKET_LABELS_KO.values()]
+        income_idx = income_labels.index(INCOME_BRACKET_LABELS_KO[user["income_bracket"]]) \
+            if user.get("income_bracket") in INCOME_BRACKET_LABELS_KO else 0
+        saved_household_labels = [
+            HOUSEHOLD_TYPE_LABELS_KO[code] for code in (user.get("household_types") or [])
+            if code in HOUSEHOLD_TYPE_LABELS_KO
+        ]
         with st.form("form_profile_edit"):
             name = st.text_input("이름", key="pe_name",
                                  **_seed("pe_name", user.get("display_name", "")))
@@ -145,16 +210,52 @@ def _profile_edit_form(user: dict) -> None:
                 **({} if "pe_region" in st.session_state
                    else {"index": region_idx}),
             )
+            gender_sel = st.radio(
+                "성별", gender_labels, key="pe_gender", horizontal=True,
+                **({} if "pe_gender" in st.session_state
+                   else {"index": gender_idx}),
+            )
+            birth_date_sel = st.date_input(
+                "생년월일", min_value=BIRTH_DATE_MIN, max_value=date.today(),
+                key="pe_birth_date",
+                **_seed("pe_birth_date", saved_birth_date),
+            )
             interests = st.pills(
-                "관심 지원조건", INTEREST_OPTIONS, selection_mode="multi",
+                "관심 지원조건", SIGNUP_INTEREST_OPTIONS, selection_mode="multi",
                 key="pe_interests",
                 **({} if "pe_interests" in st.session_state
                    else {"default": saved_interests}),
             )
+            disability_sel = st.radio(
+                "장애 등록 여부", disability_labels, key="pe_disability",
+                horizontal=True,
+                **({} if "pe_disability" in st.session_state
+                   else {"index": disability_idx}),
+            )
+            household_labels_sel = st.pills(
+                "가구 유형 (해당하는 항목 모두 선택)",
+                list(HOUSEHOLD_TYPE_LABELS_KO.values()), selection_mode="multi",
+                key="pe_household_types",
+                **({} if "pe_household_types" in st.session_state
+                   else {"default": saved_household_labels}),
+            )
+            veteran_sel = st.radio(
+                "국가유공자/보훈대상자 여부", veteran_labels, key="pe_veteran",
+                horizontal=True,
+                **({} if "pe_veteran" in st.session_state
+                   else {"index": veteran_idx}),
+            )
+            income_sel = st.selectbox(
+                "소득 수준", income_labels, key="pe_income",
+                **({} if "pe_income" in st.session_state
+                   else {"index": income_idx}),
+            )
             saved = st.form_submit_button("저장", type="primary")
         if saved:
             _handle_profile_edit(user["username"], name, region_sel,
-                                 list(interests or []))
+                                 gender_sel, birth_date_sel, list(interests or []),
+                                 disability_sel, list(household_labels_sel or []),
+                                 veteran_sel, income_sel)
 
 
 def _password_form(user: dict) -> None:
@@ -173,8 +274,8 @@ def _password_form(user: dict) -> None:
 def _delete_account_form(user: dict) -> None:
     with st.container(border=True):
         st.markdown("**회원 탈퇴**")
-        st.caption("탈퇴하면 계정과 저장된 정보(이름·지역·관심조건)가 즉시 "
-                   "삭제되며 되돌릴 수 없습니다.")
+        st.caption("탈퇴하면 계정과 저장된 정보(이름·지역·성별·생년월일·관심조건)가 "
+                   "즉시 삭제되며 되돌릴 수 없습니다.")
         with st.form("form_delete_account", clear_on_submit=False):
             pw = st.text_input("비밀번호 확인", type="password", key="da_pw")
             agree = st.checkbox("위 내용을 확인했으며 탈퇴에 동의합니다.",
@@ -217,14 +318,32 @@ def page_mypage() -> None:
     with st.container(border=True):
         st.markdown("**내 가입 정보**")
         region = user.get("region") or "미설정"
+        gender = GENDER_LABELS_KO.get(user.get("gender") or "", "미설정")
+        birth_date = user.get("birth_date") or "미설정"
         interests = user.get("interests") or []
         marketing = "동의" if user.get("marketing_opt_in") else "미동의"
-        rows = [("거주 지역", region), ("마케팅 수신", marketing)]
+        disability = DISABILITY_LABELS_KO.get(user.get("disability_status") or "", "미설정")
+        veteran = VETERAN_LABELS_KO.get(user.get("veteran_status") or "", "미설정")
+        income = INCOME_BRACKET_LABELS_KO.get(user.get("income_bracket") or "", "미설정")
+        household_types = [
+            HOUSEHOLD_TYPE_LABELS_KO[code] for code in (user.get("household_types") or [])
+            if code in HOUSEHOLD_TYPE_LABELS_KO
+        ]
+        rows = [
+            ("거주 지역", region), ("성별", gender), ("생년월일", birth_date),
+            ("장애 등록 여부", disability), ("보훈대상자 여부", veteran),
+            ("소득 수준", income), ("마케팅 수신", marketing),
+        ]
         cols = st.columns(2)
         for i, (label, value) in enumerate(rows):
             box = cols[i % 2].container(border=True)
             box.caption(label)
             box.markdown(f"**{value}**")
+        st.caption("가구 유형")
+        if household_types:
+            st.markdown(" ".join(f":violet-badge[{escape_md(x)}]" for x in household_types))
+        else:
+            st.markdown("**미설정**")
         st.caption("관심 지원조건")
         if interests:
             st.markdown(" ".join(f":blue-badge[{escape_md(x)}]" for x in interests))
