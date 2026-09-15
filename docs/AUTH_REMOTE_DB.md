@@ -191,7 +191,6 @@ CREATE TABLE IF NOT EXISTS users (
     password_changed_at VARCHAR(32)  NULL,
     failed_login_count  INT          NOT NULL DEFAULT 0,
     locked_until        VARCHAR(32)  NULL,
-    avatar_data         MEDIUMBLOB   NULL,              -- 프로필 사진 원본(PNG), 평문
     PRIMARY KEY (id),
     UNIQUE KEY uq_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

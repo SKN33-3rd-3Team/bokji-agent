@@ -38,9 +38,6 @@
 - ``marketing_opt_in`` : 0/1
 - ``failed_login_count``: 연속 로그인 실패 횟수 (성공 시 0으로 초기화)
 - ``locked_until``     : 계정 잠금 해제 시각, ISO8601 UTC (없으면 NULL)
-- ``avatar_data``      : 프로필 사진 원본 바이트(PNG), 평문 (없으면 NULL) -
-                         업로드 시 이미 정사각형으로 자르고 축소한 상태로
-                         저장한다(``mypage._process_avatar_upload`` 참고).
 
 타임스탬프는 MySQL 에서도 ``DATETIME`` 이 아니라 ISO8601 **문자열** 컬럼으로
 저장한다 — ``service`` 의 ``_parse_ts`` 가 문자열을 그대로 파싱하므로 백엔드가
@@ -82,8 +79,7 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at          TEXT NOT NULL,
     password_changed_at TEXT,
     failed_login_count  INTEGER NOT NULL DEFAULT 0,
-    locked_until        TEXT,
-    avatar_data         BLOB
+    locked_until        TEXT
 );
 """
 
@@ -101,7 +97,6 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("marketing_opt_in", "marketing_opt_in INTEGER NOT NULL DEFAULT 0"),
     ("failed_login_count", "failed_login_count INTEGER NOT NULL DEFAULT 0"),
     ("locked_until", "locked_until TEXT"),
-    ("avatar_data", "avatar_data BLOB"),
 )
 
 # "이 컬럼은 건드리지 마라"(_UNSET)와 "NULL 로 지워라"(None)를 구분하는 센티넬.
@@ -335,7 +330,6 @@ def update_profile_fields(
     gender: object = _UNSET,
     birth_date_enc: object = _UNSET,
     interests_enc: object = _UNSET,
-    avatar_data: object = _UNSET,
     disability_status_enc: object = _UNSET,
     veteran_status_enc: object = _UNSET,
     income_bracket_enc: object = _UNSET,
@@ -351,7 +345,6 @@ def update_profile_fields(
         ("gender", gender),
         ("birth_date_enc", birth_date_enc),
         ("interests_enc", interests_enc),
-        ("avatar_data", avatar_data),
         ("disability_status_enc", disability_status_enc),
         ("veteran_status_enc", veteran_status_enc),
         ("income_bracket_enc", income_bracket_enc),

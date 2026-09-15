@@ -125,10 +125,7 @@ def _render_sidebar() -> tuple[int, list[str]]:
         if auth_user:
             name = auth_user.get("display_name") or auth_user.get("username", "")
             acc_row = st.container(horizontal=True, vertical_alignment="center")
-            render_avatar(
-                acc_row, photo=auth_user.get("avatar"), name=name, size=40,
-                key="sidebar_avatar",
-            )
+            render_avatar(acc_row, name=name, size=40)
             acc_row.markdown(f"**{escape_md(name)} 님**")
             if st.button("마이페이지", icon=":material/person:", width="stretch", key="sb_mypage"):
                 goto("mypage")

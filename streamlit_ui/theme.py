@@ -153,38 +153,17 @@ def _esc_svg_text(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def render_avatar(
-    container, *, photo: bytes | None, name: str, size: int = 28, key: str,
-) -> None:
-    """아바타 하나를 그린다 - 업로드 사진이 있으면 그 사진, 없으면 이니셜 원.
+def render_avatar(container, *, name: str, size: int = 28) -> None:
+    """아바타 하나를 그린다 - 이름 이니셜이 든 원.
 
-    호출부(사이드바 계정 칸·마이페이지 카드·사진 업로드 미리보기)가 매번
-    "사진 있나 없나"를 직접 분기하지 않도록 여기 한 곳에 모은다 - 나중에
-    표시 로직이 바뀌어도 이 함수만 고치면 된다.
+    호출부(사이드바 계정 칸·마이페이지 카드)가 매번 이니셜·색상 계산을
+    직접 하지 않도록 여기 한 곳에 모은다 - 나중에 표시 로직이 바뀌어도
+    이 함수만 고치면 된다.
 
-    이니셜 아바타는 SVG 자체가 원이지만, 업로드 사진(``st.image``)은 기본이
-    사각형이라 ``border-radius``를 직접 걸어야 한다. ``st.image``엔 ``key``가
-    없어서 ``st.container(key=...)``로 감싼 뒤 이 코드베이스 전반에서 쓰는
-    ``[class*='st-key-...']`` 패턴으로 그 안의 ``<img>``에 CSS를 건다 - 호출부
-    마다 겹치지 않는 ``key``를 반드시 넘겨야 한다(같은 페이지에 이 함수가 두
-    번 이상 불릴 수 있어서, 예: 마이페이지 카드 + 업로드 미리보기).
-
-    ``st.container()``는 기본 ``width="stretch"``라 - 가로 컨테이너
-    (``horizontal=True``) 안에 그대로 넣으면 이 래퍼가 남은 폭을 다 먹어서
-    옆에 있던 이름 텍스트가 오른쪽 끝으로 밀려난다(2026-09-15 확인). 그래서
-    ``width="content"``로 사진 크기만큼만 차지하게 명시한다.
+    (사진 업로드는 아직 없다 - 별도로 다룰 예정.)
     """
 
-    if not photo:
-        container.image(avatar_svg(name, size=size), width=size)
-        return
-
-    wrap = container.container(key=key, width="content")
-    wrap.html(
-        f"<style>[class*='st-key-{key}'] img{{border-radius:50%;"
-        "object-fit:cover;}</style>"
-    )
-    wrap.image(photo, width=size)
+    container.image(avatar_svg(name, size=size), width=size)
 
 
 _HEADER_ROW_KEY = "app_header_row"

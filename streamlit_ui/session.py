@@ -149,7 +149,6 @@ def auth_user_dict(user) -> dict:
         "income_bracket": user.income_bracket,
         "household_types": list(user.household_types),
         "marketing_opt_in": user.marketing_opt_in,
-        "avatar": user.avatar,
     }
 
 
