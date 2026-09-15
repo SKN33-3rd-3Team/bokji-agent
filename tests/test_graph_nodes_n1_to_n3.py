@@ -547,6 +547,45 @@ class ParseSlotsNodeTests(unittest.TestCase):
         self.assertEqual(result["slots"]["region_scope"], "unknown")
         self.assertEqual(result["slots"]["region_names"], [])
 
+    def test_reentry_normalization_failure_with_profile_region_records_no_conflict(
+        self,
+    ) -> None:
+        """PR #60 리뷰 회귀 테스트 - 프로필에서 온 지역이 있는 상태에서 새
+        지역 텍스트가 정규화에 실패하면, 슬롯은 unknown으로 되돌아가지만
+        ``slot_conflicts``에는 아무것도 실리지 않는다(비교할 두 값 중 하나가
+        없어 충돌로 판정할 수 없다). 이 조합(missing인데 conflict는 없음)을
+        "그냥 아직 안 물어봤을 뿐"으로 오해하면 안 된다는 것을 문서화한다 -
+        streamlit_ui/pages/chat.py의 (예전) ``skip_region`` 버그가 정확히
+        이 상태를 오해해서 위젯을 숨기고 프로필 값을 조용히 재제출했다.
+        """
+
+        fake_extracted = {
+            "birth_date": None,
+            "age_self_reported": None,
+            "region_raw": "이상한동네",
+            "interests": [],
+            "household_size": None,
+            "children_count": None,
+        }
+        state = {
+            "user_input": "이상한동네로 이사했어요",
+            "slots": {
+                "region_scope": "regional",
+                "region_names": ["경기도"],
+                "profile_sourced": ["region"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots",
+            return_value=fake_extracted,
+        ):
+            result = parse_slots(state)
+
+        self.assertEqual(result["slots"]["region_scope"], "unknown")
+        self.assertEqual(result["slots"]["region_names"], [])
+        self.assertIsNone(result["slot_conflicts"])
+        self.assertNotIn("region", result["slots"]["profile_sourced"])
+
     def test_sigungu_region_names_include_the_sido_prefix_first(self) -> None:
         # region_names는 단일 이름이 아니라 상위 시도부터 누적한 계층
         # 리스트여야 한다. 수집기(region_utils.extract_region)와 형태가

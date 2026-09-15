@@ -609,13 +609,21 @@ def _render_slot_form(
     두 번 나왔다(2026-09-15, 사용자 피드백 - "이게 반복되는거 보여?" 지적
     반영). 폼 바로 위에 그 문구가 이미 있으므로 여기서는 위젯만 그린다.
 
-    ``region``만은 회원가입 때 이미 알고 있으면(``auth_user.region``) 위젯을
-    아예 안 그리고 그 값을 자동으로 제출한다(2026-09-15, PR 리뷰 피드백
-    반영) - 로그인 안내 화면이 "회원가입 때 입력한 지역이 자동으로
-    반영됩니다"라고 약속하는데 실제로는 매번 다시 물어봐서 생긴 공백이었다.
-    생년월일·성별·소득·장애·취업상태·가구유형은 회원가입 때 아예 안
-    받거나(취업상태) 그 슬롯이 지금 충돌 재확인 대상이라 자동 채움을 쓰면
-    안 되므로 그대로 묻는다.
+    회원가입 때 이미 알고 있는 값(예: ``auth_user.region``)이라도, 이 슬롯이
+    ``missing_slots``에 실제로 들어와 있으면 위젯을 그대로 그려서 묻는다 -
+    프로필 값을 위젯 없이 자동으로 재제출하는 지름길(``skip_region``)을
+    한때 뒀었지만 삭제했다(2026-09-15, PR #60 리뷰 반영). 그 지름길은
+    "region이 missing인데 slot_conflicts엔 없음"을 전부 "그냥 아직 안
+    물어봤을 뿐"으로 해석했는데, 실제로는 N1(``slot_parser.parse_slots``)이
+    채팅에서 새로 말한 지역 텍스트의 정규화에 실패했을 때도 같은 조합이
+    만들어진다(충돌로 판정할 두 값 중 하나가 없어 ``slot_conflicts``에는
+    못 싣고, 지역은 ``unknown``으로 되돌아가 missing에는 들어간다). 이
+    상태에서 위젯을 숨기고 프로필 값을 조용히 재제출하면, 사용자가 방금
+    입력해 파싱에 실패한 지역이 안내 없이 프로필 값으로 덮여 사라진다.
+    프로필 값을 처음부터 자동으로 채우는 동작 자체는 ``service.ask()``의
+    ``known_region`` 시딩이 이미 담당하므로(그 덕에 애초에 이 슬롯이
+    missing으로 잡히지 않는다), 여기서 지름길을 없애도 "회원가입 때 입력한
+    지역이 자동으로 반영됩니다"라는 로그인 안내 문구는 그대로 지켜진다.
 
     ``slot_conflicts``에 있는 슬롯은(채팅에서 말한 값이 회원 프로필과 달라
     파이프라인이 되묻는 경우, service.ChatResponse.slot_conflicts 참고)
@@ -635,21 +643,11 @@ def _render_slot_form(
         return None
 
     slot_conflicts = slot_conflicts or {}
-    auth_user = st.session_state.get("auth_user") or {}
-    known_region = str(auth_user.get("region") or "").strip()
-    skip_region = bool(known_region) and "region" in slots and "region" not in slot_conflicts
 
     with st.container(border=True):
-        if skip_region:
-            st.caption(
-                f":material/check_circle: 거주 지역은 회원가입 정보"
-                f"(**{known_region}**)를 사용할게요."
-            )
         with st.form("slot_form", border=False, clear_on_submit=True):
             values: dict[str, object] = {}
             for slot in slots:
-                if slot == "region" and skip_region:
-                    continue
                 conflict = slot_conflicts.get(slot)
                 default: object = None
                 if conflict and slot == "household_types":
@@ -667,8 +665,6 @@ def _render_slot_form(
         return None
 
     parts: list[str] = []
-    if skip_region:
-        parts.append(f"{SLOT_LABELS_KO.get('region', '거주 지역')}: {known_region}")
     for slot, val in values.items():
         if isinstance(val, list):
             if not val:

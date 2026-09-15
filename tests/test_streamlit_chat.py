@@ -32,6 +32,19 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+# 로그인 게이트를 통과시킨다 - 예전에는 개발자 로컬 .env의
+# DEV_AUTOLOGIN_EMAIL이 init_session() 안에서 새어 들어와 이 값 없이도
+# 우연히 로그인된 것처럼 통과했지만(PR #60 리뷰로 그 경로를 막았다),
+# 그건 테스트가 로컬 환경에 암묵적으로 의존하던 것이라 여기서 명시적으로
+# 로그인 상태를 만든다. setdefault로 두어야 이후 테스트가 재실행 사이에
+# session_state.auth_user를 직접 바꿔도(예: 로그인 사용자 교체) 이 스크립트가
+# 매 rerun마다 그 값을 덮어쓰지 않는다.
+st.session_state.setdefault("auth_user", {{
+    "username": "user@example.com",
+    "display_name": "테스터",
+    "region": "",
+    "interests": [],
+}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
@@ -146,9 +159,11 @@ def test_runtime_exception_is_redacted_from_user(tmp_path) -> None:
     (data_dir / "chroma.sqlite3").touch()
     script = f'''\
 from pathlib import Path
+import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
@@ -172,9 +187,11 @@ def test_fresh_result_render_exception_is_redacted_from_user(tmp_path) -> None:
     (data_dir / "chroma.sqlite3").touch()
     script = f'''\
 from pathlib import Path
+import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 chat.run_pipeline = lambda **kwargs: {{"status": "answered"}}
@@ -203,9 +220,11 @@ def test_fresh_result_render_exception_preserves_followup_transition(tmp_path) -
     (data_dir / "chroma.sqlite3").touch()
     script = f'''\
 from pathlib import Path
+import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 chat.run_pipeline = lambda **kwargs: {{"status": "needs_input", "question": "지역?"}}
@@ -238,6 +257,7 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 st.session_state.messages = [
     {{"role": "assistant", "result": {{"status": "answered"}}}}
@@ -269,6 +289,7 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
@@ -384,6 +405,7 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
@@ -612,3 +634,55 @@ def test_no_saved_region_is_not_forwarded(tmp_path) -> None:
     app.chat_input[0].set_value("지원금 받을 수 있나요").run(timeout=10)
 
     assert "region=None" in " ".join(_values(app.markdown))
+
+
+def test_region_widget_still_shown_when_missing_despite_known_profile_region(
+    tmp_path,
+) -> None:
+    """PR #60 리뷰 회귀 테스트 - 예전 ``skip_region`` 지름길이 숨기던 위젯이
+    이제는 그대로 보여야 한다.
+
+    회원 프로필에 지역이 있어도, 백엔드가 ``missing_slots``에 ``region``을
+    넣었다면(예: 채팅에서 새로 말한 지역 텍스트가 정규화에 실패해 슬롯이
+    ``unknown``으로 되돌아간 경우 - 이때는 두 값을 비교할 수 없어
+    ``slot_conflicts``에도 못 싣는다) 위젯 없이 프로필 값을 조용히
+    재제출하면 안 된다. 사용자가 방금 입력해 파싱에 실패한 지역이 안내
+    없이 프로필 값으로 덮여 사라지는 게 원래 버그였다.
+    """
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+
+    script = f'''\
+from pathlib import Path
+import streamlit as st
+from streamlit_ui.session import init_session
+from streamlit_ui.pages import chat
+
+st.session_state.auth_user = {{
+    "username": "user@example.com",
+    "display_name": "김복지",
+    "region": "경기도",
+    "interests": [],
+}}
+init_session()
+chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
+
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
+    return {{
+        "status": "needs_input",
+        "question": "거주 지역을 알려주세요.",
+        "missing_slots": ["region"],
+        "slot_conflicts": None,
+        "llm_status": {{"enabled": False}},
+    }}
+
+chat.run_pipeline = fake_run_pipeline
+chat.page_chat()
+'''
+    app = AppTest.from_string(script).run(timeout=10)
+    app.chat_input[0].set_value("어쩌구동네로 이사했어요").run(timeout=10)
+
+    assert [box.label for box in app.selectbox] == ["거주 지역"]
+    assert "거주 지역은 회원가입 정보" not in " ".join(_values(app.caption))

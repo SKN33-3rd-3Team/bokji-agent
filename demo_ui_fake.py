@@ -17,7 +17,7 @@ from streamlit_ui.pages import chat as chat_module
 from streamlit_ui.pages.auth import page_login, page_signup
 from streamlit_ui.pages.chat import page_chat
 from streamlit_ui.pages.mypage import page_mypage
-from streamlit_ui.session import init_session
+from streamlit_ui.session import init_session, maybe_dev_autologin
 from streamlit_ui.theme import localize_menu, render_header
 
 _SAMPLE_POLICIES = [
@@ -111,6 +111,10 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     init_session()
+    # 데모 전용 진입점이라 여기서만 명시적으로 자동 로그인을 켠다
+    # (streamlit_ui.session.maybe_dev_autologin 문서 참고 - app.py는
+    # 이 호출이 아예 없다).
+    maybe_dev_autologin()
     localize_menu()
     render_header()
     st.caption(":material/science: UI 데모 모드 - 실제 파이프라인 대신 가짜 응답을 씁니다.")
