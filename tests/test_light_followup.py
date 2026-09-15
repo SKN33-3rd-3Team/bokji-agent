@@ -8,6 +8,7 @@ from src.rag_chatbot.light_followup import (
     answer_light_followup,
     build_policy_context,
     respond_to_policy_question,
+    verify_answer_consistency,
     verify_light_answer,
 )
 
@@ -100,6 +101,31 @@ def _fake(payload: dict, *, fenced: bool = False) -> FakeLLMClient:
     return FakeLLMClient(f"```json\n{body}\n```" if fenced else body)
 
 
+class _SequencedLLMClient:
+    """호출할 때마다 다음 응답을 순서대로 돌려주는 가짜 LLM.
+
+    ``FakeLLMClient``는 항상 같은 응답 하나만 돌려주는데,
+    ``respond_to_policy_question``은 이제 한 턴에 LLM을 두 번 부른다
+    (①답변 생성 ②``verify_answer_consistency``의 정합성 재검증, PR #59 리뷰
+    피드백 반영) - 두 호출에 서로 다른 JSON을 줘야 하는 통합 테스트에서만
+    쓴다. 준비한 응답을 다 쓰면(테스트가 예상 못 한 추가 호출) 바로
+    ``IndexError``를 내서 실수로 놓친 호출을 조용히 숨기지 않는다.
+    """
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    def complete(self, prompt: str, *, system: str | None = None,
+                 max_tokens: int | None = None) -> str:
+        self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
+        return self._responses.pop(0)
+
+
+def _consistent_json() -> str:
+    return json.dumps({"consistent": True}, ensure_ascii=False)
+
+
 def test_answer_light_followup_returns_coerced_answer() -> None:
     client = _fake(
         {
@@ -175,19 +201,40 @@ def test_profile_facts_handles_none_and_empty() -> None:
     assert _profile_facts([]) == []
 
 
+def test_profile_facts_excludes_interests() -> None:
+    # interests(관심 분야)는 검색 질의를 넓히는 힌트일 뿐 자격 판정 조건이나
+    # 확정된 사용자 정보가 아니다. 다른 슬롯과 같은 "사용자 정보 - ..." 형식
+    # 으로 프롬프트에 들어가면 LLM이 "사용자가 청년이다"처럼 미확정 선택을
+    # 확정 사실로 오해할 수 있어 제외한다(PR #59 리뷰 피드백 반영).
+    facts = _profile_facts(
+        [
+            {"key": "region", "label": "지역", "value": "경기도"},
+            {"key": "interests", "label": "관심 분야", "value": "청년"},
+        ]
+    )
+
+    assert facts == ["사용자 정보 - 지역: 경기도"]
+
+
 def test_respond_to_policy_question_uses_user_profile_in_context() -> None:
     # 모델이 프로필 문장을 근거로 들면, 그 문장이 컨텍스트에 실제로 있으므로
-    # 검증(C)을 통과해 answer가 나온다.
-    client = _fake(
-        {
-            "answerable": True,
-            "answer": "서울에 거주하시고 이 정책은 전국 대상이므로 신청하실 수 있습니다.",
-            "evidence_quotes": [
-                "사용자 정보 - 지역: 서울특별시",
-                "지원대상: 전국의 만 19~34세 무주택 청년",
-            ],
-        }
-    )
+    # 검증(C1: verify_light_answer)을 통과하고, 두 번째 LLM 호출인
+    # verify_answer_consistency(C2)도 통과해야 answer가 나온다(PR #59
+    # 리뷰 피드백으로 C2가 추가되면서 LLM 호출이 하나 더 필요해졌다).
+    client = _SequencedLLMClient([
+        json.dumps(
+            {
+                "answerable": True,
+                "answer": "서울에 거주하시고 이 정책은 전국 대상이므로 신청하실 수 있습니다.",
+                "evidence_quotes": [
+                    "사용자 정보 - 지역: 서울특별시",
+                    "지원대상: 전국의 만 19~34세 무주택 청년",
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        _consistent_json(),
+    ])
     policy = {
         "title": "청년월세 특별지원",
         "detail": {"support_target": "전국의 만 19~34세 무주택 청년"},
@@ -205,15 +252,95 @@ def test_respond_to_policy_question_uses_user_profile_in_context() -> None:
 
 
 def test_respond_to_policy_question_without_profile_still_works() -> None:
-    client = _fake(
-        {
-            "answerable": True,
-            "answer": "만 19~34세 무주택 청년이 대상입니다.",
-            "evidence_quotes": ["지원대상: 만 19~34세 무주택 청년"],
-        }
-    )
+    client = _SequencedLLMClient([
+        json.dumps(
+            {
+                "answerable": True,
+                "answer": "만 19~34세 무주택 청년이 대상입니다.",
+                "evidence_quotes": ["지원대상: 만 19~34세 무주택 청년"],
+            },
+            ensure_ascii=False,
+        ),
+        _consistent_json(),
+    ])
     policy = {"title": "청년월세", "detail": {"support_target": "만 19~34세 무주택 청년"}}
 
     out = respond_to_policy_question(policy, "누가 대상이에요?", llm_client=client)
 
     assert out["kind"] == "answer"
+
+
+# --- verify_answer_consistency (PR #59 blocker: [답변 <-> 근거] 정합성) ----
+
+
+def test_verify_answer_consistency_passes_when_llm_says_consistent() -> None:
+    client = FakeLLMClient(_consistent_json())
+
+    assert verify_answer_consistency(
+        "월 최대 20만원을 최대 12개월 지원합니다.",
+        ["월 최대 20만원을 최대 12개월 지원한다."],
+        llm_client=client,
+    ) is True
+
+
+def test_verify_answer_consistency_fails_when_llm_says_inconsistent() -> None:
+    # 근거는 진짜(verify_light_answer 통과)지만, 답변이 근거와 다른 말(다른
+    # 금액)을 하는 경우 - verify_light_answer만으로는 못 잡던 케이스다.
+    client = FakeLLMClient(json.dumps({"consistent": False}))
+
+    assert verify_answer_consistency(
+        "월 최대 30만원을 지원합니다.",
+        ["월 최대 20만원을 최대 12개월 지원한다."],
+        llm_client=client,
+    ) is False
+
+
+def test_verify_answer_consistency_fails_closed_on_llm_failure() -> None:
+    assert verify_answer_consistency(
+        "답변", ["근거"], llm_client=FailingLLMClient(), attempts=1
+    ) is False
+
+
+def test_verify_answer_consistency_fails_closed_on_malformed_response() -> None:
+    # JSON은 맞지만 consistent 키가 bool이 아니거나 없음 - 이것도 "확인
+    # 못 함"이므로 통과가 아니라 실패로 본다.
+    assert verify_answer_consistency(
+        "답변", ["근거"], llm_client=FakeLLMClient(json.dumps({})), attempts=1
+    ) is False
+    assert verify_answer_consistency(
+        "답변", ["근거"],
+        llm_client=FakeLLMClient(json.dumps({"consistent": "true"})), attempts=1,
+    ) is False
+    assert verify_answer_consistency(
+        "답변", ["근거"], llm_client=FakeLLMClient("이건 JSON이 아님"), attempts=1
+    ) is False
+
+
+def test_verify_answer_consistency_fails_on_empty_answer_or_quotes() -> None:
+    client = FakeLLMClient(_consistent_json())
+
+    assert verify_answer_consistency("", ["근거"], llm_client=client) is False
+    assert verify_answer_consistency("답변", [], llm_client=client) is False
+    assert verify_answer_consistency("답변", None, llm_client=client) is False
+
+
+def test_respond_to_policy_question_falls_back_when_answer_contradicts_evidence() -> None:
+    # blocker 재현: LLM이 진짜 원문을 근거(evidence_quotes)로 들었지만(그래서
+    # verify_light_answer는 통과), 실제 답변 문장은 그 근거와 다른 금액을
+    # 말한다 - verify_answer_consistency가 이걸 잡아 guidance로 폴백해야
+    # 한다(PR #59 리뷰 피드백, blocker로 지적됨).
+    client = _SequencedLLMClient([
+        json.dumps(
+            {
+                "answerable": True,
+                "answer": "월 최대 30만원을 지원합니다.",
+                "evidence_quotes": ["월 최대 20만원, 최대 12개월"],
+            },
+            ensure_ascii=False,
+        ),
+        json.dumps({"consistent": False}, ensure_ascii=False),
+    ])
+
+    out = respond_to_policy_question(_POLICY, "한 달에 얼마 받아요?", llm_client=client)
+
+    assert out["kind"] == "guidance"
