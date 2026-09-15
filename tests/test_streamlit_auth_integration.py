@@ -279,7 +279,13 @@ class StreamlitAuthIntegrationTests(unittest.TestCase):
         at = self._register_and_login(email="del@example.com", name="탈퇴유저")
         at.text_input(key="da_pw").set_value(_PW)
         at.checkbox(key="da_agree").set_value(True)
+        # "회원 탈퇴"는 이제 비밀번호만 먼저 검증하고 바로 지우지 않는다 -
+        # 확인 팝업이 뜨고, 거기서 "정말 탈퇴할게요"를 눌러야 실제로
+        # 삭제된다(2026-09-15, PR 리뷰 피드백 반영 - 실수 클릭 방지).
         at = self._click(at, "회원 탈퇴")
+        self.assertFalse(at.exception)
+        self.assertIsNotNone(at.session_state["auth_user"])
+        at = self._click(at, "정말 탈퇴할게요")
         self.assertFalse(at.exception)
         self.assertIsNone(at.session_state["auth_user"])
         self.assertEqual(at.session_state["view"], "chat")

@@ -35,7 +35,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -90,9 +90,15 @@ def test_authenticated_sidebar_reset_and_logout_clear_conversation(tmp_path) -> 
     app = app.run(timeout=10)
     first_id = app.session_state["conversation_id"]
 
-    assert any("김복지 님으로 로그인됨" in str(item.value) for item in app.caption)
+    assert any("김복지 님" in str(item.value) for item in app.markdown)
     assert not any(button.label == "로그인" for button in app.button)
-    next(button for button in app.button if button.label == "대화 초기화").click()
+    # "새 상담 시작"은 이제 바로 초기화하지 않고 확인 팝업을 먼저 띄운다
+    # (2026-09-15, PR 리뷰 피드백 반영 - 실수로 눌러 대화가 통째로 사라지는
+    # 걸 막기 위함). 사이드바 버튼(key=sb_new_chat)을 눌러 팝업을 연 뒤,
+    # 팝업 안의 확인 버튼(key=confirm_reset_go)을 눌러야 실제로 초기화된다.
+    next(button for button in app.button if button.key == "sb_new_chat").click()
+    app = app.run(timeout=10)
+    next(button for button in app.button if button.key == "confirm_reset_go").click()
     app = app.run(timeout=10)
 
     assert app.session_state["auth_user"]["username"] == "user@example.com"
@@ -266,7 +272,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -335,8 +341,13 @@ def test_reset_conversation_clears_profile_sidebar(tmp_path) -> None:
     app.chat_input[0].set_value("서울 살아요").run(timeout=10)
     assert app.session_state["profile"]
 
-    reset = next(b for b in app.sidebar.button if "대화 초기화" in b.label)
-    app = reset.click().run(timeout=10)
+    # "새 상담 시작"은 확인 팝업을 거친다(위 test_authenticated_sidebar_
+    # reset_and_logout_clear_conversation 참고) - 사이드바 버튼으로 팝업을
+    # 연 뒤 팝업 안의 확인 버튼을 눌러야 실제로 초기화된다.
+    next(b for b in app.sidebar.button if b.key == "sb_new_chat").click()
+    app = app.run(timeout=10)
+    next(b for b in app.button if b.key == "confirm_reset_go").click()
+    app = app.run(timeout=10)
 
     assert app.session_state["profile"] == []
     assert "파악한 정보" not in _sidebar_markdown(app)
@@ -376,7 +387,7 @@ from streamlit_ui.pages import chat
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None):
     # run_pipeline 은 워커 스레드에서 돌기 때문에 여기서 st.session_state 를
     # 건드릴 수 없다(ScriptRunContext 없음). 받은 값을 응답에 실어 보낸다.
     return {{
@@ -399,7 +410,9 @@ def test_sidebar_condition_and_field_pickers_reach_the_pipeline(tmp_path) -> Non
     (data_dir / "chroma.sqlite3").touch()
     app = _interests_chat_app(data_dir)
 
-    labels = [element.label for element in app.sidebar.multiselect]
+    # 지원조건/관심 분야 선택 위젯은 multiselect가 아니라 pills다
+    # (2026-09-15, 사이드바 개편 - "지원조건" 칩 클릭형 UI로 변경).
+    labels = [element.label for element in app.sidebar.pills]
     assert labels == ["지원조건", "관심 분야"]
 
     app.session_state["interests_pick"] = ["청년"]
@@ -431,6 +444,14 @@ def test_sidebar_pickers_send_empty_list_when_nothing_selected(tmp_path) -> None
     data_dir.mkdir()
     (data_dir / "chroma.sqlite3").touch()
     app = _interests_chat_app(data_dir)
+    # 사이드바 pills는 회원가입 때 고른 관심사를 기본 선택값으로 깐다
+    # (chat.py `_render_sidebar` 참고). 이 테스트는 "로그인 계정이 어떤
+    # 관심사를 저장해 뒀는지"와 무관하게 "사용자가 아무것도 고르지 않으면
+    # 빈 리스트가 전달되는지"만 보려는 것이므로, 두 위젯을 명시적으로
+    # 빈 선택 상태로 만들어 그 계정의 기본값에 흔들리지 않게 한다.
+    app.session_state["interests_pick"] = []
+    app.session_state["fields_pick"] = []
+    app = app.run(timeout=10)
 
     app.chat_input[0].set_value("질문").run(timeout=10)
 

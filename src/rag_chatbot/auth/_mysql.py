@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_changed_at VARCHAR(32)  NULL,
     failed_login_count  INT          NOT NULL DEFAULT 0,
     locked_until        VARCHAR(32)  NULL,
+    avatar_data         MEDIUMBLOB   NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uq_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -252,6 +253,7 @@ class MySQLBackend:
         display_name_enc: object = _UNSET,
         region: object = _UNSET,
         interests_enc: object = _UNSET,
+        avatar_data: object = _UNSET,
     ) -> None:
         sets: list[str] = []
         params: list[object] = []
@@ -259,6 +261,7 @@ class MySQLBackend:
             ("display_name_enc", display_name_enc),
             ("region", region),
             ("interests_enc", interests_enc),
+            ("avatar_data", avatar_data),
         ):
             if value is not _UNSET:
                 sets.append(f"{column} = %s")

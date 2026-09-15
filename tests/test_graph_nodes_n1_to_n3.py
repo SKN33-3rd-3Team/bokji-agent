@@ -314,6 +314,33 @@ class LlmGatewayFollowupQuestionTests(unittest.TestCase):
         self.assertNotIn("법령 참고 링크", without_refs)
         self.assertIn("법령 참고 링크", with_refs)
 
+    def test_exclude_from_list_drops_slot_but_keeps_skip_notice(self) -> None:
+        # region_conflict 재확인처럼, 다른 곳에서 이미 설명된 슬롯은 번호
+        # 목록에서만 빼고 '모름 안내'는 그대로 유지한다.
+        question = llm_gateway.generate_followup_question(
+            0, ["region", "gender"], exclude_from_list=["region"]
+        )
+        self.assertNotIn("거주 지역", question)
+        self.assertIn("성별", question)
+        self.assertIn("모르시거나 말씀하기 어려운", question)
+
+    def test_exclude_from_list_removes_entire_list_when_nothing_left(self) -> None:
+        # 부족한 슬롯이 지역 하나뿐이고 그마저 exclude되면, 빈 "아래 정보가
+        # 필요해요" 문장만 남기지 않고 번호 목록 전체를 생략한다.
+        question = llm_gateway.generate_followup_question(
+            0, ["region"], exclude_from_list=["region"]
+        )
+        self.assertEqual(question, "")
+
+    def test_exclude_from_list_still_appends_reference_notice(self) -> None:
+        # 번호 목록이 통째로 생략돼도, 참고 법령 안내는 슬롯과 무관한
+        # 공통 안내라 계속 붙는다.
+        question = llm_gateway.generate_followup_question(
+            2, ["region"], exclude_from_list=["region"]
+        )
+        self.assertNotIn("아래 정보가 필요해요", question)
+        self.assertIn("법령 참고 링크", question)
+
 
 class RetrievalGatewayTests(unittest.TestCase):
     def test_returns_empty_list_before_vector_db_is_wired(self) -> None:
@@ -721,6 +748,41 @@ class RequestMissingSlotNodeTests(unittest.TestCase):
         state = {"missing_slots": ["region"], "general_law_references": [object()]}
         result = request_missing_slot_input(state)
         self.assertIn("법령 참고 링크", result["followup_question"])
+
+    def test_region_conflict_only_skips_duplicate_numbered_list(self) -> None:
+        # 지역 충돌 재확인은 충돌 문장과, 채팅 값이 미리 선택된 폼 위젯으로
+        # 이미 설명되므로("이 정보로 계속" 폼) 번호 목록에 지역을 또 넣지
+        # 않는다(2026-09-15, 사용자 피드백 - "밑에 폼에 똑같은 내용 반복"
+        # 지적 반영). 부족한 슬롯이 지역 하나뿐이면 번호 목록 전체가 생략돼
+        # 충돌 문장만 남는다.
+        state = {
+            "missing_slots": ["region"],
+            "region_conflict": {"profile": "경기도", "chat": "서울특별시"},
+        }
+        result = request_missing_slot_input(state)
+        question = result["followup_question"]
+        self.assertIn("경기도", question)
+        self.assertIn("서울특별시", question)
+        self.assertNotIn("1.", question)
+        self.assertNotIn("아래 정보가 필요해요", question)
+        # 그래도 되묻은 횟수는 정상적으로 올라가야 상한(MAX_SLOT_ASKS)이
+        # 작동한다.
+        self.assertEqual(result["slot_ask_counts"], {"region": 1})
+
+    def test_region_conflict_with_other_missing_slots_lists_only_the_rest(self) -> None:
+        state = {
+            "missing_slots": ["region", "gender"],
+            "region_conflict": {"profile": "경기도", "chat": "서울특별시"},
+        }
+        result = request_missing_slot_input(state)
+        question = result["followup_question"]
+        self.assertIn("경기도", question)
+        self.assertIn("서울특별시", question)
+        self.assertIn("성별", question)
+        # 지역 항목("1. 거주 지역 ...")은 번호 목록에서 빠지되, 충돌 문장
+        # 자체에 있는 지역명(위에서 이미 확인)까지 지우면 안 되므로 항목
+        # 문구로만 좁혀서 확인한다.
+        self.assertNotIn("1. 거주 지역", question)
 
     def test_asks_every_missing_slot_at_once_including_region(self) -> None:
         # 2026-08-31 변경: 예전에는 지역이 섞여 있으면 지역만 먼저 물었다.

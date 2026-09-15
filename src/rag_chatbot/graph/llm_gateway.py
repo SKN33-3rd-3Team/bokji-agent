@@ -957,7 +957,10 @@ _REFERENCE_NOTICE = "지역과 무관하게 적용되는 관련 법령 참고 �
 
 
 def generate_followup_question(
-    reference_count: int, missing_slots: Sequence[str] | None = None
+    reference_count: int,
+    missing_slots: Sequence[str] | None = None,
+    *,
+    exclude_from_list: Sequence[str] | None = None,
 ) -> str:
     """부족한 슬롯을 사용자에게 되묻는 문구를 만든다.
 
@@ -972,9 +975,15 @@ def generate_followup_question(
     ``MAX_SLOT_ASKS`` 상한에 먼저 닿아버리는 문제가 더 컸다. 이제는 부족한
     항목을 한 번에 번호 목록으로 묶어 묻는다.
 
-    문구 생성은 여전히 규칙 기반 템플릿이다(참고자료 결정사항 시트 9번은
-    "확인 필요"로 남아 있고, 모델 Fine-tuning은
-    ``docs/PROJECT_COMPLIANCE.md``가 정한 Baseline 이전 비범위 항목).
+    ``exclude_from_list``에 있는 슬롯은 ``missing_slots``에는 그대로 두되
+    번호 목록에서만 뺀다 - 그 슬롯이 이미 다른 문구(예: 지역 충돌 재확인
+    문장)나 위젯(예: 미리 선택된 선택지)으로 따로 설명되고 있어, 번호
+    목록에까지 다시 넣으면 같은 내용이 두 번 보인다(2026-09-15, 사용자
+    피드백 - "밑에 폼에 똑같은 내용 반복" 지적 반영). '모름 안내'/'참고
+    법령 안내'는 특정 슬롯이 아니라 되묻기 전체에 대한 공통 안내라 계속
+    붙인다. 목록에 남는 슬롯이 하나도 없으면(예: 부족한 슬롯이 지역
+    하나뿐이고 그 지역이 충돌로 제외된 경우) 인트로 문장과 번호 목록 자체를
+    통째로 생략한다 - 빈 "아래 정보가 필요해요" 문장만 남는 걸 막기 위함.
     """
 
     slots = list(missing_slots) if missing_slots else [REGION_SLOT]
@@ -982,12 +991,17 @@ def generate_followup_question(
     ordered = [slot for slot in HARD_GATE_SLOTS if slot in slots]
     ordered += [slot for slot in slots if slot not in HARD_GATE_SLOTS]
 
-    lines = [_ASK_INTRO]
-    lines += [
-        f"{number}. {_SLOT_ASK_ITEMS.get(slot, _UNKNOWN_SLOT_ITEM)}"
-        for number, slot in enumerate(ordered, start=1)
-    ]
-    lines.append(_SKIP_NOTICE)
+    exclude = set(exclude_from_list or ())
+    listed = [slot for slot in ordered if slot not in exclude]
+
+    lines: list[str] = []
+    if listed:
+        lines.append(_ASK_INTRO)
+        lines += [
+            f"{number}. {_SLOT_ASK_ITEMS.get(slot, _UNKNOWN_SLOT_ITEM)}"
+            for number, slot in enumerate(listed, start=1)
+        ]
+        lines.append(_SKIP_NOTICE)
     if reference_count:
         lines.append(_REFERENCE_NOTICE)
     return "\n".join(lines)

@@ -149,6 +149,7 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
     )
 
     region_raw = extracted.get("region_raw")
+    region_conflict: dict[str, str] | None = None
     if region_raw is not None:
         # 이번 턴에 지역처럼 보이는 텍스트가 있었다는 뜻이므로, 정규화에
         # 실패해도 예전 지역 값을 그대로 두지 않는다. "사용자가 지역을 새로
@@ -156,15 +157,45 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
         # 잘못된 지역으로 검색이 진행될 수 있어, 정규화 실패 시 unknown으로
         # 재설정해 N2가 다시 확인을 요청하도록 한다.
         region_scope, region_names = _normalize_region(region_raw)
-        merged["region_scope"] = region_scope.value
-        merged["region_names"] = region_names
+
+        prev_scope = existing_slots.get("region_scope")
+        prev_names = existing_slots.get("region_names") or []
+        prev_from_profile = existing_slots.get("region_source") == "profile"
+
+        if (
+            prev_from_profile
+            and prev_scope not in (None, RegionScope.UNKNOWN.value)
+            and prev_names
+            and region_scope is not RegionScope.UNKNOWN
+            and region_names
+            and region_names[0] != prev_names[0]
+        ):
+            # 회원 프로필에서 가져온 지역(아직 이번 대화에서 사용자가 직접
+            # 확인한 적 없음)과 이번에 새로 말한 지역이 다르다 - 둘 중
+            # 하나를 임의로 골라 조용히 덮어쓰지 않고, unknown으로 되돌려
+            # N2/N3가 다시 확인받게 한다(2026-09-15, 사용자 피드백 반영).
+            region_conflict = {"profile": prev_names[0], "chat": region_names[0]}
+            merged["region_scope"] = RegionScope.UNKNOWN.value
+            merged["region_names"] = []
+            merged["region_source"] = None
+        else:
+            merged["region_scope"] = region_scope.value
+            merged["region_names"] = region_names
+            # 정규화에 성공했으면 이번 대화에서 직접 확인된 값이다. 실패해서
+            # unknown으로 재설정된 경우엔 어차피 지역 값 자체가 없으니
+            # "프로필에서 왔다"는 표시도 함께 지운다.
+            merged["region_source"] = "chat" if region_scope is not RegionScope.UNKNOWN else None
     elif "region_scope" not in merged:
         # 이번 턴에 지역 언급이 전혀 없을 때만(재입력 포함) 예전 값을
         # 그대로 유지한다. 기존 값 자체가 없는 첫 턴에는 unknown으로 채운다.
         merged["region_scope"] = RegionScope.UNKNOWN.value
         merged["region_names"] = []
 
-    result: dict = {"slots": merged}
+    # 이전 턴의 충돌이 이번 턴엔 없으면 반드시 명시적으로 지운다 - 노드가
+    # 일부 키만 반환하면 나머지는 LangGraph state에 그대로 남으므로, 여기서
+    # 매번 region_conflict를 쓰지 않으면 이미 해결된 충돌이 엉뚱한 다음
+    # 턴까지 살아남을 수 있다.
+    result: dict = {"slots": merged, "region_conflict": region_conflict}
     # 첫 턴 질문을 한 번만 보존한다. user_input은 되묻기에 답할 때마다
     # 덮어써지는데, N4 검색에는 "무엇을 알고 싶은지"가 담긴 원래 질문이
     # 필요하다(되묻기 답변 "서울, 2000-03-26, 여성..."을 검색어로 쓰면

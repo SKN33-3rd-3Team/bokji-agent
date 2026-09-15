@@ -121,6 +121,7 @@ class AuthUser:
     region: str = ""
     interests: tuple[str, ...] = field(default_factory=tuple)
     marketing_opt_in: bool = False
+    avatar: bytes | None = None
 
 
 def _normalize_username(username: object) -> str:
@@ -234,6 +235,7 @@ def _safe_decrypt_name(token, uname: str) -> str:
 
 
 def _row_to_user(row, *, display_name: str) -> AuthUser:
+    avatar = row["avatar_data"]
     return AuthUser(
         id=int(row["id"]),
         username=row["username"],
@@ -242,6 +244,7 @@ def _row_to_user(row, *, display_name: str) -> AuthUser:
         region=row["region"] or "",
         interests=_decrypt_interests(row["interests_enc"]),
         marketing_opt_in=bool(row["marketing_opt_in"]),
+        avatar=bytes(avatar) if avatar else None,
     )
 
 
@@ -378,17 +381,25 @@ def get_profile(username: str, *, db_path=None) -> AuthUser:
     )
 
 
+_NOCHANGE = object()  # avatar 전용 "손대지 않음" - None 은 "사진 지우기"로 쓴다.
+
+
 def update_profile(
     username: str,
     *,
     display_name: str | None = None,
     region: str | None = None,
     interests=None,
+    avatar: bytes | None = _NOCHANGE,  # type: ignore[assignment]
     db_path=None,
 ) -> AuthUser:
     """전달한 필드만 수정하고 최신 :class:`AuthUser` 를 돌려준다.
 
-    ``None`` 인 인자는 "수정하지 않음"이다(빈 문자열/빈 리스트는 "지움").
+    ``display_name``/``region``/``interests`` 는 ``None`` 이 "수정하지 않음"이다
+    (빈 문자열/빈 리스트는 "지움"). ``avatar`` 만 예외다 - 여기선 ``None`` 이
+    "수정하지 않음"과 "사진 지우기"를 구분 못 하므로(둘 다 자연스러운 기본값
+    후보라 겹친다), 기본값을 별도 센티넬(``_NOCHANGE``)로 두고 ``None`` 은
+    명시적으로 "사진을 지운다"는 뜻으로 쓴다.
     """
 
     uname = _normalize_username(username)
@@ -407,6 +418,8 @@ def update_profile(
             changes["region"] = trimmed or None
         if interests is not None:
             changes["interests_enc"] = _encrypt_interests(interests)
+        if avatar is not _NOCHANGE:
+            changes["avatar_data"] = avatar
 
         backend.update_profile_fields(conn, int(row["id"]), **changes)
         fresh = backend.get_user_by_username(conn, uname)

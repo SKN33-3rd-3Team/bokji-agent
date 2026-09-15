@@ -34,7 +34,12 @@ def _html_values(app) -> list[str]:
     return [str(element.proto.body) for element in app.get("html")]
 
 
-def test_needs_input_renders_question_and_missing_slot_labels() -> None:
+def test_needs_input_renders_question_and_llm_status() -> None:
+    # missing_slots별 라벨(예: "거주 지역", "생년월일")은 더 이상 여기서
+    # 캡션으로 그리지 않는다 - 위젯 폼(streamlit_ui/pages/chat.py의
+    # _render_slot_form)이 담당하는 영역으로 옮겨갔다(2026-09-15, 전체
+    # 테스트 스위트 정리 중 발견 - render_result는 question 문자열과
+    # llm_status만 그린다).
     app = _render(
         {
             "status": "needs_input",
@@ -46,8 +51,6 @@ def test_needs_input_renders_question_and_missing_slot_labels() -> None:
 
     assert "거주 지역과 생년월일을 알려주세요." in _values(app.markdown)
     captions = " ".join(_values(app.caption))
-    assert "거주 지역" in captions
-    assert "생년월일" in captions
     assert "규칙 기반" in captions
 
 
@@ -99,7 +102,11 @@ def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
     # final_answer 문장은 카드가 있을 때는 중복이라 더 보여주지 않는다.
     assert "확인된 범위의 안내입니다." not in markdown
     assert "청년 주거 지원" in grid_html
-    assert "연령만 확인" in grid_html  # 카드 소개문 = verification_note
+    # 카드 소개문은 실제 정책 설명(detail.purpose/support_details)을
+    # verification_note보다 우선한다(rendering.py `_card_intro` 참고,
+    # 2026-09-15 이전 확정 - "이 정책이 뭔지"가 검증 상태 문장에 가려지지
+    # 않게 하려는 의도). 이 fixture는 detail.purpose를 주므로 그게 보인다.
+    assert "주거비 부담 완화" in grid_html
     assert "월 최대 200,000원" in grid_html
     assert "AI 분석 적용" in captions
 

@@ -6,7 +6,8 @@ from streamlit_ui import pipeline
 def test_first_prompt_uses_official_ask(monkeypatch) -> None:
     calls: list[tuple] = []
 
-    def fake_ask(user_input: str, session_id: str, *, top_k: int, extra_interests=None):
+    def fake_ask(user_input: str, session_id: str, *, top_k: int, extra_interests=None,
+                 known_region=None):
         calls.append(("ask", user_input, session_id, top_k, extra_interests))
         return {"status": "needs_input", "question": "추가 정보"}
 
@@ -27,7 +28,8 @@ def test_first_prompt_forwards_sidebar_interests(monkeypatch) -> None:
 
     calls: list[tuple] = []
 
-    def fake_ask(user_input: str, session_id: str, *, top_k: int, extra_interests=None):
+    def fake_ask(user_input: str, session_id: str, *, top_k: int, extra_interests=None,
+                 known_region=None):
         calls.append(("ask", extra_interests))
         return {"status": "answered"}
 

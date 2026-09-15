@@ -44,7 +44,26 @@ def request_missing_slot_input(state: GraphState) -> dict:
     asked = list(missing_slots)
 
     general_law_references = state.get("general_law_references", [])
-    question = generate_followup_question(len(general_law_references), asked)
+    region_conflict = state.get("region_conflict")
+    # 충돌 재확인일 때는 지역을 번호 목록에서 뺀다 - 아래 충돌 문장과, 채팅
+    # 값이 미리 선택된 폼 위젯으로 이미 설명되므로 번호 목록에 또 넣으면
+    # 중복이다(request_missing_slots.py 문서 및 llm_gateway.generate_followup_
+    # question 문서 참고).
+    exclude_from_list = {"region"} if region_conflict else None
+    question = generate_followup_question(
+        len(general_law_references), asked, exclude_from_list=exclude_from_list
+    )
+
+    # 회원 프로필 지역과 이번 대화에서 말한 지역이 달라 되묻는 경우엔, 그
+    # 사실을 명시적으로 알려준다(2026-09-15 추가) - 그냥 "거주 지역이
+    # 필요해요"만 보이면 "회원가입 때 이미 넣었는데 왜 또 묻지?"로 헷갈린다.
+    if region_conflict and "region" in missing_slots:
+        conflict_sentence = (
+            f"회원 정보에는 거주 지역이 '{region_conflict['profile']}'로 "
+            f"돼 있는데, 방금은 '{region_conflict['chat']}'이라고 하셨어요. "
+            "어느 지역 기준으로 알아볼지 다시 알려주세요."
+        )
+        question = f"{conflict_sentence}\n\n{question}" if question else conflict_sentence
 
     # 원본 dict을 in-place로 바꾸면 checkpointer가 든 과거 스냅샷까지
     # 오염된다(N1의 리스트 복사와 같은 이유).

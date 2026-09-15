@@ -49,6 +49,13 @@ class SlotState(TypedDict, total=False):
     pregnancy_status: str | None
     region_scope: str | None
     region_names: list[str]
+    # region이 어디서 왔는지 - "profile"(회원 프로필에서 미리 채워졌고 아직
+    # 이번 대화에서 사용자가 직접 확인한 적 없음) | "chat"(이번 대화에서
+    # 사용자가 직접 말했거나 확인함) | None(아예 없음). N1(slot_parser)이
+    # "profile" 상태에서 새로 다른 지역이 언급되면 조용히 덮어쓰지 않고
+    # GraphState.region_conflict로 되물어야 한다는 신호를 준다
+    # (2026-09-15 추가, slot_parser.py 지역 병합 로직 참고).
+    region_source: str | None
     interests: list[str]
     household_size: int | None
     children_count: int | None
@@ -194,6 +201,11 @@ class GraphState(TypedDict, total=False):
     # 그래프 시작 시점에 한 번 정해서 모든 노드가 이 값을 공유한다.
     as_of: date
     slots: SlotState
+    # 회원 프로필(가입 시 등록한 거주 지역)과 이번 대화에서 새로 말한 지역이
+    # 달라서 되물어야 할 때만 채워진다({"profile": "경기도", "chat":
+    # "서울특별시"}). 매 턴 N1이 명시적으로 갱신/해제한다 - 이전 턴의 값이
+    # 남아 엉뚱한 턴에 재사용되지 않게 항상 이번 턴 결과로 덮어쓴다.
+    region_conflict: dict[str, str] | None
     missing_slots: list[str]
     # N2가 되묻기 상한(slot_schema.MAX_SLOT_ASKS)을 판단하는 데 쓰는 슬롯별
     # 재질문 횟수. N3(request_missing_slots)가 슬롯을 물을 때마다 올린다.

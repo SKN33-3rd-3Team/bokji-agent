@@ -50,8 +50,32 @@ def new_conversation(
     # 사이드바 "파악한 정보"에 쓰는 값(서비스 응답의 output_json["profile"]).
     # 소득·장애 같은 값이 들어 있으므로 새 상담에서는 반드시 비운다.
     state["profile"] = []
+    # 정책 상세 문의 채팅방도 해제한다(새 상담은 특정 정책에 묶이지 않는다).
+    state.pop("detail_chat_policy", None)
+    state.pop("detail_chat_history", None)
     if clear_messages:
         state["messages"] = []
+
+
+def get_last_answered_result(messages: list) -> dict | None:
+    """``messages``에서 가장 최근의 완료된(``status="answered"``) 상담 응답을 찾는다.
+
+    후속질문 경량 응답이 재사용할 컨텍스트다. 답변이 끝나면
+    ``new_conversation``이 ``conversation_id``·``slots``·``profile``을 비우지만
+    ``messages``는 그대로 남으므로(``clear_messages=False``), 여기서 마지막
+    응답(``final_answer``/``final_citations``/``policies`` 포함)을 되찾을 수 있다.
+
+    ``needs_input``(되묻는 중)이나 ``error`` 응답은 건너뛴다 - 완결된 답이 아니다.
+    반환값은 원본을 건드리지 않도록 얕은 복사본이다.
+    """
+
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        result = message.get("result")
+        if isinstance(result, dict) and result.get("status") == "answered":
+            return dict(result)
+    return None
 
 
 def init_session() -> None:
@@ -65,6 +89,47 @@ def init_session() -> None:
     # 로그인 사용자: None 또는 auth_user_dict() 결과.
     # display_name·interests 는 로그인 시 복호화된 값이다(원문 저장 아님).
     st.session_state.setdefault("auth_user", None)
+    _maybe_dev_autologin()
+
+
+def _maybe_dev_autologin() -> None:
+    """개발 편의: ``.env``에 ``DEV_AUTOLOGIN_EMAIL``이 있으면 그 계정으로 자동
+    로그인한다. 앱을 재시작할 때마다 로그인·상담을 다시 하지 않아도 된다.
+
+    운영에서는 이 변수를 비워 두면 아무 일도 안 한다. 명시적으로 로그아웃하면
+    같은 세션에서는 다시 자동 로그인하지 않는다(``_dev_autologin_done`` 플래그).
+
+    **``AUTH_DB_URL``이 설정돼 있으면(원격 MySQL/MariaDB - 운영 배포의 표시,
+    docs/AUTH_REMOTE_DB.md 참고) 이 값이 남아있어도 자동 로그인을 절대 하지
+    않는다(2026-09-15, PR 리뷰 피드백 반영 - "배포 때 이 값 지우는 걸
+    깜빡하면 인증 우회가 된다"는 blocker성 지적).** 배포 체크리스트 문서
+    하나로 "지우는 걸 기억하기"에만 기대지 않고, 코드 스스로 "로컬 SQLite로
+    돌 때만" 이라는 조건을 강제한다 - 실제 배포는 거의 항상 원격 DB를 쓰므로,
+    사람이 환경변수 정리를 깜빡해도 이 조건 하나가 자동으로 막아준다. 같은
+    사무실 Wi-Fi로 로컬 데모를 공유하는 것처럼 "로컬 SQLite + 네트워크로
+    접속 가능"한 정상적인 개발 시나리오는 그대로 동작한다.
+    """
+
+    import os
+
+    email = (os.environ.get("DEV_AUTOLOGIN_EMAIL") or "").strip()
+    if not email or st.session_state.get("auth_user") is not None:
+        return
+    if st.session_state.get("_dev_autologin_done"):
+        return
+    if (os.environ.get("AUTH_DB_URL") or "").strip():
+        # 원격 DB를 쓴다는 건 배포 환경으로 본다 - 여기서 즉시 그만두되,
+        # 다음 rerun마다 이 검사를 반복하지 않도록 완료 플래그는 남긴다.
+        st.session_state["_dev_autologin_done"] = True
+        return
+    try:
+        from rag_chatbot.auth import get_profile
+
+        st.session_state["auth_user"] = auth_user_dict(get_profile(email))
+        st.session_state["_dev_autologin_done"] = True
+    except Exception:
+        # 계정이 없거나 auth DB가 없으면 조용히 넘어간다(그냥 수동 로그인).
+        st.session_state["_dev_autologin_done"] = True
 
 
 def auth_user_dict(user) -> dict:
@@ -78,6 +143,7 @@ def auth_user_dict(user) -> dict:
         "region": user.region,
         "interests": list(user.interests),
         "marketing_opt_in": user.marketing_opt_in,
+        "avatar": user.avatar,
     }
 
 

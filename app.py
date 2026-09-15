@@ -33,6 +33,7 @@ def main() -> None:
         page_title="복지 에이전트",
         page_icon="💬",
         layout="centered",
+        initial_sidebar_state="expanded",
     )
     init_session()
     localize_menu()

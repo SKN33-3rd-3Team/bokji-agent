@@ -164,7 +164,7 @@ import os
 
 from dotenv import load_dotenv
 
-from rag_design.contracts import SourceType
+from rag_design.contracts import RegionScope, SourceType
 from rag_design.embeddings import (
     HashEmbeddingProvider,
     SentenceTransformerKoreanProvider,
@@ -179,7 +179,11 @@ from rag_design.vector_store import (
 from .graph import build_graph, resume_graph, run_graph
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
-from .llm import HuggingFaceInferenceClient, RecordingLLMClient
+from .llm import (
+    HuggingFaceInferenceClient,
+    RecordingLLMClient,
+    RunPodServerlessClient,
+)
 from .timing import TIMER, node_title
 
 # 레포 루트의 .env에서 HF_TOKEN/LLM_MODEL_NAME 등을 읽는다(이미 셸에 직접
@@ -269,10 +273,25 @@ def build_llm_client() -> RecordingLLMClient | None:
     기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
     성질은 그대로 유지한다.
 
-    모델 이름은 ``LLM_MODEL_NAME`` 환경변수를 먼저 보고, 없으면 예전 이름
-    ``LLM_HF_MODEL``(``scripts/interactive_console_chat.py``가 쓰던 이름 -
-    하위 호환으로 계속 지원), 그것도 없으면 ``_DEFAULT_HF_MODEL``을 쓴다.
+    백엔드 선택(``LLM_BACKEND`` 환경변수):
+    - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
+      ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
+    - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
+      모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
     """
+
+    backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
+
+    if backend == "runpod":
+        if not (os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY")):
+            return None
+        return RecordingLLMClient(
+            RunPodServerlessClient(
+                timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+            )
+        )
+    if backend not in {"hf", "huggingface"}:
+        raise ValueError("LLM_BACKEND must be hf, huggingface, or runpod")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
@@ -366,6 +385,14 @@ def get_store() -> ChromaVectorStore:
     return _runtime_cache["store"]
 
 
+def get_llm_client() -> Any:
+    """정책 상세 문의 경량 응답(``light_followup``) 등이 재사용하는 공유 LLM
+    클라이언트. ``get_graph()``와 같은 인스턴스이며 HF_TOKEN이 없으면 ``None``."""
+
+    get_graph()
+    return _runtime_cache.get("llm_client")
+
+
 class PolicyDetail(TypedDict, total=False):
     purpose: str | None
     support_target: str | None
@@ -434,6 +461,13 @@ class ChatResponse(TypedDict, total=False):
     session_id: str
     question: str
     missing_slots: list[str]
+    # 회원 프로필 지역과 이번 대화에서 말한 지역이 달라 되묻는 경우에만
+    # 채워진다({"profile": "...", "chat": "..."}). 프론트엔드는 이 값이
+    # 있으면 "이미 회원 정보로 채웠으니 다시 안 물어봐도 됨" 자동완성을
+    # 끄고 위젯을 그대로 보여줘야 한다(streamlit_ui/pages/chat.py
+    # _render_slot_form 참고) - 안 그러면 프로필 값으로 조용히 재제출돼
+    # 사용자가 충돌 사실을 확인할 기회 없이 자동으로 "해결"돼버린다.
+    region_conflict: dict[str, str] | None
     answer_status: str | None
     final_answer: str | None
     final_citations: list[dict]
@@ -1051,6 +1085,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
             "question": question,
             "session_id": session_id,
             "missing_slots": missing_slots,
+            "region_conflict": result.get("region_conflict"),
             "output_json": {
                 "status": "needs_input",
                 "session_id": session_id,
@@ -1124,6 +1159,7 @@ def ask(
     *,
     top_k: int = 5,
     extra_interests: list[str] | None = None,
+    known_region: str | None = None,
 ) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
     질문을 입력했을 때 호출한다.
@@ -1138,9 +1174,18 @@ def ask(
     체크박스로 보완하는 용도이고, 자격 판정에는 쓰이지 않는다 - interests는
     소프트 슬롯이라 하드 게이트/필터에 관여하지 않는다.
 
-    ``answer_followup()``에는 이 인자가 없다. 재개 시점에는 이미 체크포인터에
-    슬롯이 있고, 중간에 초기 슬롯을 갈아끼우면 이전 턴의 판정 근거와
-    어긋나기 때문이다 - 화면에서 선택을 바꿨다면 새 상담으로 물어야 한다.
+    ``known_region``은 회원 가입 때 등록한 거주 지역(이미 검증된 시/도
+    명칭)이다. 슬롯 초기값으로 미리 채워 넣어서, 채팅에서 지역을 언급하지
+    않으면 다시 묻지 않는다. ``region_source: "profile"`` 로 표시해 둬서,
+    이번 대화에서 사용자가 **다른** 지역을 직접 말하면 N1(slot_parser)이
+    조용히 덮어쓰지 않고 되묻는다(``region_conflict``, slot_parser.py 참고) -
+    이미 시/도 단위로 검증된 값이라 ``_normalize_region``의 자유 텍스트
+    정규화를 다시 거칠 필요는 없다.
+
+    ``answer_followup()``에는 이 두 인자가 없다. 재개 시점에는 이미
+    체크포인터에 슬롯이 있고, 중간에 초기 슬롯을 갈아끼우면 이전 턴의 판정
+    근거와 어긋나기 때문이다 - 화면에서 선택을 바꿨다면 새 상담으로 물어야
+    한다.
     """
 
     TIMER.reset()
@@ -1150,12 +1195,20 @@ def ask(
         store = get_store()
         with _llm_request_scope():
             interests = [str(item) for item in (extra_interests or []) if item]
+            initial_slots: dict = {}
+            if interests:
+                initial_slots["interests"] = interests
+            region = (known_region or "").strip()
+            if region:
+                initial_slots["region_scope"] = RegionScope.REGIONAL.value
+                initial_slots["region_names"] = [region]
+                initial_slots["region_source"] = "profile"
             result = run_graph(
                 graph,
                 user_input=user_input,
                 session_id=session_id,
                 top_k=top_k,
-                slots={"interests": interests} if interests else None,
+                slots=initial_slots or None,
             )
             # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
             request_timer.close()
@@ -1187,6 +1240,7 @@ __all__ = [
     "build_llm_client",
     "get_graph",
     "get_store",
+    "get_llm_client",
     "ChatResponse",
     "PolicyView",
     "PolicyDetail",
