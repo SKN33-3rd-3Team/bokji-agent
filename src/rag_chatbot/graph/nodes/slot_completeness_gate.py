@@ -86,6 +86,19 @@ def check_slot_completeness(state: GraphState) -> dict:
             continue
         missing.append(field)
 
+    # 소프트 슬롯(household_types 등)은 원래 이 게이트가 검사하지 않지만,
+    # N1(slot_parser)이 프로필-채팅 충돌로 되물어야 한다고 표시해 둔 슬롯은
+    # 하드/소프트 구분 없이 "확인이 필요하다"는 사실이 동일하므로 여기서
+    # missing_slots에 얹는다(2026-09-15, 지역 충돌 재확인을 가구유형까지
+    # 확장하면서 추가 - household_types는 하드 게이트 슬롯이 아니라서
+    # 위 루프에 안 걸리는데, 그 표시가 없으면 request_missing_slot_input이
+    # 조립하는 재확인 문구만 있고 정작 폼 위젯이 안 뜬다). 하드 게이트
+    # 슬롯이 충돌한 경우는 이미 위에서 값을 비웠으므로(slot_parser.py)
+    # 자연스럽게 missing에 들어가 있어 중복 추가되지 않는다.
+    for field in state.get("slot_conflicts") or {}:
+        if field not in missing:
+            missing.append(field)
+
     result: dict = {"missing_slots": missing}
     if updates:
         result["slots"] = {**slots, **updates}

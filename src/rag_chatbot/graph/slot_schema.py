@@ -197,6 +197,54 @@ INCOME_BRACKET_ORDER: dict[str, int] = {
     IncomeBracket.OVER_150.value: 5,
 }
 
+# 슬롯 코드값 -> 한글 라벨. service.py의 "파악한 정보" 응답과
+# request_missing_slots.py의 지역 충돌류 재확인 문구가 같은 어휘를 쓰게
+# 한 곳에 모은다(2026-09-15, 지역 충돌 재확인을 다른 프로필 슬롯까지
+# 확장하면서 신설 - 전에는 service.py에만 로컬로 있었다).
+GENDER_KO: dict[str, str] = {"male": "남성", "female": "여성"}
+# "~"가 아니라 "-"를 쓴다(streamlit_ui.session.md_text와 같은 이유 - "~"는
+# GFM 취소선(~~) 문법과 겹쳐서 채팅 말풍선에 그대로 markdown으로 나가면
+# 깨질 수 있다). streamlit_ui/pages/chat.py의 _INCOME_CHOICES와 반드시
+# 같은 문자열을 유지한다 - 지역 충돌 재확인 폼이 이 라벨로 위젯 기본값을
+# 찾는다(문자열이 다르면 미리 선택되지 않는다).
+INCOME_BRACKET_KO: dict[str, str] = {
+    "under_30": "기초생활수급 수준(중위소득 30% 이하)",
+    "pct_30_50": "차상위 수준(중위소득 30-50%)",
+    "pct_50_75": "중위소득 50-75%",
+    "pct_75_100": "중위소득 75-100%",
+    "pct_100_150": "중위소득 100-150%",
+    "over_150": "중위소득 150% 초과",
+}
+DISABILITY_STATUS_KO: dict[str, str] = {
+    "registered": "장애 등록", "not_registered": "장애 없음",
+}
+EMPLOYMENT_STATUS_KO: dict[str, str] = {
+    "employed": "재직",
+    "job_seeking": "구직",
+    "self_employed": "자영업",
+    "student": "학생",
+    "not_working": "무직",
+}
+MARITAL_STATUS_KO: dict[str, str] = {
+    "single": "미혼", "married": "기혼", "divorced": "이혼", "bereaved": "사별",
+}
+PREGNANCY_STATUS_KO: dict[str, str] = {
+    "pregnant": "임신 중", "postpartum": "산후", "none": "해당 없음",
+}
+HOUSEHOLD_TYPE_KO: dict[str, str] = {
+    "single_parent": "한부모", "multi_child": "다자녀", "multicultural": "다문화",
+    "grandparent": "조손", "single_person": "1인 가구",
+    "north_korean_defector": "북한이탈주민", "care_leaver": "자립준비청년",
+    "facility_leaver": "시설퇴소", "newlywed": "신혼부부",
+}
+# veteran_status는 하드 게이트 슬롯이 아니라 known_veteran_status로 채워진
+# interests 텍스트("국가유공자/보훈")로만 검색에 반영되므로(service.ask()
+# docstring 참고), 이 슬롯 자체는 대화 중 채워지지 않는다. 그래도 프로필
+# 표시용 라벨은 남겨둔다 - 다른 경로로 slots에 실릴 가능성까지 막지 않기
+# 위함(예: 향후 회원 정보를 그대로 slots에 얹는 경로가 생길 경우).
+VETERAN_STATUS_KO: dict[str, str] = {"registered": "보훈대상자", "not_registered": "해당 없음"}
+
+
 SLOT_ENUMS: dict[str, type[Enum]] = {
     "age_subject": AgeSubject,
     "gender": Gender,

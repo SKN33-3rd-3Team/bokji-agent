@@ -1084,8 +1084,8 @@ def test_ask_seeds_known_region_as_initial_slot():
         "region_names": ["서울특별시"],
         # 아직 이번 대화에서 사용자가 직접 확인한 적 없는 값이라는 표시 -
         # slot_parser.parse_slots가 이 표시를 보고 사용자가 채팅에서 다른
-        # 지역을 말하면 region_conflict로 되묻는다(2026-09-15 추가).
-        "region_source": "profile",
+        # 지역을 말하면 slot_conflicts로 되묻는다(2026-09-15 추가).
+        "profile_sourced": ["region"],
     }
 
 
@@ -1097,7 +1097,7 @@ def test_ask_combines_known_region_with_selected_interests():
         "interests": ["청년"],
         "region_scope": "regional",
         "region_names": ["부산광역시"],
-        "region_source": "profile",
+        "profile_sourced": ["region"],
     }
 
 
@@ -1122,7 +1122,7 @@ def test_ask_skips_empty_known_region():
 
 def test_ask_seeds_known_gender_as_initial_slot():
     captured = _ask_capturing_run_graph("질문", "s1", top_k=5, known_gender="female")
-    assert captured["slots"] == {"gender": "female"}
+    assert captured["slots"] == {"gender": "female", "profile_sourced": ["gender"]}
 
 
 def test_ask_skips_known_gender_outside_the_contract():
@@ -1144,7 +1144,9 @@ def test_ask_seeds_known_birth_date_as_initial_slot():
     captured = _ask_capturing_run_graph(
         "질문", "s1", top_k=5, known_birth_date="1998-05-12",
     )
-    assert captured["slots"] == {"birth_date": "1998-05-12"}
+    assert captured["slots"] == {
+        "birth_date": "1998-05-12", "profile_sourced": ["birth_date"],
+    }
 
 
 def test_ask_skips_known_birth_date_that_does_not_parse():
@@ -1172,9 +1174,9 @@ def test_ask_combines_known_gender_and_birth_date_with_region_and_interests():
         "interests": ["청년"],
         "region_scope": "regional",
         "region_names": ["부산광역시"],
-        "region_source": "profile",
         "gender": "male",
         "birth_date": "1990-01-01",
+        "profile_sourced": ["region", "gender", "birth_date"],
     }
 
 
@@ -1186,7 +1188,9 @@ def test_ask_seeds_known_disability_status_as_initial_slot():
     captured = _ask_capturing_run_graph(
         "질문", "s1", top_k=5, known_disability_status="registered",
     )
-    assert captured["slots"] == {"disability_status": "registered"}
+    assert captured["slots"] == {
+        "disability_status": "registered", "profile_sourced": ["disability_status"],
+    }
 
 
 def test_ask_skips_known_disability_status_outside_the_contract():
@@ -1199,7 +1203,9 @@ def test_ask_seeds_known_income_bracket_as_initial_slot():
     captured = _ask_capturing_run_graph(
         "질문", "s1", top_k=5, known_income_bracket="under_30",
     )
-    assert captured["slots"] == {"income_bracket": "under_30"}
+    assert captured["slots"] == {
+        "income_bracket": "under_30", "profile_sourced": ["income_bracket"],
+    }
 
 
 def test_ask_skips_known_income_bracket_outside_the_contract():
@@ -1215,6 +1221,7 @@ def test_ask_seeds_known_household_types_as_initial_slot():
     )
     assert captured["slots"] == {
         "household_types": ["single_parent", "newlywed"],
+        "profile_sourced": ["household_types"],
     }
 
 
@@ -1226,7 +1233,10 @@ def test_ask_drops_only_the_invalid_known_household_types():
         "질문", "s1", top_k=5,
         known_household_types=["single_parent", "alien"],
     )
-    assert captured["slots"] == {"household_types": ["single_parent"]}
+    assert captured["slots"] == {
+        "household_types": ["single_parent"],
+        "profile_sourced": ["household_types"],
+    }
 
 
 def test_ask_skips_empty_known_household_types():

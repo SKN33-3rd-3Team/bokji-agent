@@ -760,7 +760,7 @@ class RequestMissingSlotNodeTests(unittest.TestCase):
         # 충돌 문장만 남는다.
         state = {
             "missing_slots": ["region"],
-            "region_conflict": {"profile": "경기도", "chat": "서울특별시"},
+            "slot_conflicts": {"region": {"profile": "경기도", "chat": "서울특별시"}},
         }
         result = request_missing_slot_input(state)
         question = result["followup_question"]
@@ -775,7 +775,7 @@ class RequestMissingSlotNodeTests(unittest.TestCase):
     def test_region_conflict_with_other_missing_slots_lists_only_the_rest(self) -> None:
         state = {
             "missing_slots": ["region", "gender"],
-            "region_conflict": {"profile": "경기도", "chat": "서울특별시"},
+            "slot_conflicts": {"region": {"profile": "경기도", "chat": "서울특별시"}},
         }
         result = request_missing_slot_input(state)
         question = result["followup_question"]
@@ -980,6 +980,185 @@ class ProfileSlotExtractionTests(unittest.TestCase):
         self.assertEqual(
             second["slots"]["household_types"], ["single_parent", "multicultural"]
         )
+
+    # ── 프로필-채팅 충돌 감지(slot_conflicts) - 2026-09-15, 지역 전용이던
+    # 규칙을 gender/birth_date/income_bracket/disability_status/
+    # household_types까지 확장. extract_slots를 패치해 규칙 기반 추출기의
+    # 실제 정규식 동작과 무관하게 병합/충돌 판정 로직만 검증한다(위
+    # test_out_of_contract_enum_values_are_not_stored와 같은 방식).
+
+    def test_gender_conflict_resets_value_and_is_removed_from_profile_sourced(
+        self,
+    ) -> None:
+        fake = {"gender": "female", "region_raw": None, "interests": []}
+        state = {
+            "user_input": "사실 여성이에요",
+            "slots": {"gender": "male", "profile_sourced": ["gender"]},
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["gender"])
+        self.assertEqual(
+            result["slot_conflicts"], {"gender": {"profile": "남성", "chat": "여성"}}
+        )
+        self.assertNotIn("gender", result["slots"]["profile_sourced"])
+
+    def test_gender_matching_profile_value_is_silently_confirmed(self) -> None:
+        # 채팅에서 말한 값이 프로필과 같으면 충돌이 아니라 그냥 확인된
+        # 것이다 - 값은 그대로 두고 profile_sourced 표시만 지운다.
+        fake = {"gender": "male", "region_raw": None, "interests": []}
+        state = {
+            "user_input": "저는 남성이에요",
+            "slots": {"gender": "male", "profile_sourced": ["gender"]},
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(result["slots"]["gender"], "male")
+        self.assertIsNone(result["slot_conflicts"])
+        self.assertNotIn("gender", result["slots"]["profile_sourced"])
+
+    def test_disability_status_conflict_resets_value_and_flags_slot_conflicts(
+        self,
+    ) -> None:
+        fake = {
+            "disability_status": "not_registered", "region_raw": None, "interests": [],
+        }
+        state = {
+            "user_input": "장애는 없어요",
+            "slots": {
+                "disability_status": "registered",
+                "profile_sourced": ["disability_status"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["disability_status"])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"disability_status": {"profile": "장애 등록", "chat": "장애 없음"}},
+        )
+
+    def test_income_bracket_conflict_resets_value_and_flags_slot_conflicts(
+        self,
+    ) -> None:
+        fake = {
+            "income_bracket": "pct_30_50", "region_raw": None, "interests": [],
+        }
+        state = {
+            "user_input": "차상위 수준이에요",
+            "slots": {
+                "income_bracket": "under_30",
+                "profile_sourced": ["income_bracket"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["income_bracket"])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {
+                "income_bracket": {
+                    "profile": "기초생활수급 수준(중위소득 30% 이하)",
+                    "chat": "차상위 수준(중위소득 30-50%)",
+                }
+            },
+        )
+
+    def test_birth_date_conflict_resets_value_and_flags_slot_conflicts(self) -> None:
+        fake = {"birth_date": "1985-05-05", "region_raw": None, "interests": []}
+        state = {
+            "user_input": "1985년 5월 5일생이에요",
+            "slots": {
+                "birth_date": "1990-01-01", "profile_sourced": ["birth_date"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["birth_date"])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"birth_date": {"profile": "1990-01-01", "chat": "1985-05-05"}},
+        )
+        self.assertNotIn("birth_date", result["slots"]["profile_sourced"])
+
+    def test_region_conflict_via_profile_sourced_resets_to_unknown(self) -> None:
+        fake = {"region_raw": "서울", "interests": []}
+        state = {
+            "user_input": "서울로 이사했어요",
+            "slots": {
+                "region_scope": "regional",
+                "region_names": ["경기도"],
+                "profile_sourced": ["region"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(result["slots"]["region_scope"], "unknown")
+        self.assertEqual(result["slots"]["region_names"], [])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"region": {"profile": "경기도", "chat": "서울특별시"}},
+        )
+        self.assertNotIn("region", result["slots"]["profile_sourced"])
+
+    def test_household_types_conflict_when_disjoint_from_profile(self) -> None:
+        fake = {
+            "household_types": ["multi_child"], "region_raw": None, "interests": [],
+        }
+        state = {
+            "user_input": "저희는 다자녀 가구예요",
+            "slots": {
+                "household_types": ["single_parent"],
+                "profile_sourced": ["household_types"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(result["slots"]["household_types"], [])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"household_types": {"profile": "한부모", "chat": "다자녀"}},
+        )
+        self.assertNotIn("household_types", result["slots"]["profile_sourced"])
+
+    def test_household_types_overlap_is_not_a_conflict_and_accumulates(self) -> None:
+        # 일부라도 겹치면("한부모인데 다자녀이기도 해요") 충돌이 아니라
+        # 기존처럼 합집합으로 누적한다.
+        fake = {
+            "household_types": ["single_parent", "multi_child"],
+            "region_raw": None,
+            "interests": [],
+        }
+        state = {
+            "user_input": "한부모인데 다자녀이기도 해요",
+            "slots": {
+                "household_types": ["single_parent"],
+                "profile_sourced": ["household_types"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(
+            result["slots"]["household_types"], ["single_parent", "multi_child"]
+        )
+        self.assertIsNone(result["slot_conflicts"])
+        self.assertNotIn("household_types", result["slots"]["profile_sourced"])
 
 
 class ProfileHardGateTests(unittest.TestCase):

@@ -32,13 +32,38 @@ from rag_design.contracts import NATIONAL_REGION_NAME, RegionScope, validate_reg
 from ...llm import LLMClient
 from ..llm_gateway import extract_slots
 from ..slot_schema import (
+    DISABILITY_STATUS_KO,
+    GENDER_KO,
+    HOUSEHOLD_TYPE_KO,
+    INCOME_BRACKET_KO,
     SLOT_ENUMS,
+    UNKNOWN,
     AgeSubject,
     calculate_ages,
     is_valid_slot_value,
     parse_birth_date,
 )
 from ..state import GraphState, SlotState
+
+# 회원 프로필에서 왔고 아직 이번 대화에서 확인 안 된 값이 채팅에서 다른
+# 값으로 바뀌면, 조용히 덮어쓰지 않고 재확인받는 대상 필드 -> 코드값을
+# 사람이 읽는 라벨로 바꿀 표(``slot_conflicts``/``request_missing_slots.py``
+# 재확인 문구·``chat.py`` 위젯 미리채움이 공유한다). ``region``/
+# ``household_types``는 값 형태가 달라(지역명 문자열·리스트) 이 표를 쓰지
+# 않고 각자 자리에서 직접 처리한다.
+_CONFLICT_FIELD_LABELS: dict[str, dict[str, str]] = {
+    "gender": GENDER_KO,
+    "income_bracket": INCOME_BRACKET_KO,
+    "disability_status": DISABILITY_STATUS_KO,
+}
+
+
+def _slot_value_label(field: str, value: str) -> str:
+    return _CONFLICT_FIELD_LABELS.get(field, {}).get(value, value)
+
+
+def _household_types_label(codes: list[str]) -> str:
+    return ", ".join(HOUSEHOLD_TYPE_KO.get(c, c) for c in codes)
 
 # 추출 결과를 그대로 덮어써도 되는 스칼라 슬롯.
 _SCALAR_FIELDS = ("age_self_reported", "household_size", "children_count")
@@ -118,6 +143,13 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
         if list_field in merged:
             merged[list_field] = list(merged[list_field])
 
+    # 프로필에서 왔고 아직 이번 대화에서 확인 안 된 슬롯들(service.ask()가
+    # known_*로 미리 채울 때 표시해 둔다). 이번 턴에 그중 하나가 다른 값으로
+    # 바뀌면 조용히 덮어쓰지 않고 slot_conflicts로 되묻는다 - region만 이
+    # 규칙을 쓰다가(2026-09-15) 다른 프로필 슬롯까지 넓혔다.
+    profile_sourced = set(existing_slots.get("profile_sourced") or [])
+    slot_conflicts: dict[str, dict[str, str]] = {}
+
     for field in _SCALAR_FIELDS:
         value = extracted.get(field)
         if value is not None:
@@ -127,29 +159,68 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
         value = extracted.get(field)
         # 계약에 없는 값은 저장하지 않는다. 하드 게이트가 이 값을 "채워졌음"
         # 으로 읽으면 검증되지 않은 값으로 판정이 진행된다.
-        if value is not None and is_valid_slot_value(field, value):
+        if value is None or not is_valid_slot_value(field, value):
+            continue
+        prev = merged.get(field)
+        if (
+            field in profile_sourced
+            and isinstance(prev, str)
+            and prev not in (None, UNKNOWN)
+            and value != prev
+        ):
+            slot_conflicts[field] = {
+                "profile": _slot_value_label(field, prev),
+                "chat": _slot_value_label(field, value),
+            }
+            # region과 같은 이유(아래 참고) - 둘 중 하나를 임의로 골라
+            # 덮어쓰지 않고 값을 비워 N2/N3가 다시 확인받게 한다.
+            merged[field] = None
+        else:
             merged[field] = value
+        profile_sourced.discard(field)
 
     for field in _MULTI_VALUE_FIELDS:
         new_values = extracted.get(field) or []
-        if new_values:
-            combined = list(merged.get(field, []))
+        prev_values = list(merged.get(field) or [])
+        if (
+            field == "household_types"
+            and new_values
+            and field in profile_sourced
+            and prev_values
+            and not (set(new_values) & set(prev_values))
+        ):
+            # 프로필 값과 이번에 말한 값이 하나도 안 겹친다 - "추가"가 아니라
+            # "다른 얘기"로 보고 재확인받는다(2026-09-15, 사용자 결정 - 한부모
+            # 가정이라고 돼 있는데 다자녀라고만 말하면 충돌로 취급). 일부라도
+            # 겹치면(예: "한부모인데 다자녀이기도 해요") 기존처럼 합집합으로
+            # 누적한다 - 그건 추가이지 정정이 아니다.
+            slot_conflicts[field] = {
+                "profile": _household_types_label(prev_values),
+                "chat": _household_types_label(new_values),
+            }
+            merged[field] = []
+            profile_sourced.discard(field)
+        elif new_values:
+            combined = list(prev_values)
             for value in new_values:
                 if value not in combined:
                     combined.append(value)
             merged[field] = combined
+            profile_sourced.discard(field)
         elif field not in merged:
             merged[field] = []
 
     _apply_age_subject(merged, extracted.get("age_subject_signals") or {})
-    _apply_birth_date(
+    birth_date_conflict = _apply_birth_date(
         merged,
         extracted.get("birth_date"),
         reference_date=reference_date,
+        profile_sourced=profile_sourced,
     )
+    if birth_date_conflict:
+        slot_conflicts["birth_date"] = birth_date_conflict
 
     region_raw = extracted.get("region_raw")
-    region_conflict: dict[str, str] | None = None
     if region_raw is not None:
         # 이번 턴에 지역처럼 보이는 텍스트가 있었다는 뜻이므로, 정규화에
         # 실패해도 예전 지역 값을 그대로 두지 않는다. "사용자가 지역을 새로
@@ -160,7 +231,7 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
 
         prev_scope = existing_slots.get("region_scope")
         prev_names = existing_slots.get("region_names") or []
-        prev_from_profile = existing_slots.get("region_source") == "profile"
+        prev_from_profile = "region" in profile_sourced
 
         if (
             prev_from_profile
@@ -174,28 +245,26 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
             # 확인한 적 없음)과 이번에 새로 말한 지역이 다르다 - 둘 중
             # 하나를 임의로 골라 조용히 덮어쓰지 않고, unknown으로 되돌려
             # N2/N3가 다시 확인받게 한다(2026-09-15, 사용자 피드백 반영).
-            region_conflict = {"profile": prev_names[0], "chat": region_names[0]}
+            slot_conflicts["region"] = {"profile": prev_names[0], "chat": region_names[0]}
             merged["region_scope"] = RegionScope.UNKNOWN.value
             merged["region_names"] = []
-            merged["region_source"] = None
         else:
             merged["region_scope"] = region_scope.value
             merged["region_names"] = region_names
-            # 정규화에 성공했으면 이번 대화에서 직접 확인된 값이다. 실패해서
-            # unknown으로 재설정된 경우엔 어차피 지역 값 자체가 없으니
-            # "프로필에서 왔다"는 표시도 함께 지운다.
-            merged["region_source"] = "chat" if region_scope is not RegionScope.UNKNOWN else None
+        profile_sourced.discard("region")
     elif "region_scope" not in merged:
         # 이번 턴에 지역 언급이 전혀 없을 때만(재입력 포함) 예전 값을
         # 그대로 유지한다. 기존 값 자체가 없는 첫 턴에는 unknown으로 채운다.
         merged["region_scope"] = RegionScope.UNKNOWN.value
         merged["region_names"] = []
 
+    merged["profile_sourced"] = sorted(profile_sourced)
+
     # 이전 턴의 충돌이 이번 턴엔 없으면 반드시 명시적으로 지운다 - 노드가
     # 일부 키만 반환하면 나머지는 LangGraph state에 그대로 남으므로, 여기서
-    # 매번 region_conflict를 쓰지 않으면 이미 해결된 충돌이 엉뚱한 다음
+    # 매번 slot_conflicts를 쓰지 않으면 이미 해결된 충돌이 엉뚱한 다음
     # 턴까지 살아남을 수 있다.
-    result: dict = {"slots": merged, "region_conflict": region_conflict}
+    result: dict = {"slots": merged, "slot_conflicts": slot_conflicts or None}
     # 첫 턴 질문을 한 번만 보존한다. user_input은 되묻기에 답할 때마다
     # 덮어써지는데, N4 검색에는 "무엇을 알고 싶은지"가 담긴 원래 질문이
     # 필요하다(되묻기 답변 "서울, 2000-03-26, 여성..."을 검색어로 쓰면
@@ -249,7 +318,8 @@ def _apply_birth_date(
     extracted_birth_date: str | None,
     *,
     reference_date: date | None = None,
-) -> None:
+    profile_sourced: set[str] | None = None,
+) -> dict[str, str] | None:
     """생년월일을 저장하고 만 나이·연 나이를 파생 값으로 다시 계산한다.
 
     ``age``는 사용자가 말한 숫자가 아니라 항상 이 함수가 만든 파생 값이다.
@@ -263,10 +333,30 @@ def _apply_birth_date(
 
     그래프에서는 ``state['as_of']``를 기준일로 써 N4/N7과 일치시킨다.
     그래프 밖에서 이 함수를 직접 부르는 기존 경로만 시스템 날짜를 쓴다.
+
+    ``profile_sourced``에 "birth_date"가 있는 상태에서(회원가입 생년월일이
+    아직 이번 대화에서 확인 안 됨) 새로 다른 날짜가 오면, 다른 프로필
+    슬롯과 같은 규칙으로 조용히 덮어쓰지 않고 충돌 정보
+    (``{"profile": ..., "chat": ...}``)를 돌려준다 - 호출부(``parse_slots``)가
+    ``slot_conflicts["birth_date"]``에 싣는다. 생년월일은 이미 "YYYY-MM-DD"
+    ISO 문자열이라 별도 라벨 변환 없이 그대로 보여줘도 읽힌다.
     """
 
+    conflict: dict[str, str] | None = None
     if extracted_birth_date is not None:
-        merged["birth_date"] = extracted_birth_date
+        prev = merged.get("birth_date")
+        if (
+            profile_sourced is not None
+            and "birth_date" in profile_sourced
+            and prev
+            and prev != extracted_birth_date
+        ):
+            conflict = {"profile": str(prev), "chat": extracted_birth_date}
+            merged["birth_date"] = None
+        else:
+            merged["birth_date"] = extracted_birth_date
+        if profile_sourced is not None:
+            profile_sourced.discard("birth_date")
 
     reference_date = reference_date or date.today()
     birth_date = parse_birth_date(merged.get("birth_date"), reference_date)
@@ -276,12 +366,13 @@ def _apply_birth_date(
         merged["age"] = None
         merged["age_year_based"] = None
         merged["age_ref_date"] = None
-        return
+        return conflict
 
     age, age_year_based = calculate_ages(birth_date, reference_date)
     merged["age"] = age
     merged["age_year_based"] = age_year_based
     merged["age_ref_date"] = reference_date.isoformat()
+    return conflict
 
 
 def normalize_region_input(region_raw: str | None) -> tuple[RegionScope, list[str]]:

@@ -181,6 +181,14 @@ from .graph import build_graph, resume_graph, run_graph
 from .graph.nodes.slot_parser import normalize_region_input
 from .graph.slot_schema import (
     UNKNOWN,
+    DISABILITY_STATUS_KO,
+    EMPLOYMENT_STATUS_KO,
+    GENDER_KO,
+    HOUSEHOLD_TYPE_KO,
+    INCOME_BRACKET_KO,
+    MARITAL_STATUS_KO,
+    PREGNANCY_STATUS_KO,
+    VETERAN_STATUS_KO,
     HouseholdType,
     is_valid_slot_value,
     parse_birth_date,
@@ -469,13 +477,16 @@ class ChatResponse(TypedDict, total=False):
     session_id: str
     question: str
     missing_slots: list[str]
-    # 회원 프로필 지역과 이번 대화에서 말한 지역이 달라 되묻는 경우에만
-    # 채워진다({"profile": "...", "chat": "..."}). 프론트엔드는 이 값이
-    # 있으면 "이미 회원 정보로 채웠으니 다시 안 물어봐도 됨" 자동완성을
-    # 끄고 위젯을 그대로 보여줘야 한다(streamlit_ui/pages/chat.py
+    # 회원 프로필 값과 이번 대화에서 말한 값이 달라 되묻는 슬롯이 있을
+    # 때만 채워진다(슬롯 이름 -> {"profile": "...", "chat": "..."}, 예:
+    # {"region": {"profile": "경기도", "chat": "서울특별시"}}). 프론트엔드는
+    # 여기 있는 슬롯에 대해 "이미 회원 정보로 채웠으니 다시 안 물어봐도 됨"
+    # 자동완성을 끄고 위젯을 그대로 보여줘야 한다(streamlit_ui/pages/chat.py
     # _render_slot_form 참고) - 안 그러면 프로필 값으로 조용히 재제출돼
     # 사용자가 충돌 사실을 확인할 기회 없이 자동으로 "해결"돼버린다.
-    region_conflict: dict[str, str] | None
+    # (2026-09-15 확장 - 원래 지역 전용이던 ``region_conflict``를 여러
+    # 슬롯을 동시에 담을 수 있게 일반화했다.)
+    slot_conflicts: dict[str, dict[str, str]] | None
     answer_status: str | None
     final_answer: str | None
     final_citations: list[dict]
@@ -873,44 +884,6 @@ def _timing_report() -> dict:
     }
 
 
-# ── output_json "파악한 정보"용 슬롯값 -> 한글 라벨 ──────────────────
-# 화면(streamlit_ui)이 쓰는 라벨과 같은 어휘다. 슬롯 코드값("under_30")을
-# 그대로 JSON에 노출하면 이 응답을 받는 쪽이 매핑을 또 만들어야 하므로,
-# 사람이 읽는 문자열까지 여기서 만들어 준다.
-_GENDER_KO = {"male": "남성", "female": "여성"}
-_INCOME_KO = {
-    "under_30": "기초생활수급 수준(중위소득 30% 이하)",
-    "pct_30_50": "차상위 수준(중위소득 30~50%)",
-    "pct_50_75": "중위소득 50~75%",
-    "pct_75_100": "중위소득 75~100%",
-    "pct_100_150": "중위소득 100~150%",
-    "over_150": "중위소득 150% 초과",
-}
-_DISABILITY_KO = {"registered": "장애 등록", "not_registered": "장애 없음"}
-_EMPLOYMENT_KO = {
-    "employed": "재직",
-    "job_seeking": "구직",
-    "self_employed": "자영업",
-    "student": "학생",
-    "not_working": "무직",
-}
-_MARITAL_KO = {
-    "single": "미혼", "married": "기혼", "divorced": "이혼", "bereaved": "사별",
-}
-_PREGNANCY_KO = {"pregnant": "임신 중", "postpartum": "산후", "none": "해당 없음"}
-_HOUSEHOLD_KO = {
-    "single_parent": "한부모", "multi_child": "다자녀", "multicultural": "다문화",
-    "grandparent": "조손", "single_person": "1인 가구",
-    "north_korean_defector": "북한이탈주민", "care_leaver": "자립준비청년",
-    "facility_leaver": "시설퇴소", "newlywed": "신혼부부",
-}
-# veteran_status는 하드 게이트 슬롯이 아니라 known_veteran_status로 채워진
-# interests 텍스트("국가유공자/보훈")로만 검색에 반영되므로(service.ask()
-# docstring 참고), 이 슬롯 자체는 대화 중 채워지지 않는다. 그래도 프로필
-# 표시용 라벨은 남겨둔다 - 다른 경로로 slots에 실릴 가능성까지 막지 않기
-# 위함(예: 향후 회원 정보를 그대로 slots에 얹는 경로가 생길 경우).
-_VETERAN_KO = {"registered": "보훈대상자", "not_registered": "해당 없음"}
-
 
 def _build_profile(slots: Any) -> list[dict]:
     """N1이 파악한 슬롯을 ``[{"key","label","value"}...]``로 만든다.
@@ -942,20 +915,20 @@ def _build_profile(slots: Any) -> list[dict]:
         add("age", "나이", f"만 {age}세")
 
     for key, mapping, label in (
-        ("gender", _GENDER_KO, "성별"),
-        ("income_bracket", _INCOME_KO, "소득"),
-        ("disability_status", _DISABILITY_KO, "장애"),
-        ("employment_status", _EMPLOYMENT_KO, "취업 상태"),
-        ("marital_status", _MARITAL_KO, "혼인"),
-        ("pregnancy_status", _PREGNANCY_KO, "임신"),
-        ("veteran_status", _VETERAN_KO, "보훈"),
+        ("gender", GENDER_KO, "성별"),
+        ("income_bracket", INCOME_BRACKET_KO, "소득"),
+        ("disability_status", DISABILITY_STATUS_KO, "장애"),
+        ("employment_status", EMPLOYMENT_STATUS_KO, "취업 상태"),
+        ("marital_status", MARITAL_STATUS_KO, "혼인"),
+        ("pregnancy_status", PREGNANCY_STATUS_KO, "임신"),
+        ("veteran_status", VETERAN_STATUS_KO, "보훈"),
     ):
         value = slots.get(key)
         if isinstance(value, str) and value != UNKNOWN and value in mapping:
             add(key, label, mapping[value])
 
     household = [
-        _HOUSEHOLD_KO[x] for x in (slots.get("household_types") or []) if x in _HOUSEHOLD_KO
+        HOUSEHOLD_TYPE_KO[x] for x in (slots.get("household_types") or []) if x in HOUSEHOLD_TYPE_KO
     ]
     if household:
         add("household_types", "가구 유형", ", ".join(household))
@@ -1087,7 +1060,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
             "question": question,
             "session_id": session_id,
             "missing_slots": missing_slots,
-            "region_conflict": result.get("region_conflict"),
+            "slot_conflicts": result.get("slot_conflicts"),
             "output_json": {
                 "status": "needs_input",
                 "session_id": session_id,
@@ -1191,30 +1164,28 @@ def ask(
     ``known_region``은 로그인한 사용자가 회원가입 때 저장해 둔 거주 지역(시/도
     전체 명칭, 예: ``"서울특별시"``)이다. ``normalize_region_input()``으로
     N1과 같은 방식으로 정규화해 초기 슬롯에 미리 채운다 - 이미 아는 지역을
-    대화로 또 묻지 않기 위함이다. ``region_source: "profile"`` 로 표시해 둬서,
-    이번 대화에서 사용자가 **다른** 지역을 직접 말하면 N1(slot_parser)이
-    조용히 덮어쓰지 않고 되묻는다(``region_conflict``, slot_parser.py 참고) -
-    아직 이번 대화에서 사용자가 직접 확인한 적 없는 값이기 때문이다. 대화에서
-    지역 언급이 아예 없으면 이 초기값을 그대로 쓴다. 정규화에 실패하면(형식이
-    이상하거나 빈 문자열) 조용히 건너뛰고 기존처럼 대화로 묻는다 - 잘못된
-    지역으로 검색이 진행되는 것보다 한 번 더 묻는 편이 안전하다.
+    대화로 또 묻지 않기 위함이다. 정규화에 실패하면(형식이 이상하거나 빈
+    문자열) 조용히 건너뛰고 기존처럼 대화로 묻는다 - 잘못된 지역으로 검색이
+    진행되는 것보다 한 번 더 묻는 편이 안전하다.
 
-    ``known_gender``/``known_birth_date``도 같은 방식이다 - 회원가입 때
-    저장한 성별("male"/"female")·생년월일(ISO ``YYYY-MM-DD``)을 초기 슬롯에
-    미리 채워 N1이 다시 묻지 않게 한다. 둘 다 ``known_region``과 똑같이
-    **대화가 우선**하고(``slot_parser.parse_slots``의 기존 병합 규칙을 그대로
-    타므로 이 함수는 초기값만 얹는다), 계약에 없는 값이거나(``is_valid_slot_value``)
-    파싱 불가능한 날짜면(``parse_birth_date``) 조용히 건너뛴다.
+    ``known_gender``/``known_birth_date``/``known_disability_status``/
+    ``known_income_bracket``/``known_household_types``도 같은 방식으로 초기
+    슬롯에 미리 채운다(회원가입 때 저장한 성별("male"/"female")·생년월일
+    (ISO ``YYYY-MM-DD``)·장애 등록 여부("registered"/"not_registered")·
+    소득 구간("under_30" 등)·가구유형 목록(예: ``["single_parent",
+    "newlywed"]``)). 계약에 없는 값이거나(``is_valid_slot_value``) 파싱
+    불가능한 날짜면(``parse_birth_date``) 조용히 건너뛴다.
 
-    ``known_disability_status``/``known_income_bracket``도 같은 방식이다 -
-    회원가입 때 저장한 장애 등록 여부("registered"/"not_registered")·소득
-    구간("under_30" 등)을 초기 슬롯에 미리 채운다. 둘 다 계약에 없는 값이면
-    조용히 건너뛴다.
-
-    ``known_household_types``는 회원가입 때 저장한 가구유형 목록(예:
-    ``["single_parent", "newlywed"]``)이다. 소프트 슬롯(``household_types``)
-    이라 하드 게이트에도 검색 필터에도 관여하지 않고, 계약에 있는 값만 골라
-    초기 슬롯에 채운다.
+    이 다섯 슬롯은 전부 ``initial_slots["profile_sourced"]``에 이름을
+    실어 "아직 이번 대화에서 사용자가 직접 확인한 적 없는 값"이라고
+    표시해 둔다(2026-09-15 확장 - 원래 지역에만 있던 규칙이었다). N1
+    (slot_parser.parse_slots)이 이 표시를 보고, 이번 대화에서 사용자가
+    **다른** 값을 직접 말하면 조용히 덮어쓰지 않고
+    ``ChatResponse.slot_conflicts``로 되묻는다 - 둘 중 하나를 임의로 골라
+    조용히 "해결"해버리면 사용자가 충돌 사실을 확인할 기회가 없다. 대화에서
+    해당 슬롯 언급이 아예 없으면 이 초기값을 그대로 쓴다(대화가 있으면
+    대화가 우선하되, 다르면 반드시 재확인을 거친다는 뜻 - 조용한 대화
+    우선이 아니다).
 
     ``known_veteran_status``는 회원가입 때 저장한 보훈대상자 여부다. **하드/
     소프트 필터로 연결하지 않는다** - 정부24 raw 지원조건 sidecar
@@ -1241,28 +1212,36 @@ def ask(
             initial_slots: dict = {}
             if interests:
                 initial_slots["interests"] = interests
+            # 이 턴에 프로필에서 미리 채운 슬롯들 - 아직 이번 대화에서 사용자가
+            # 직접 확인한 적 없는 값이라고 표시해 둔다. slot_parser.parse_slots가
+            # 이 표시를 보고, 사용자가 채팅에서 다른 값을 말하면 조용히
+            # 덮어쓰지 않고 slot_conflicts로 되묻는다(2026-09-15 - 원래
+            # 지역에만 있던 규칙을 성별·생년월일·소득·장애·가구유형까지 넓혔다.
+            # 보훈대상자는 애초에 이 슬롯 자체를 대화 중 안 채우므로 제외,
+            # 취업상태는 회원가입 때 안 받아 프로필 값 자체가 없으므로 제외).
+            profile_sourced: list[str] = []
             if known_region:
                 region_scope, region_names = normalize_region_input(known_region)
                 if region_scope is not RegionScope.UNKNOWN:
                     initial_slots["region_scope"] = region_scope.value
                     initial_slots["region_names"] = region_names
-                    # 아직 이번 대화에서 사용자가 직접 확인한 적 없는 값이라고
-                    # 표시해 둔다 - slot_parser.parse_slots가 이 표시를 보고,
-                    # 사용자가 채팅에서 다른 지역을 말하면 조용히 덮어쓰지
-                    # 않고 region_conflict로 되묻는다.
-                    initial_slots["region_source"] = "profile"
+                    profile_sourced.append("region")
             if known_gender and is_valid_slot_value("gender", known_gender):
                 initial_slots["gender"] = known_gender
+                profile_sourced.append("gender")
             if known_birth_date and parse_birth_date(known_birth_date, date.today()):
                 initial_slots["birth_date"] = known_birth_date
+                profile_sourced.append("birth_date")
             if known_disability_status and is_valid_slot_value(
                 "disability_status", known_disability_status
             ):
                 initial_slots["disability_status"] = known_disability_status
+                profile_sourced.append("disability_status")
             if known_income_bracket and is_valid_slot_value(
                 "income_bracket", known_income_bracket
             ):
                 initial_slots["income_bracket"] = known_income_bracket
+                profile_sourced.append("income_bracket")
             if known_household_types:
                 valid_household_types = {member.value for member in HouseholdType}
                 household_types = [
@@ -1272,6 +1251,9 @@ def ask(
                 ]
                 if household_types:
                     initial_slots["household_types"] = household_types
+                    profile_sourced.append("household_types")
+            if profile_sourced:
+                initial_slots["profile_sourced"] = profile_sourced
             if known_veteran_status and is_valid_slot_value(
                 "veteran_status", known_veteran_status
             ) and known_veteran_status == "registered":

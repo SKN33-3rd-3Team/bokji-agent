@@ -49,13 +49,17 @@ class SlotState(TypedDict, total=False):
     pregnancy_status: str | None
     region_scope: str | None
     region_names: list[str]
-    # region이 어디서 왔는지 - "profile"(회원 프로필에서 미리 채워졌고 아직
-    # 이번 대화에서 사용자가 직접 확인한 적 없음) | "chat"(이번 대화에서
-    # 사용자가 직접 말했거나 확인함) | None(아예 없음). N1(slot_parser)이
-    # "profile" 상태에서 새로 다른 지역이 언급되면 조용히 덮어쓰지 않고
-    # GraphState.region_conflict로 되물어야 한다는 신호를 준다
-    # (2026-09-15 추가, slot_parser.py 지역 병합 로직 참고).
-    region_source: str | None
+    # 회원 프로필에서 미리 채워졌고 아직 이번 대화에서 사용자가 직접
+    # 확인한 적 없는 슬롯 이름들 - ``region``/``gender``/``birth_date``/
+    # ``income_bracket``/``disability_status``/``household_types``가 대상이다
+    # (2026-09-15 확장 - 처음엔 지역 전용 ``region_source: str|None``였는데,
+    # 다른 프로필 슬롯에도 같은 "조용히 덮어쓰지 않고 재확인" 규칙을
+    # 적용하면서 필드마다 따로 두지 않고 하나의 목록으로 모았다). N1
+    # (slot_parser)이 이 목록에 있는 슬롯에 대해 새로 다른 값이 언급되면
+    # 조용히 덮어쓰지 않고 ``GraphState.slot_conflicts``로 되물어야 한다는
+    # 신호를 준다. 값이 확인되거나(같은 값을 다시 말함) 충돌로 재확인
+    # 대상이 되면 그 슬롯 이름은 이 목록에서 빠진다.
+    profile_sourced: list[str]
     interests: list[str]
     household_size: int | None
     children_count: int | None
@@ -201,11 +205,14 @@ class GraphState(TypedDict, total=False):
     # 그래프 시작 시점에 한 번 정해서 모든 노드가 이 값을 공유한다.
     as_of: date
     slots: SlotState
-    # 회원 프로필(가입 시 등록한 거주 지역)과 이번 대화에서 새로 말한 지역이
-    # 달라서 되물어야 할 때만 채워진다({"profile": "경기도", "chat":
-    # "서울특별시"}). 매 턴 N1이 명시적으로 갱신/해제한다 - 이전 턴의 값이
-    # 남아 엉뚱한 턴에 재사용되지 않게 항상 이번 턴 결과로 덮어쓴다.
-    region_conflict: dict[str, str] | None
+    # 회원 프로필 값과 이번 대화에서 새로 말한 값이 달라서 되물어야 할
+    # 슬롯이 있을 때만 채워진다 - 슬롯 이름 -> {"profile": "경기도", "chat":
+    # "서울특별시"} (2026-09-15 확장 - 지역 전용이던 ``region_conflict``를
+    # 여러 슬롯을 동시에 담을 수 있게 일반화했다. 지역·성별·생년월일·
+    # 소득수준·장애등록여부·가구유형이 대상이다). 매 턴 N1이 명시적으로
+    # 갱신/해제한다 - 이전 턴의 값이 남아 엉뚱한 턴에 재사용되지 않게 항상
+    # 이번 턴 결과로 덮어쓴다.
+    slot_conflicts: dict[str, dict[str, str]] | None
     missing_slots: list[str]
     # N2가 되묻기 상한(slot_schema.MAX_SLOT_ASKS)을 판단하는 데 쓰는 슬롯별
     # 재질문 횟수. N3(request_missing_slots)가 슬롯을 물을 때마다 올린다.

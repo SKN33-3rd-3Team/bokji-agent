@@ -16,6 +16,7 @@ from ..constants import (
     BOT_AVATAR,
     DEFAULT_TOP_K,
     EXAMPLE_PROMPTS,
+    HOUSEHOLD_TYPE_LABELS_KO,
     INTEREST_FIELD_OPTIONS,
     INTEREST_OPTIONS,
     SIDO_OPTIONS,
@@ -537,14 +538,17 @@ _EMPLOYMENT_CHOICES = ("재직", "구직", "자영업", "학생", "무직")
 _INCOME_CALCULATOR_URL = "https://www.bokjiro.go.kr/ssis-tbu/twatbz/mkclAsis/mkclPage.do"
 
 
-def _slot_widget(slot: str, label: str, *, default: str | None = None):
+def _slot_widget(slot: str, label: str, *, default: object = None):
     """missing_slot 하나를 알맞은 위젯으로 그린다(자유 입력 대신).
 
-    ``default``는 지역 충돌(``region_conflict``) 재확인 때만 쓴다 - 채팅에서
-    사용자가 직접 말한 지역을 빈 선택지가 아니라 이미 체크된 상태로 보여주고,
-    그래도 수정할 수 있게 선택형 위젯 그대로 둔다(2026-09-15, 사용자 요청
-    반영 - 원래는 충돌 시 빈 선택지로 되물었는데, 사용자가 방금 채팅에 직접
-    입력한 값이니 자동으로 골라져 있는 게 더 자연스럽다는 피드백).
+    ``default``는 프로필-채팅 충돌(``slot_conflicts``) 재확인 때만 쓴다 -
+    채팅에서 사용자가 직접 말한 값을 빈 선택지가 아니라 이미 체크된
+    상태로 보여주고, 그래도 수정할 수 있게 선택형 위젯 그대로 둔다
+    (2026-09-15, 사용자 요청 반영 - 원래는 충돌 시 빈 선택지로 되물었는데,
+    사용자가 방금 채팅에 직접 입력한 값이니 자동으로 골라져 있는 게 더
+    자연스럽다는 피드백. 처음엔 지역 전용이었다가 다른 프로필 슬롯까지
+    넓혔다). ``household_types``만 리스트를 받는다(다중 선택) - 나머지는
+    문자열 하나다.
     """
 
     if slot == "region":
@@ -557,27 +561,42 @@ def _slot_widget(slot: str, label: str, *, default: str | None = None):
             format="YYYY-MM-DD", key=f"slotw_{slot}",
         )
     if slot == "gender":
-        return st.radio(label, ("남성", "여성"), index=None, horizontal=True, key=f"slotw_{slot}")
+        gender_options = ("남성", "여성")
+        index = gender_options.index(default) if default in gender_options else None
+        return st.radio(label, gender_options, index=index, horizontal=True, key=f"slotw_{slot}")
     if slot == "income_bracket":
-        value = st.selectbox(label, ("선택하세요", *_INCOME_CHOICES), key=f"slotw_{slot}")
+        options = ("선택하세요", *_INCOME_CHOICES)
+        index = options.index(default) if default in _INCOME_CHOICES else 0
+        value = st.selectbox(label, options, index=index, key=f"slotw_{slot}")
         st.caption(
             "본인 소득 분위를 모르면 "
             f"[나의 소득 분위 알아보기]({_INCOME_CALCULATOR_URL})에서 확인할 수 있어요."
         )
         return value
     if slot == "disability_status":
+        disability_options = ("장애 없음", "장애 등록", "모름")
+        index = disability_options.index(default) if default in disability_options else None
         return st.radio(
-            label, ("장애 없음", "장애 등록", "모름"), index=None, horizontal=True,
+            label, disability_options, index=index, horizontal=True,
             key=f"slotw_{slot}",
         )
     if slot == "employment_status":
         return st.radio(label, _EMPLOYMENT_CHOICES, index=None, horizontal=True, key=f"slotw_{slot}")
+    if slot == "household_types":
+        household_options = list(HOUSEHOLD_TYPE_LABELS_KO.values())
+        default_selection = [
+            v for v in (default or []) if v in household_options
+        ] if isinstance(default, list) else []
+        return st.pills(
+            label, household_options, selection_mode="multi",
+            default=default_selection, key=f"slotw_{slot}",
+        )
     return st.text_input(label, key=f"slotw_{slot}")
 
 
 def _render_slot_form(
     missing_slots: list[str],
-    region_conflict: Mapping[str, str] | None = None,
+    slot_conflicts: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str | None:
     """되묻기(needs_input)에 자유 입력 대신 위젯 폼으로 답하게 한다.
 
@@ -586,36 +605,39 @@ def _render_slot_form(
 
     질문 문구 자체는 이 폼이 아니라 바로 위 채팅 말풍선(``_render_history``
     -> ``render_result``)이 이미 보여준다 - 예전엔 이 폼도 같은 문구를 헤더로
-    한 번 더 찍어서, 특히 지역 충돌 재확인처럼 문구가 길 때 화면에 똑같은
-    문장이 두 번 나왔다(2026-09-15, 사용자 피드백 - "이게 반복되는거 보여?"
-    지적 반영). 폼 바로 위에 그 문구가 이미 있으므로 여기서는 위젯만 그린다.
+    한 번 더 찍어서, 특히 충돌 재확인처럼 문구가 길 때 화면에 똑같은 문장이
+    두 번 나왔다(2026-09-15, 사용자 피드백 - "이게 반복되는거 보여?" 지적
+    반영). 폼 바로 위에 그 문구가 이미 있으므로 여기서는 위젯만 그린다.
 
     ``region``만은 회원가입 때 이미 알고 있으면(``auth_user.region``) 위젯을
     아예 안 그리고 그 값을 자동으로 제출한다(2026-09-15, PR 리뷰 피드백
     반영) - 로그인 안내 화면이 "회원가입 때 입력한 지역이 자동으로
     반영됩니다"라고 약속하는데 실제로는 매번 다시 물어봐서 생긴 공백이었다.
-    생년월일·성별·소득·장애·취업상태는 회원가입 때 아예 안 받으므로 그대로
-    묻는다.
+    생년월일·성별·소득·장애·취업상태·가구유형은 회원가입 때 아예 안
+    받거나(취업상태) 그 슬롯이 지금 충돌 재확인 대상이라 자동 채움을 쓰면
+    안 되므로 그대로 묻는다.
 
-    ``region_conflict``가 있으면(채팅에서 말한 지역이 회원 프로필과 달라
-    파이프라인이 되묻는 경우, service.ChatResponse.region_conflict 참고)
-    자동 채움(위젯 없이 프로필 값을 바로 재제출)은 끈다(2026-09-15 추가) -
-    안 그러면 사용자가 충돌 사실을 확인할 기회도 없이 조용히 "해결"돼버린다.
-    대신 위젯은 그리되, 채팅에서 방금 말한 지역(``region_conflict["chat"]``)을
-    기본 선택값으로 미리 체크해 둔다(2026-09-15, 사용자 요청 반영 - 처음엔
-    빈 선택지로 되물었는데, "다시 물어보되 채팅에서 입력한 값으로 자동
+    ``slot_conflicts``에 있는 슬롯은(채팅에서 말한 값이 회원 프로필과 달라
+    파이프라인이 되묻는 경우, service.ChatResponse.slot_conflicts 참고)
+    자동 채움(위젯 없이 프로필 값을 바로 재제출)을 끈다(2026-09-15 추가,
+    지역 전용이었다가 다른 프로필 슬롯까지 확장) - 안 그러면 사용자가 충돌
+    사실을 확인할 기회도 없이 조용히 "해결"돼버린다. 대신 위젯은 그리되,
+    채팅에서 방금 말한 값(``slot_conflicts[slot]["chat"]``)을 기본
+    선택값으로 미리 체크해 둔다(2026-09-15, 사용자 요청 반영 - 처음엔 빈
+    선택지로 되물었는데, "다시 물어보되 채팅에서 입력한 값으로 자동
     체크돼서 수정 가능하게" 해달라는 피드백을 받음). 충돌 사실은 위 채팅
     말풍선의 문구(request_missing_slots.py가 조립)로 이미 알려줬으니,
-    사용자는 필요하면 선택값을 프로필 쪽 지역으로 직접 바꾸면 된다.
+    사용자는 필요하면 선택값을 프로필 쪽 값으로 직접 바꾸면 된다.
     """
 
     slots = [s for s in missing_slots if isinstance(s, str)]
     if not slots:
         return None
 
+    slot_conflicts = slot_conflicts or {}
     auth_user = st.session_state.get("auth_user") or {}
     known_region = str(auth_user.get("region") or "").strip()
-    skip_region = bool(known_region) and "region" in slots and not region_conflict
+    skip_region = bool(known_region) and "region" in slots and "region" not in slot_conflicts
 
     with st.container(border=True):
         if skip_region:
@@ -628,11 +650,12 @@ def _render_slot_form(
             for slot in slots:
                 if slot == "region" and skip_region:
                     continue
-                default = (
-                    region_conflict.get("chat")
-                    if slot == "region" and region_conflict
-                    else None
-                )
+                conflict = slot_conflicts.get(slot)
+                default: object = None
+                if conflict and slot == "household_types":
+                    default = [v.strip() for v in conflict["chat"].split(",") if v.strip()]
+                elif conflict:
+                    default = conflict.get("chat")
                 values[slot] = _slot_widget(
                     slot, SLOT_LABELS_KO.get(slot, slot), default=default
                 )
@@ -647,7 +670,11 @@ def _render_slot_form(
     if skip_region:
         parts.append(f"{SLOT_LABELS_KO.get('region', '거주 지역')}: {known_region}")
     for slot, val in values.items():
-        if val in (None, "", "선택하세요"):
+        if isinstance(val, list):
+            if not val:
+                continue
+            val = ", ".join(val)
+        elif val in (None, "", "선택하세요"):
             continue
         label = SLOT_LABELS_KO.get(slot, slot)
         parts.append(f"{label}: {val.isoformat() if isinstance(val, date) else val}")
@@ -705,7 +732,7 @@ def page_chat() -> None:
     form_answer = (
         _render_slot_form(
             list(needs_input.get("missing_slots") or []),
-            needs_input.get("region_conflict"),
+            needs_input.get("slot_conflicts"),
         )
         if needs_input
         else None
