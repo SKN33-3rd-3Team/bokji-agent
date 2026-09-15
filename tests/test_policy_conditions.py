@@ -328,6 +328,47 @@ class ProfileMatcherTests(unittest.TestCase):
             )
         )
 
+    def test_disability_code_in_an_inclusive_target_list_does_not_exclude(self) -> None:
+        """JA0328이 여러 대상특성 중 하나면 '장애인 전용'이 아니다.
+
+        2026-09-14 실측 회귀: 정부24 대상특성은 배타적 구분이 아니라 "해당되는
+        것 모두 체크"하는 포함 목록이다. 근로·자녀장려금(105100000001)은 성별
+        둘 다(JA0101+JA0102)·소득 전 구간(JA0201~JA0205)·대상특성 12개를 켜둔
+        채 JA0328도 포함하는데, 위 registered_only 규칙이 이것까지 '전용'으로
+        보고 비장애인을 전부 제외했다. Dev 100문항에서 근로장려금 19/19,
+        월세자금보증 19/19가 이 이유로 검색 결과에서 사라졌다(Recall 0.44).
+
+        전용 판정은 JA0328이 대상특성 블록에서 유일하게 켜진 경우로 좁힌다 -
+        위 테스트의 registered_only_policy는 그대로 제외되어야 한다.
+        """
+
+        inclusive_policy = _row(
+            "근로·자녀장려금",
+            "JA0101",
+            "JA0102",
+            "JA0201",
+            "JA0202",
+            "JA0203",
+            "JA0326",
+            "JA0327",
+            "JA0313",
+            "JA0328",
+        )
+
+        self.assertTrue(
+            matches_profile(
+                inclusive_policy, _plan(disability_status="not_registered")
+            )
+        )
+        self.assertTrue(
+            matches_profile(inclusive_policy, _plan(disability_status="registered"))
+        )
+        aspects = evaluate_conditions(
+            inclusive_policy, _plan(disability_status="not_registered")
+        )
+        self.assertFalse(aspects["disability_status"]["checked"])
+        self.assertFalse(aspects["disability_status"]["violated"])
+
     def test_disability_title_fallback_only_when_code_silent_and_confirmed(
         self,
     ) -> None:
