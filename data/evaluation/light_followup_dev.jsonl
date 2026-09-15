@@ -1,0 +1,29 @@
+{"id": "youth1", "policy_id": "000000465790", "question": "지원금액이 얼마예요?", "expected_kind": "answer", "expected_contains": ["280,000원"], "note": "지원금액 - support_details에 있음"}
+{"id": "youth2", "policy_id": "000000465790", "question": "신청은 어디서 하나요?", "expected_kind": "answer", "expected_contains": ["주민센터"], "note": "신청방법"}
+{"id": "youth3", "policy_id": "000000465790", "question": "필요한 서류가 뭐예요?", "expected_kind": "answer", "expected_contains": ["신청서"], "note": "구비서류 - required_documents에 있음"}
+{"id": "youth4", "policy_id": "000000465790", "question": "다자녀 지원이랑 같이 받을 수 있나요?", "expected_kind": "guidance", "note": "함정: 다른 제도와의 중복 여부는 이 컨텍스트에 없음"}
+{"id": "youth5", "policy_id": "000000465790", "question": "이사가면 지원이 끊기나요?", "expected_kind": "guidance", "note": "함정: 전출/이사 관련 규정은 컨텍스트에 없음"}
+{"id": "eitc1", "policy_id": "105100000001", "question": "신청 기간이 언제예요?", "expected_kind": "answer", "expected_contains": ["5.1"], "note": "application_period"}
+{"id": "eitc2", "policy_id": "105100000001", "question": "얼마까지 받을 수 있어요?", "expected_kind": "answer", "expected_contains": ["330만"], "note": "지급액 - support_details"}
+{"id": "eitc3", "policy_id": "105100000001", "question": "신청은 어떻게 하나요?", "expected_kind": "answer", "expected_contains": ["홈택스"], "note": "application_method"}
+{"id": "eitc4", "policy_id": "105100000001", "question": "실업급여랑 같이 받아도 되나요?", "expected_kind": "guidance", "note": "함정: 실업급여 중복 여부는 컨텍스트에 없음"}
+{"id": "eitc5", "policy_id": "105100000001", "question": "매달 나눠서 받을 수 있나요?", "expected_kind": "guidance", "note": "함정: 지급 주기(분할지급) 언급 없음, 환급 형태로만 나와있음"}
+{"id": "wolse1", "policy_id": "116010000001", "question": "대출 한도가 얼마예요?", "expected_kind": "answer", "expected_contains": ["1,152만"], "note": "support_details"}
+{"id": "wolse2", "policy_id": "116010000001", "question": "취업준비생도 신청할 수 있나요?", "expected_kind": "answer", "expected_contains": ["취업준비생"], "note": "support_target 우대형에 명시"}
+{"id": "wolse3", "policy_id": "116010000001", "question": "어느 은행에서 신청하나요?", "expected_kind": "answer", "expected_contains": ["국민"], "note": "application_method"}
+{"id": "wolse4", "policy_id": "116010000001", "question": "전세자금도 지원되나요?", "expected_kind": "guidance", "note": "함정: 이 정책은 월세자금보증이지 전세는 다룸이 없음"}
+{"id": "wolse5", "policy_id": "116010000001", "question": "중도 상환하면 수수료 있나요?", "expected_kind": "guidance", "note": "함정: 중도상환 수수료 언급 없음"}
+{"id": "energy1", "policy_id": "119200000001", "question": "신청은 어디서 하나요?", "expected_kind": "answer", "expected_contains": ["지자체"], "note": "application_method"}
+{"id": "energy2", "policy_id": "119200000001", "question": "우선순위가 어떻게 되나요?", "expected_kind": "answer", "expected_contains": ["1순위"], "note": "eligibility_criteria"}
+{"id": "energy3", "policy_id": "119200000001", "question": "필요한 서류가 뭐예요?", "expected_kind": "answer", "expected_contains": ["사업신청서"], "note": "required_documents"}
+{"id": "energy4", "policy_id": "119200000001", "question": "농업인도 지원받을 수 있나요?", "expected_kind": "guidance", "note": "함정: 대상은 연근해 어업인만, 농업인 언급 없음"}
+{"id": "leader1", "policy_id": "119200000076", "question": "교육비가 얼마예요?", "expected_kind": "answer", "expected_contains": ["무상교육"], "note": "support_details"}
+{"id": "leader2", "policy_id": "119200000076", "question": "수당은 얼마나 받나요?", "expected_kind": "answer", "expected_contains": ["18만원"], "note": "support_details"}
+{"id": "leader3", "policy_id": "119200000076", "question": "필요한 서류가 뭐예요?", "expected_kind": "guidance", "note": "핵심 테스트: 이 정책은 required_documents 섹션 자체가 없음(데이터 부재) - 지어내면 안 됨"}
+{"id": "nav1", "policy_id": "119200000085", "question": "누가 신청할 수 있어요?", "expected_kind": "answer", "expected_contains": ["한국항로표지기술원"], "note": "support_target"}
+{"id": "nav2", "policy_id": "119200000085", "question": "일반인도 참여할 수 있나요?", "expected_kind": "guidance", "note": "함정: 대상이 기관 한정, 일반인 언급 없음"}
+{"id": "fish1", "policy_id": "119200000118", "question": "교육 시간이 얼마나 되나요?", "expected_kind": "answer", "expected_contains": ["4시간"], "note": "support_details"}
+{"id": "fish2", "policy_id": "119200000118", "question": "신청은 어떻게 하나요?", "expected_kind": "answer", "expected_contains": ["온라인"], "note": "application_method"}
+{"id": "fish3", "policy_id": "119200000118", "question": "교육비가 얼마예요?", "expected_kind": "guidance", "note": "함정: 이 정책엔 비용/무상 여부 언급이 없음(다른 정책과 헷갈리기 쉬움)"}
+{"id": "repair1", "policy_id": "119200000166", "question": "지원 한도가 얼마예요?", "expected_kind": "answer", "expected_contains": ["40만원"], "note": "support_details"}
+{"id": "repair2", "policy_id": "119200000166", "question": "육지 지역 어업인도 되나요?", "expected_kind": "guidance", "note": "함정: 대상은 도서·벽지 한정, 육지는 범위 밖"}
