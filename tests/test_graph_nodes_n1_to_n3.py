@@ -317,6 +317,33 @@ class LlmGatewayFollowupQuestionTests(unittest.TestCase):
         self.assertNotIn("법령 참고 링크", without_refs)
         self.assertIn("법령 참고 링크", with_refs)
 
+    def test_exclude_from_list_drops_slot_but_keeps_skip_notice(self) -> None:
+        # region_conflict 재확인처럼, 다른 곳에서 이미 설명된 슬롯은 번호
+        # 목록에서만 빼고 '모름 안내'는 그대로 유지한다.
+        question = llm_gateway.generate_followup_question(
+            0, ["region", "gender"], exclude_from_list=["region"]
+        )
+        self.assertNotIn("거주 지역", question)
+        self.assertIn("성별", question)
+        self.assertIn("모르시거나 말씀하기 어려운", question)
+
+    def test_exclude_from_list_removes_entire_list_when_nothing_left(self) -> None:
+        # 부족한 슬롯이 지역 하나뿐이고 그마저 exclude되면, 빈 "아래 정보가
+        # 필요해요" 문장만 남기지 않고 번호 목록 전체를 생략한다.
+        question = llm_gateway.generate_followup_question(
+            0, ["region"], exclude_from_list=["region"]
+        )
+        self.assertEqual(question, "")
+
+    def test_exclude_from_list_still_appends_reference_notice(self) -> None:
+        # 번호 목록이 통째로 생략돼도, 참고 법령 안내는 슬롯과 무관한
+        # 공통 안내라 계속 붙는다.
+        question = llm_gateway.generate_followup_question(
+            2, ["region"], exclude_from_list=["region"]
+        )
+        self.assertNotIn("아래 정보가 필요해요", question)
+        self.assertIn("법령 참고 링크", question)
+
 
 class RetrievalGatewayTests(unittest.TestCase):
     def test_returns_empty_list_before_vector_db_is_wired(self) -> None:
@@ -519,6 +546,45 @@ class ParseSlotsNodeTests(unittest.TestCase):
             result = parse_slots(state)
         self.assertEqual(result["slots"]["region_scope"], "unknown")
         self.assertEqual(result["slots"]["region_names"], [])
+
+    def test_reentry_normalization_failure_with_profile_region_records_no_conflict(
+        self,
+    ) -> None:
+        """PR #60 리뷰 회귀 테스트 - 프로필에서 온 지역이 있는 상태에서 새
+        지역 텍스트가 정규화에 실패하면, 슬롯은 unknown으로 되돌아가지만
+        ``slot_conflicts``에는 아무것도 실리지 않는다(비교할 두 값 중 하나가
+        없어 충돌로 판정할 수 없다). 이 조합(missing인데 conflict는 없음)을
+        "그냥 아직 안 물어봤을 뿐"으로 오해하면 안 된다는 것을 문서화한다 -
+        streamlit_ui/pages/chat.py의 (예전) ``skip_region`` 버그가 정확히
+        이 상태를 오해해서 위젯을 숨기고 프로필 값을 조용히 재제출했다.
+        """
+
+        fake_extracted = {
+            "birth_date": None,
+            "age_self_reported": None,
+            "region_raw": "이상한동네",
+            "interests": [],
+            "household_size": None,
+            "children_count": None,
+        }
+        state = {
+            "user_input": "이상한동네로 이사했어요",
+            "slots": {
+                "region_scope": "regional",
+                "region_names": ["경기도"],
+                "profile_sourced": ["region"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots",
+            return_value=fake_extracted,
+        ):
+            result = parse_slots(state)
+
+        self.assertEqual(result["slots"]["region_scope"], "unknown")
+        self.assertEqual(result["slots"]["region_names"], [])
+        self.assertIsNone(result["slot_conflicts"])
+        self.assertNotIn("region", result["slots"]["profile_sourced"])
 
     def test_sigungu_region_names_include_the_sido_prefix_first(self) -> None:
         # region_names는 단일 이름이 아니라 상위 시도부터 누적한 계층
@@ -725,6 +791,41 @@ class RequestMissingSlotNodeTests(unittest.TestCase):
         result = request_missing_slot_input(state)
         self.assertIn("법령 참고 링크", result["followup_question"])
 
+    def test_region_conflict_only_skips_duplicate_numbered_list(self) -> None:
+        # 지역 충돌 재확인은 충돌 문장과, 채팅 값이 미리 선택된 폼 위젯으로
+        # 이미 설명되므로("이 정보로 계속" 폼) 번호 목록에 지역을 또 넣지
+        # 않는다(2026-09-15, 사용자 피드백 - "밑에 폼에 똑같은 내용 반복"
+        # 지적 반영). 부족한 슬롯이 지역 하나뿐이면 번호 목록 전체가 생략돼
+        # 충돌 문장만 남는다.
+        state = {
+            "missing_slots": ["region"],
+            "slot_conflicts": {"region": {"profile": "경기도", "chat": "서울특별시"}},
+        }
+        result = request_missing_slot_input(state)
+        question = result["followup_question"]
+        self.assertIn("경기도", question)
+        self.assertIn("서울특별시", question)
+        self.assertNotIn("1.", question)
+        self.assertNotIn("아래 정보가 필요해요", question)
+        # 그래도 되묻은 횟수는 정상적으로 올라가야 상한(MAX_SLOT_ASKS)이
+        # 작동한다.
+        self.assertEqual(result["slot_ask_counts"], {"region": 1})
+
+    def test_region_conflict_with_other_missing_slots_lists_only_the_rest(self) -> None:
+        state = {
+            "missing_slots": ["region", "gender"],
+            "slot_conflicts": {"region": {"profile": "경기도", "chat": "서울특별시"}},
+        }
+        result = request_missing_slot_input(state)
+        question = result["followup_question"]
+        self.assertIn("경기도", question)
+        self.assertIn("서울특별시", question)
+        self.assertIn("성별", question)
+        # 지역 항목("1. 거주 지역 ...")은 번호 목록에서 빠지되, 충돌 문장
+        # 자체에 있는 지역명(위에서 이미 확인)까지 지우면 안 되므로 항목
+        # 문구로만 좁혀서 확인한다.
+        self.assertNotIn("1. 거주 지역", question)
+
     def test_asks_every_missing_slot_at_once_including_region(self) -> None:
         # 2026-08-31 변경: 예전에는 지역이 섞여 있으면 지역만 먼저 물었다.
         # 되묻기 왕복이 두 배로 늘어 대화가 길어지고, 슬롯별 상한
@@ -918,6 +1019,185 @@ class ProfileSlotExtractionTests(unittest.TestCase):
         self.assertEqual(
             second["slots"]["household_types"], ["single_parent", "multicultural"]
         )
+
+    # ── 프로필-채팅 충돌 감지(slot_conflicts) - 2026-09-15, 지역 전용이던
+    # 규칙을 gender/birth_date/income_bracket/disability_status/
+    # household_types까지 확장. extract_slots를 패치해 규칙 기반 추출기의
+    # 실제 정규식 동작과 무관하게 병합/충돌 판정 로직만 검증한다(위
+    # test_out_of_contract_enum_values_are_not_stored와 같은 방식).
+
+    def test_gender_conflict_resets_value_and_is_removed_from_profile_sourced(
+        self,
+    ) -> None:
+        fake = {"gender": "female", "region_raw": None, "interests": []}
+        state = {
+            "user_input": "사실 여성이에요",
+            "slots": {"gender": "male", "profile_sourced": ["gender"]},
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["gender"])
+        self.assertEqual(
+            result["slot_conflicts"], {"gender": {"profile": "남성", "chat": "여성"}}
+        )
+        self.assertNotIn("gender", result["slots"]["profile_sourced"])
+
+    def test_gender_matching_profile_value_is_silently_confirmed(self) -> None:
+        # 채팅에서 말한 값이 프로필과 같으면 충돌이 아니라 그냥 확인된
+        # 것이다 - 값은 그대로 두고 profile_sourced 표시만 지운다.
+        fake = {"gender": "male", "region_raw": None, "interests": []}
+        state = {
+            "user_input": "저는 남성이에요",
+            "slots": {"gender": "male", "profile_sourced": ["gender"]},
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(result["slots"]["gender"], "male")
+        self.assertIsNone(result["slot_conflicts"])
+        self.assertNotIn("gender", result["slots"]["profile_sourced"])
+
+    def test_disability_status_conflict_resets_value_and_flags_slot_conflicts(
+        self,
+    ) -> None:
+        fake = {
+            "disability_status": "not_registered", "region_raw": None, "interests": [],
+        }
+        state = {
+            "user_input": "장애는 없어요",
+            "slots": {
+                "disability_status": "registered",
+                "profile_sourced": ["disability_status"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["disability_status"])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"disability_status": {"profile": "장애 등록", "chat": "장애 없음"}},
+        )
+
+    def test_income_bracket_conflict_resets_value_and_flags_slot_conflicts(
+        self,
+    ) -> None:
+        fake = {
+            "income_bracket": "pct_30_50", "region_raw": None, "interests": [],
+        }
+        state = {
+            "user_input": "차상위 수준이에요",
+            "slots": {
+                "income_bracket": "under_30",
+                "profile_sourced": ["income_bracket"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["income_bracket"])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {
+                "income_bracket": {
+                    "profile": "기초생활수급 수준(중위소득 30% 이하)",
+                    "chat": "차상위 수준(중위소득 30-50%)",
+                }
+            },
+        )
+
+    def test_birth_date_conflict_resets_value_and_flags_slot_conflicts(self) -> None:
+        fake = {"birth_date": "1985-05-05", "region_raw": None, "interests": []}
+        state = {
+            "user_input": "1985년 5월 5일생이에요",
+            "slots": {
+                "birth_date": "1990-01-01", "profile_sourced": ["birth_date"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertIsNone(result["slots"]["birth_date"])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"birth_date": {"profile": "1990-01-01", "chat": "1985-05-05"}},
+        )
+        self.assertNotIn("birth_date", result["slots"]["profile_sourced"])
+
+    def test_region_conflict_via_profile_sourced_resets_to_unknown(self) -> None:
+        fake = {"region_raw": "서울", "interests": []}
+        state = {
+            "user_input": "서울로 이사했어요",
+            "slots": {
+                "region_scope": "regional",
+                "region_names": ["경기도"],
+                "profile_sourced": ["region"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(result["slots"]["region_scope"], "unknown")
+        self.assertEqual(result["slots"]["region_names"], [])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"region": {"profile": "경기도", "chat": "서울특별시"}},
+        )
+        self.assertNotIn("region", result["slots"]["profile_sourced"])
+
+    def test_household_types_conflict_when_disjoint_from_profile(self) -> None:
+        fake = {
+            "household_types": ["multi_child"], "region_raw": None, "interests": [],
+        }
+        state = {
+            "user_input": "저희는 다자녀 가구예요",
+            "slots": {
+                "household_types": ["single_parent"],
+                "profile_sourced": ["household_types"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(result["slots"]["household_types"], [])
+        self.assertEqual(
+            result["slot_conflicts"],
+            {"household_types": {"profile": "한부모", "chat": "다자녀"}},
+        )
+        self.assertNotIn("household_types", result["slots"]["profile_sourced"])
+
+    def test_household_types_overlap_is_not_a_conflict_and_accumulates(self) -> None:
+        # 일부라도 겹치면("한부모인데 다자녀이기도 해요") 충돌이 아니라
+        # 기존처럼 합집합으로 누적한다.
+        fake = {
+            "household_types": ["single_parent", "multi_child"],
+            "region_raw": None,
+            "interests": [],
+        }
+        state = {
+            "user_input": "한부모인데 다자녀이기도 해요",
+            "slots": {
+                "household_types": ["single_parent"],
+                "profile_sourced": ["household_types"],
+            },
+        }
+        with patch(
+            "rag_chatbot.graph.nodes.slot_parser.extract_slots", return_value=fake
+        ):
+            result = parse_slots(state)
+        self.assertEqual(
+            result["slots"]["household_types"], ["single_parent", "multi_child"]
+        )
+        self.assertIsNone(result["slot_conflicts"])
+        self.assertNotIn("household_types", result["slots"]["profile_sourced"])
 
 
 class ProfileHardGateTests(unittest.TestCase):

@@ -308,14 +308,6 @@ def _parse_ts(value) -> datetime | None:
 # ---------------------------------------------------------------------------
 # 암호화 헬퍼
 # ---------------------------------------------------------------------------
-def _encrypt_string_list(items) -> str | None:
-    """문자열 리스트를 JSON으로 묶어 암호화한다(``interests``/``household_types``
-    공용)."""
-
-    cleaned = [str(x).strip() for x in (items or []) if str(x).strip()]
-    if not cleaned:
-        return None
-    return encrypt_pii(json.dumps(cleaned, ensure_ascii=False))
 def _encrypt_safe(plaintext: str) -> str:
     """``encrypt_pii`` 를 감싸 키 설정 오류를 AuthError 계열로 통일한다.
 
@@ -333,11 +325,15 @@ def _encrypt_safe(plaintext: str) -> str:
         ) from exc
 
 
-def _encrypt_interests(interests) -> str | None:
-    items = [str(x).strip() for x in (interests or []) if str(x).strip()]
-    if not items:
+def _encrypt_string_list(items) -> str | None:
+    """문자열 리스트를 JSON으로 묶어 암호화한다(``interests``/``household_types``
+    공용). ``_encrypt_safe``를 거치므로 키 설정 오류가 원본 ``RuntimeError``로
+    새지 않고 ``AuthBackendUnavailableError``로 통일된다."""
+
+    cleaned = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if not cleaned:
         return None
-    return _encrypt_safe(json.dumps(items, ensure_ascii=False))
+    return _encrypt_safe(json.dumps(cleaned, ensure_ascii=False))
 
 
 def _decrypt_string_list(token) -> tuple[str, ...]:

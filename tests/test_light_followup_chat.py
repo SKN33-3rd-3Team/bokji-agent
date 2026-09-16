@@ -76,7 +76,7 @@ init_session()
 {_SEED_AUTH}
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     return {{
         "status": "answered",
         "answer_status": "complete",
@@ -148,7 +148,7 @@ def test_clicking_ask_button_opens_chat_dialog(tmp_path) -> None:
     detail = next(b for b in app.button if b.label == "자세히 보기")
     app = detail.click().run(timeout=10)
 
-    ask = next(b for b in app.button if b.label == "이 정책에 대해 물어보기")
+    ask = next(b for b in app.button if b.label == "이 정책에 대해 추가 질문하기")
     app = ask.click().run(timeout=10)
 
     assert app.session_state["detail_chat_policy"]["policy_id"] == "P1"
@@ -166,7 +166,9 @@ def test_close_button_closes_chat_dialog(tmp_path) -> None:
     )
     assert "detail_chat_policy" in app.session_state
 
-    close = next(b for b in app.button if b.label == "닫기")
+    # 닫기 버튼은 아이콘 전용(라벨 없음, 우상단) - dismissible=False로 바뀌면서
+    # 기본 X 버튼 자리에 직접 놓았다(_detail_chat_dialog 참고).
+    close = next(b for b in app.button if b.key == "detail_chat_exit")
     app = close.click().run(timeout=10)
 
     assert "detail_chat_policy" not in app.session_state

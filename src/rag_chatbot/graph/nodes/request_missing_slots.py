@@ -30,6 +30,32 @@ from __future__ import annotations
 from ..llm_gateway import generate_followup_question
 from ..state import GraphState
 
+# 충돌 재확인 문장에 쓰는 짧은 슬롯 라벨. streamlit_ui/constants.py의
+# SLOT_LABELS_KO와 같은 어휘를 쓰되, 그래프 노드가 UI 레이어를 import하면
+# 안 되므로(레이어 위반) 이 파일에 따로 둔다. 하드 게이트 슬롯 5개 +
+# household_types(2026-09-15, 지역 충돌 재확인을 다른 프로필 슬롯까지
+# 확장하면서 추가) - employment_status/veteran_status는 여기 없다(각각
+# "프로필 값 자체가 없어 충돌이 생길 수 없음"/"팀 결정으로 대화 중 재확인
+# 대상에서 제외"라 slot_conflicts에 절대 나타나지 않는다, service.ask()
+# docstring 참고).
+_CONFLICT_FIELD_LABELS: dict[str, str] = {
+    "region": "거주 지역",
+    "gender": "성별",
+    "birth_date": "생년월일",
+    "income_bracket": "소득 수준",
+    "disability_status": "장애 등록 여부",
+    "household_types": "가구 유형",
+}
+
+
+def _conflict_sentence(field: str, conflict: dict[str, str]) -> str:
+    label = _CONFLICT_FIELD_LABELS.get(field, field)
+    return (
+        f"회원 정보에는 {label}이(가) '{conflict['profile']}'로 돼 있는데, "
+        f"방금은 '{conflict['chat']}'이라고 하셨어요. 어느 쪽이 맞는지 다시 "
+        "알려주세요."
+    )
+
 
 def request_missing_slot_input(state: GraphState) -> dict:
     """부족한 슬롯을 사용자에게 안내하고 재입력을 요청한다."""
@@ -44,7 +70,29 @@ def request_missing_slot_input(state: GraphState) -> dict:
     asked = list(missing_slots)
 
     general_law_references = state.get("general_law_references", [])
-    question = generate_followup_question(len(general_law_references), asked)
+    slot_conflicts = state.get("slot_conflicts") or {}
+    # 충돌 재확인 대상인 슬롯은 번호 목록에서 뺀다 - 아래 충돌 문장과, 채팅
+    # 값이 미리 선택된 폼 위젯으로 이미 설명되므로 번호 목록에 또 넣으면
+    # 중복이다(request_missing_slots.py 문서 및 llm_gateway.generate_followup_
+    # question 문서 참고).
+    exclude_from_list = set(slot_conflicts) if slot_conflicts else None
+    question = generate_followup_question(
+        len(general_law_references), asked, exclude_from_list=exclude_from_list
+    )
+
+    # 회원 프로필 값과 이번 대화에서 말한 값이 달라 되묻는 경우엔, 그
+    # 사실을 명시적으로 알려준다(2026-09-15 추가) - 그냥 "거주 지역이
+    # 필요해요"만 보이면 "회원가입 때 이미 넣었는데 왜 또 묻지?"로 헷갈린다.
+    # 여러 슬롯이 동시에 충돌하면(드물지만 한 턴에 지역·성별을 같이 정정하는
+    # 경우) 문장을 여러 줄로 이어붙인다.
+    conflict_sentences = [
+        _conflict_sentence(field, slot_conflicts[field])
+        for field in missing_slots
+        if field in slot_conflicts
+    ]
+    if conflict_sentences:
+        conflict_block = "\n".join(conflict_sentences)
+        question = f"{conflict_block}\n\n{question}" if question else conflict_block
 
     # 원본 dict을 in-place로 바꾸면 checkpointer가 든 과거 스냅샷까지
     # 오염된다(N1의 리스트 복사와 같은 이유).

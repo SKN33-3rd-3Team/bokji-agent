@@ -28,7 +28,7 @@ import streamlit_ui  # noqa: F401  # rag_design / rag_chatbot import 경로 부�
 
 from src.rag_chatbot import service as _service
 from streamlit_ui.pages import chat
-from streamlit_ui.session import init_session
+from streamlit_ui.session import init_session, maybe_dev_autologin
 from streamlit_ui.theme import render_header
 
 # ── 1. 벡터 DB 체크 통과시키기 (파일 존재만 보므로 빈 파일이면 충분) ──────
@@ -142,6 +142,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 init_session()
+# 데모 전용 진입점이라 여기서만 명시적으로 자동 로그인을 켠다
+# (streamlit_ui.session.maybe_dev_autologin 문서 참고 - app.py는 이
+# 호출이 아예 없다).
+maybe_dev_autologin()
 # init_session()이 profile을 []로 심으므로 setdefault로는 안 되고 직접 채운다.
 if not st.session_state.get("profile"):
     st.session_state["profile"] = list(_FAKE_PROFILE)
