@@ -50,8 +50,32 @@ def new_conversation(
     # 사이드바 "파악한 정보"에 쓰는 값(서비스 응답의 output_json["profile"]).
     # 소득·장애 같은 값이 들어 있으므로 새 상담에서는 반드시 비운다.
     state["profile"] = []
+    # 정책 상세 문의 채팅방도 해제한다(새 상담은 특정 정책에 묶이지 않는다).
+    state.pop("detail_chat_policy", None)
+    state.pop("detail_chat_history", None)
     if clear_messages:
         state["messages"] = []
+
+
+def get_last_answered_result(messages: list) -> dict | None:
+    """``messages``에서 가장 최근의 완료된(``status="answered"``) 상담 응답을 찾는다.
+
+    후속질문 경량 응답이 재사용할 컨텍스트다. 답변이 끝나면
+    ``new_conversation``이 ``conversation_id``·``slots``·``profile``을 비우지만
+    ``messages``는 그대로 남으므로(``clear_messages=False``), 여기서 마지막
+    응답(``final_answer``/``final_citations``/``policies`` 포함)을 되찾을 수 있다.
+
+    ``needs_input``(되묻는 중)이나 ``error`` 응답은 건너뛴다 - 완결된 답이 아니다.
+    반환값은 원본을 건드리지 않도록 얕은 복사본이다.
+    """
+
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        result = message.get("result")
+        if isinstance(result, dict) and result.get("status") == "answered":
+            return dict(result)
+    return None
 
 
 def init_session() -> None:
@@ -65,6 +89,62 @@ def init_session() -> None:
     # 로그인 사용자: None 또는 auth_user_dict() 결과.
     # display_name·interests 는 로그인 시 복호화된 값이다(원문 저장 아님).
     st.session_state.setdefault("auth_user", None)
+    # 개발용 자동 로그인(maybe_dev_autologin)은 여기서 부르지 않는다 - 실제
+    # 서비스 진입점인 app.py는 이 init_session()만 호출하므로, 배포 환경에
+    # DEV_AUTOLOGIN_EMAIL이 실수로 남아 있어도 자동 로그인은 아예 실행되지
+    # 않는다(2026-09-15, PR #60 리뷰 반영). 이전에는 AUTH_DB_URL이 비어
+    # 있으면(로컬 SQLite) 이 함수가 조건 없이 실행돼서, "로컬 SQLite로 외부
+    # 접속을 허용한 채" 돌리는 배포 형태에서는 여전히 접속한 아무나가 그
+    # 계정으로 로그인되는 인증 우회가 가능했다 - AUTH_DB_URL 체크 하나로
+    # "이건 배포다"를 판단하는 데 기댄 게 근본 원인이었다. 자동 로그인이
+    # 필요한 로컬 데모는 demo_ui_fake.py처럼 이 함수 호출 뒤에
+    # maybe_dev_autologin()을 명시적으로 따로 불러야 한다 - app.py는
+    # 이 함수를 import조차 하지 않는다.
+
+
+def maybe_dev_autologin() -> None:
+    """개발 편의: ``.env``에 ``DEV_AUTOLOGIN_EMAIL``이 있으면 그 계정으로 자동
+    로그인한다. 앱을 재시작할 때마다 로그인·상담을 다시 하지 않아도 된다.
+
+    **``init_session()``이 아니라, 이 함수를 명시적으로 직접 부르는 진입점
+    (``demo_ui_fake.py``)에서만 쓴다.** 실제 서비스 진입점 ``app.py``는
+    ``init_session()``만 부르고 이 함수는 아예 참조하지 않으므로,
+    ``DEV_AUTOLOGIN_EMAIL``이 운영 환경 변수에 실수로 남아 있어도 실서비스
+    동작에는 아무 영향이 없다(2026-09-15, PR #60 리뷰 반영 - 예전에는
+    ``init_session()``이 이 함수를 조건 없이 불렀고, "``AUTH_DB_URL``이
+    비어 있으면 로컬 SQLite니까 개발 환경"이라는 가정 하나에만 기대서
+    막았다. 로컬 SQLite로 외부 접속을 허용한 채 돌리는 배포 형태에서는
+    그 가정이 깨져 인증 우회가 됐다 - "값을 지우는 걸 기억하기"가 아니라
+    "이 함수를 부르는 코드 경로 자체가 없다"로 막는 쪽이 더 안전하다).
+
+    운영에서는 이 변수를 비워 두면 아무 일도 안 한다. 명시적으로 로그아웃하면
+    같은 세션에서는 다시 자동 로그인하지 않는다(``_dev_autologin_done`` 플래그).
+
+    ``AUTH_DB_URL``이 설정돼 있으면(원격 MySQL/MariaDB - 운영 배포의 표시,
+    docs/AUTH_REMOTE_DB.md 참고) 이 값이 남아있어도 자동 로그인을 하지
+    않는다 - 이제는 두 번째 방어선이다(첫 번째는 위 호출 경로 분리).
+    """
+
+    import os
+
+    email = (os.environ.get("DEV_AUTOLOGIN_EMAIL") or "").strip()
+    if not email or st.session_state.get("auth_user") is not None:
+        return
+    if st.session_state.get("_dev_autologin_done"):
+        return
+    if (os.environ.get("AUTH_DB_URL") or "").strip():
+        # 원격 DB를 쓴다는 건 배포 환경으로 본다 - 여기서 즉시 그만두되,
+        # 다음 rerun마다 이 검사를 반복하지 않도록 완료 플래그는 남긴다.
+        st.session_state["_dev_autologin_done"] = True
+        return
+    try:
+        from rag_chatbot.auth import get_profile
+
+        st.session_state["auth_user"] = auth_user_dict(get_profile(email))
+        st.session_state["_dev_autologin_done"] = True
+    except Exception:
+        # 계정이 없거나 auth DB가 없으면 조용히 넘어간다(그냥 수동 로그인).
+        st.session_state["_dev_autologin_done"] = True
 
 
 def auth_user_dict(user) -> dict:
@@ -76,7 +156,13 @@ def auth_user_dict(user) -> dict:
         "display_name": user.display_name,
         "created_at": user.created_at,
         "region": user.region,
+        "gender": user.gender,
+        "birth_date": user.birth_date,
         "interests": list(user.interests),
+        "disability_status": user.disability_status,
+        "veteran_status": user.veteran_status,
+        "income_bracket": user.income_bracket,
+        "household_types": list(user.household_types),
         "marketing_opt_in": user.marketing_opt_in,
     }
 
@@ -98,8 +184,21 @@ def clear_conversation_state() -> None:
     공용 PC 에서 로그아웃·계정 전환 시 이전 사용자의 상담 내용과 소득·장애·
     임신 등 슬롯이 다음 사용자에게 그대로 보이지 않게 한다. init_session 이
     심는 기본값과 같은 형태로 되돌린다.
+
+    사이드바 "지원조건"/"관심 분야" 멀티셀렉트 위젯 키(``interests_pick``/
+    ``fields_pick``)도 함께 지운다 - Streamlit은 위젯 키가 이미
+    session_state에 있으면 ``default=``를 무시하므로, 여기서 안 지우면
+    로그인 직후에도 회원가입 때 저장한 관심조건이 기본 선택값으로 채워지지
+    않는다(이전 사용자가 고른 값이 그대로 남는 문제이기도 하다).
     """
 
+    st.session_state.pop("interests_pick", None)
+    st.session_state.pop("fields_pick", None)
+    # home.py(마이페이지 정보 기반 정책 자동 검색)의 캐시된 세션·결과도
+    # 이전 사용자 것이 다음 사용자에게 그대로 보이지 않게 비운다.
+    st.session_state.pop("home_session_id", None)
+    st.session_state.pop("home_result", None)
+    st.session_state.pop("home_followup_answer", None)
     new_conversation(st.session_state, clear_messages=True)
 
 

@@ -244,6 +244,11 @@ _HOUSEHOLD_TYPE_RULES = (
         ("혼자 살", "혼자 삽니다"),
         ("1인 가구", "1인가구"),
     ),
+    # 강사님 주제 컨펌(2026-09-14)으로 추가된 값. 다른 가구유형과 같은
+    # 규칙기반 커버리지를 맞춘다 - 이 규칙이 없으면 HF_TOKEN 미설정 등으로
+    # LLM 없이 규칙기반만 도는 환경(project-status 메모 참고)에서 "신혼
+    # 부부입니다"처럼 말해도 이 값만 추출되지 않는 비대칭이 생긴다.
+    (HouseholdType.NEWLYWED, (), ("신혼부부",)),
 )
 # 소득은 금액이 아니라 구간으로만 받는다. 사용자가 아는 것("기초생활수급자",
 # "차상위")과 제도가 쓰는 기준(소득인정액)을 이어주는 표현만 매핑한다.
@@ -287,7 +292,7 @@ _INTEREST_KEYWORDS = (
 # 그래서 후보 어휘를 공식 시/도 전체 명칭(``CANONICAL_SIDO_NAMES``)과 자주
 # 쓰는 축약형(``_BARE_SIDO_NAMES``)의 리터럴 목록으로 한정한다. 시군구
 # 단독 명칭(예: "강남구", "중구")은 이 목록에 없으므로 애초에 region_raw로
-# 잡히지 않고, 결과적으로 정규화 단계(``slot_parser._normalize_region``)에서
+# 잡히지 않고, 결과적으로 정규화 단계(``slot_parser.normalize_region_input``)에서
 # unknown으로 처리되는 것과 동일한 결과를 유지한다(공통 validator에 시군구
 # registry가 없어 임의로 해석하지 않는다는 팀 결정과 일치).
 _BARE_SIDO_NAMES = (
@@ -566,7 +571,7 @@ def _validated_llm_slots(
 
     region_raw = data.get("region_raw")
     if isinstance(region_raw, str) and region_raw.strip():
-        # 정규화/검증은 N1의 _normalize_region이 한다(규칙 경로와 동일).
+        # 정규화/검증은 N1의 normalize_region_input이 한다(규칙 경로와 동일).
         validated["region_raw"] = region_raw.strip()
 
     for field in _LLM_ENUM_FIELDS:
@@ -957,7 +962,10 @@ _REFERENCE_NOTICE = "지역과 무관하게 적용되는 관련 법령 참고 �
 
 
 def generate_followup_question(
-    reference_count: int, missing_slots: Sequence[str] | None = None
+    reference_count: int,
+    missing_slots: Sequence[str] | None = None,
+    *,
+    exclude_from_list: Sequence[str] | None = None,
 ) -> str:
     """부족한 슬롯을 사용자에게 되묻는 문구를 만든다.
 
@@ -972,9 +980,15 @@ def generate_followup_question(
     ``MAX_SLOT_ASKS`` 상한에 먼저 닿아버리는 문제가 더 컸다. 이제는 부족한
     항목을 한 번에 번호 목록으로 묶어 묻는다.
 
-    문구 생성은 여전히 규칙 기반 템플릿이다(참고자료 결정사항 시트 9번은
-    "확인 필요"로 남아 있고, 모델 Fine-tuning은
-    ``docs/PROJECT_COMPLIANCE.md``가 정한 Baseline 이전 비범위 항목).
+    ``exclude_from_list``에 있는 슬롯은 ``missing_slots``에는 그대로 두되
+    번호 목록에서만 뺀다 - 그 슬롯이 이미 다른 문구(예: 지역 충돌 재확인
+    문장)나 위젯(예: 미리 선택된 선택지)으로 따로 설명되고 있어, 번호
+    목록에까지 다시 넣으면 같은 내용이 두 번 보인다(2026-09-15, 사용자
+    피드백 - "밑에 폼에 똑같은 내용 반복" 지적 반영). '모름 안내'/'참고
+    법령 안내'는 특정 슬롯이 아니라 되묻기 전체에 대한 공통 안내라 계속
+    붙인다. 목록에 남는 슬롯이 하나도 없으면(예: 부족한 슬롯이 지역
+    하나뿐이고 그 지역이 충돌로 제외된 경우) 인트로 문장과 번호 목록 자체를
+    통째로 생략한다 - 빈 "아래 정보가 필요해요" 문장만 남는 걸 막기 위함.
     """
 
     slots = list(missing_slots) if missing_slots else [REGION_SLOT]
@@ -982,12 +996,17 @@ def generate_followup_question(
     ordered = [slot for slot in HARD_GATE_SLOTS if slot in slots]
     ordered += [slot for slot in slots if slot not in HARD_GATE_SLOTS]
 
-    lines = [_ASK_INTRO]
-    lines += [
-        f"{number}. {_SLOT_ASK_ITEMS.get(slot, _UNKNOWN_SLOT_ITEM)}"
-        for number, slot in enumerate(ordered, start=1)
-    ]
-    lines.append(_SKIP_NOTICE)
+    exclude = set(exclude_from_list or ())
+    listed = [slot for slot in ordered if slot not in exclude]
+
+    lines: list[str] = []
+    if listed:
+        lines.append(_ASK_INTRO)
+        lines += [
+            f"{number}. {_SLOT_ASK_ITEMS.get(slot, _UNKNOWN_SLOT_ITEM)}"
+            for number, slot in enumerate(listed, start=1)
+        ]
+        lines.append(_SKIP_NOTICE)
     if reference_count:
         lines.append(_REFERENCE_NOTICE)
     return "\n".join(lines)

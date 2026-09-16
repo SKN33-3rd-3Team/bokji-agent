@@ -109,6 +109,33 @@ class HouseholdType(str, Enum):
     NORTH_KOREAN_DEFECTOR = "north_korean_defector"
     CARE_LEAVER = "care_leaver"
     FACILITY_LEAVER = "facility_leaver"
+    # 강사님 주제 컨펌(2026-09-14): 신혼부부는 별도 슬롯을 새로 만들지 않고
+    # 이 가구유형 목록의 값 하나로 포함한다(보훈대상자는 성격이 달라
+    # VeteranStatus로 별도 슬롯을 둔다 - 아래 참고).
+    NEWLYWED = "newlywed"
+
+
+class VeteranStatus(str, Enum):
+    """국가유공자/보훈대상자 여부.
+
+    가구유형(household_types)과는 성격이 다른 별개의 법적 지위라서(강사님
+    주제 컨펌, 2026-09-14) 가구유형에 끼워넣지 않고 별도 슬롯으로 둔다.
+    다만 이 슬롯은 ``HARD_GATE_SLOTS``에도 ``FILTERABLE_SLOTS``에도 **의도적으로
+    넣지 않는다** - N3가 대화 중 다시 묻지도, N4가 검색 필터로 걸지도 않는다.
+    정부24 raw 지원조건 sidecar(``policy_conditions.py``)의 JA 코드 중 어느
+    것이 보훈에 대응하는지 이 코드베이스 어디에도 검증 가능한 형태로 없고
+    원본 raw JSON도 확인할 수 없어서, 추측한 코드로 필터를 걸면 검증 안 된
+    조건으로 정책이 조용히 탈락/통과할 위험이 있다 - "지어내지 않는다"는
+    이 모듈 전반의 fail-open/fail-closed 원칙과 어긋난다. 그래서 이 값은
+    ``service.ask()``가 회원가입 때 저장된 값을 ``interests``(소프트 검색
+    키워드, 자격 판정에 관여하지 않음)에만 반영한다. 나중에 실제 JA 코드가
+    확인되면 ``policy_conditions.matches_profile()``에 다섯 번째 범주로
+    추가하는 국소적 후속 작업으로 확장할 것 - 이 슬롯을 빠뜨린 게 아니다.
+    """
+
+    REGISTERED = "registered"
+    NOT_REGISTERED = "not_registered"
+    UNKNOWN = UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +197,54 @@ INCOME_BRACKET_ORDER: dict[str, int] = {
     IncomeBracket.OVER_150.value: 5,
 }
 
+# 슬롯 코드값 -> 한글 라벨. service.py의 "파악한 정보" 응답과
+# request_missing_slots.py의 지역 충돌류 재확인 문구가 같은 어휘를 쓰게
+# 한 곳에 모은다(2026-09-15, 지역 충돌 재확인을 다른 프로필 슬롯까지
+# 확장하면서 신설 - 전에는 service.py에만 로컬로 있었다).
+GENDER_KO: dict[str, str] = {"male": "남성", "female": "여성"}
+# "~"가 아니라 "-"를 쓴다(streamlit_ui.session.md_text와 같은 이유 - "~"는
+# GFM 취소선(~~) 문법과 겹쳐서 채팅 말풍선에 그대로 markdown으로 나가면
+# 깨질 수 있다). streamlit_ui/pages/chat.py의 _INCOME_CHOICES와 반드시
+# 같은 문자열을 유지한다 - 지역 충돌 재확인 폼이 이 라벨로 위젯 기본값을
+# 찾는다(문자열이 다르면 미리 선택되지 않는다).
+INCOME_BRACKET_KO: dict[str, str] = {
+    "under_30": "기초생활수급 수준(중위소득 30% 이하)",
+    "pct_30_50": "차상위 수준(중위소득 30-50%)",
+    "pct_50_75": "중위소득 50-75%",
+    "pct_75_100": "중위소득 75-100%",
+    "pct_100_150": "중위소득 100-150%",
+    "over_150": "중위소득 150% 초과",
+}
+DISABILITY_STATUS_KO: dict[str, str] = {
+    "registered": "장애 등록", "not_registered": "장애 없음",
+}
+EMPLOYMENT_STATUS_KO: dict[str, str] = {
+    "employed": "재직",
+    "job_seeking": "구직",
+    "self_employed": "자영업",
+    "student": "학생",
+    "not_working": "무직",
+}
+MARITAL_STATUS_KO: dict[str, str] = {
+    "single": "미혼", "married": "기혼", "divorced": "이혼", "bereaved": "사별",
+}
+PREGNANCY_STATUS_KO: dict[str, str] = {
+    "pregnant": "임신 중", "postpartum": "산후", "none": "해당 없음",
+}
+HOUSEHOLD_TYPE_KO: dict[str, str] = {
+    "single_parent": "한부모", "multi_child": "다자녀", "multicultural": "다문화",
+    "grandparent": "조손", "single_person": "1인 가구",
+    "north_korean_defector": "북한이탈주민", "care_leaver": "자립준비청년",
+    "facility_leaver": "시설퇴소", "newlywed": "신혼부부",
+}
+# veteran_status는 하드 게이트 슬롯이 아니라 known_veteran_status로 채워진
+# interests 텍스트("국가유공자/보훈")로만 검색에 반영되므로(service.ask()
+# docstring 참고), 이 슬롯 자체는 대화 중 채워지지 않는다. 그래도 프로필
+# 표시용 라벨은 남겨둔다 - 다른 경로로 slots에 실릴 가능성까지 막지 않기
+# 위함(예: 향후 회원 정보를 그대로 slots에 얹는 경로가 생길 경우).
+VETERAN_STATUS_KO: dict[str, str] = {"registered": "보훈대상자", "not_registered": "해당 없음"}
+
+
 SLOT_ENUMS: dict[str, type[Enum]] = {
     "age_subject": AgeSubject,
     "gender": Gender,
@@ -178,6 +253,12 @@ SLOT_ENUMS: dict[str, type[Enum]] = {
     "employment_status": EmploymentStatus,
     "marital_status": MaritalStatus,
     "pregnancy_status": PregnancyStatus,
+    # HARD_GATE_SLOTS/FILTERABLE_SLOTS에는 넣지 않는다 - VeteranStatus
+    # 클래스 docstring 참고. is_valid_slot_value("veteran_status", ...)
+    # 재사용만을 위해 등록한다. llm_gateway._LLM_ENUM_DESCRIPTIONS(수동
+    # 관리 dict)에 이 필드를 추가하지 않는 한 LLM/규칙 기반 추출에는
+    # 영향이 없다(SLOT_ENUMS를 직접 순회해 프롬프트를 만들지 않음).
+    "veteran_status": VeteranStatus,
 }
 
 # 같은 슬롯을 몇 번까지 되물을지. 이 횟수를 넘기면 센티넬(UNKNOWN)로 확정하고

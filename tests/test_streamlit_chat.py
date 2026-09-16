@@ -32,10 +32,23 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+# 로그인 게이트를 통과시킨다 - 예전에는 개발자 로컬 .env의
+# DEV_AUTOLOGIN_EMAIL이 init_session() 안에서 새어 들어와 이 값 없이도
+# 우연히 로그인된 것처럼 통과했지만(PR #60 리뷰로 그 경로를 막았다),
+# 그건 테스트가 로컬 환경에 암묵적으로 의존하던 것이라 여기서 명시적으로
+# 로그인 상태를 만든다. setdefault로 두어야 이후 테스트가 재실행 사이에
+# session_state.auth_user를 직접 바꿔도(예: 로그인 사용자 교체) 이 스크립트가
+# 매 rerun마다 그 값을 덮어쓰지 않는다.
+st.session_state.setdefault("auth_user", {{
+    "username": "user@example.com",
+    "display_name": "테스터",
+    "region": "",
+    "interests": [],
+}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -90,9 +103,15 @@ def test_authenticated_sidebar_reset_and_logout_clear_conversation(tmp_path) -> 
     app = app.run(timeout=10)
     first_id = app.session_state["conversation_id"]
 
-    assert any("김복지 님으로 로그인됨" in str(item.value) for item in app.caption)
+    assert any("김복지 님" in str(item.value) for item in app.markdown)
     assert not any(button.label == "로그인" for button in app.button)
-    next(button for button in app.button if button.label == "대화 초기화").click()
+    # "새 상담 시작"은 이제 바로 초기화하지 않고 확인 팝업을 먼저 띄운다
+    # (2026-09-15, PR 리뷰 피드백 반영 - 실수로 눌러 대화가 통째로 사라지는
+    # 걸 막기 위함). 사이드바 버튼(key=sb_new_chat)을 눌러 팝업을 연 뒤,
+    # 팝업 안의 확인 버튼(key=confirm_reset_go)을 눌러야 실제로 초기화된다.
+    next(button for button in app.button if button.key == "sb_new_chat").click()
+    app = app.run(timeout=10)
+    next(button for button in app.button if button.key == "confirm_reset_go").click()
     app = app.run(timeout=10)
 
     assert app.session_state["auth_user"]["username"] == "user@example.com"
@@ -140,9 +159,11 @@ def test_runtime_exception_is_redacted_from_user(tmp_path) -> None:
     (data_dir / "chroma.sqlite3").touch()
     script = f'''\
 from pathlib import Path
+import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
@@ -166,9 +187,11 @@ def test_fresh_result_render_exception_is_redacted_from_user(tmp_path) -> None:
     (data_dir / "chroma.sqlite3").touch()
     script = f'''\
 from pathlib import Path
+import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 chat.run_pipeline = lambda **kwargs: {{"status": "answered"}}
@@ -197,9 +220,11 @@ def test_fresh_result_render_exception_preserves_followup_transition(tmp_path) -
     (data_dir / "chroma.sqlite3").touch()
     script = f'''\
 from pathlib import Path
+import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 chat.run_pipeline = lambda **kwargs: {{"status": "needs_input", "question": "지역?"}}
@@ -232,6 +257,7 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 st.session_state.messages = [
     {{"role": "assistant", "result": {{"status": "answered"}}}}
@@ -263,10 +289,11 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     if awaiting_followup:
         return {{
             "status": "answered",
@@ -335,8 +362,13 @@ def test_reset_conversation_clears_profile_sidebar(tmp_path) -> None:
     app.chat_input[0].set_value("서울 살아요").run(timeout=10)
     assert app.session_state["profile"]
 
-    reset = next(b for b in app.sidebar.button if "대화 초기화" in b.label)
-    app = reset.click().run(timeout=10)
+    # "새 상담 시작"은 확인 팝업을 거친다(위 test_authenticated_sidebar_
+    # reset_and_logout_clear_conversation 참고) - 사이드바 버튼으로 팝업을
+    # 연 뒤 팝업 안의 확인 버튼을 눌러야 실제로 초기화된다.
+    next(b for b in app.sidebar.button if b.key == "sb_new_chat").click()
+    app = app.run(timeout=10)
+    next(b for b in app.button if b.key == "confirm_reset_go").click()
+    app = app.run(timeout=10)
 
     assert app.session_state["profile"] == []
     assert "파악한 정보" not in _sidebar_markdown(app)
@@ -373,10 +405,11 @@ import streamlit as st
 from streamlit_ui.session import init_session
 from streamlit_ui.pages import chat
 
+st.session_state.setdefault("auth_user", {{"username": "user@example.com", "display_name": "테스터"}})
 init_session()
 chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
 
-def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None):
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
     # run_pipeline 은 워커 스레드에서 돌기 때문에 여기서 st.session_state 를
     # 건드릴 수 없다(ScriptRunContext 없음). 받은 값을 응답에 실어 보낸다.
     return {{
@@ -399,7 +432,9 @@ def test_sidebar_condition_and_field_pickers_reach_the_pipeline(tmp_path) -> Non
     (data_dir / "chroma.sqlite3").touch()
     app = _interests_chat_app(data_dir)
 
-    labels = [element.label for element in app.sidebar.multiselect]
+    # 지원조건/관심 분야 선택 위젯은 multiselect가 아니라 pills다
+    # (2026-09-15, 사이드바 개편 - "지원조건" 칩 클릭형 UI로 변경).
+    labels = [element.label for element in app.sidebar.pills]
     assert labels == ["지원조건", "관심 분야"]
 
     app.session_state["interests_pick"] = ["청년"]
@@ -431,6 +466,14 @@ def test_sidebar_pickers_send_empty_list_when_nothing_selected(tmp_path) -> None
     data_dir.mkdir()
     (data_dir / "chroma.sqlite3").touch()
     app = _interests_chat_app(data_dir)
+    # 사이드바 pills는 회원가입 때 고른 관심사를 기본 선택값으로 깐다
+    # (chat.py `_render_sidebar` 참고). 이 테스트는 "로그인 계정이 어떤
+    # 관심사를 저장해 뒀는지"와 무관하게 "사용자가 아무것도 고르지 않으면
+    # 빈 리스트가 전달되는지"만 보려는 것이므로, 두 위젯을 명시적으로
+    # 빈 선택 상태로 만들어 그 계정의 기본값에 흔들리지 않게 한다.
+    app.session_state["interests_pick"] = []
+    app.session_state["fields_pick"] = []
+    app = app.run(timeout=10)
 
     app.chat_input[0].set_value("질문").run(timeout=10)
 
@@ -467,3 +510,179 @@ def test_profile_sidebar_replaces_tilde_with_hyphen(tmp_path) -> None:
     sidebar = _sidebar_markdown(app)
     assert "중위소득 30-50%" in sidebar
     assert "~" not in sidebar
+
+
+# ── 로그인 사용자의 회원가입 정보 자동 연동 ─────────────────────────
+
+
+def _chat_app_for_signed_up_user(data_dir, *, region: str, interests: list[str]) -> AppTest:
+    """``auth_user``가 이미 로그인된 채로 채팅 화면이 처음 그려지는 상황.
+
+    (인터랙티브하게 로그인 버튼을 누르는 흐름이 아니라, 로그인된 세션으로
+    페이지를 새로 열거나 새로고침한 경우다 - 이때는 ``interests_pick``
+    위젯 키가 아직 session_state에 없어서 ``default=``가 실제로 적용된다.)
+    ``run_pipeline``은 받은 ``extra_interests``/``known_region``을 그대로
+    답변 문구에 실어 보낸다.
+    """
+
+    script = f'''\
+from pathlib import Path
+import streamlit as st
+from streamlit_ui.session import init_session
+from streamlit_ui.pages import chat
+
+st.session_state.auth_user = {{
+    "username": "user@example.com",
+    "display_name": "김복지",
+    "region": {region!r},
+    "interests": {interests!r},
+}}
+init_session()
+chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
+
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
+    return {{
+        "status": "answered",
+        "answer_status": "complete",
+        "final_answer": f"interests={{extra_interests!r}} region={{known_region!r}}",
+        "final_citations": [],
+        "policies": [],
+    }}
+
+chat.run_pipeline = fake_run_pipeline
+chat.page_chat()
+'''
+    return AppTest.from_string(script).run(timeout=10)
+
+
+def test_signed_up_interests_prefill_the_condition_picker(tmp_path) -> None:
+    """회원가입 때 고른 지원조건이 사이드바 pills 기본값으로 들어온다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="부산광역시", interests=["장애인", "청년"])
+
+    condition_picker = next(
+        element for element in app.sidebar.pills if element.label == "지원조건"
+    )
+    assert condition_picker.value == ["장애인", "청년"]
+    # "관심 분야"는 회원가입에서 받지 않으니 그대로 빈 채로 시작한다.
+    field_picker = next(
+        element for element in app.sidebar.pills if element.label == "관심 분야"
+    )
+    assert field_picker.value == []
+
+    # 기본값을 그대로 두면 그 값이 파이프라인까지 전달된다.
+    app.chat_input[0].set_value("질문").run(timeout=10)
+    assert "interests=['장애인', '청년']" in " ".join(_values(app.markdown))
+
+
+def test_signed_up_interests_default_is_still_editable(tmp_path) -> None:
+    """자동으로 채워진 관심조건도 이번 상담에 한해 더하거나 지울 수 있다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="부산광역시", interests=["장애인"])
+
+    app.session_state["interests_pick"] = ["장애인", "청년"]
+    app = app.run(timeout=10)
+    app.chat_input[0].set_value("질문").run(timeout=10)
+
+    assert "interests=['장애인', '청년']" in " ".join(_values(app.markdown))
+
+
+def test_unknown_saved_interest_is_dropped_instead_of_crashing(tmp_path) -> None:
+    """INTEREST_OPTIONS에서 사라진 값이 저장돼 있어도 화면이 죽지 않는다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(
+        data_dir, region="", interests=["장애인", "이제는-없는-조건"]
+    )
+
+    assert not app.exception
+    condition_picker = next(
+        element for element in app.sidebar.pills if element.label == "지원조건"
+    )
+    assert condition_picker.value == ["장애인"]
+
+
+def test_signed_up_region_reaches_the_pipeline_without_asking_again(tmp_path) -> None:
+    """회원가입 때 저장한 지역이 대화에서 다시 안 물어도 검색에 반영된다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="부산광역시", interests=[])
+
+    app.chat_input[0].set_value("지원금 받을 수 있나요").run(timeout=10)
+
+    assert "region='부산광역시'" in " ".join(_values(app.markdown))
+
+
+def test_no_saved_region_is_not_forwarded(tmp_path) -> None:
+    """"선택 안 함"으로 가입한 사용자는 빈 문자열이 저장되므로 아무것도 안 보낸다."""
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+    app = _chat_app_for_signed_up_user(data_dir, region="", interests=[])
+
+    app.chat_input[0].set_value("지원금 받을 수 있나요").run(timeout=10)
+
+    assert "region=None" in " ".join(_values(app.markdown))
+
+
+def test_region_widget_still_shown_when_missing_despite_known_profile_region(
+    tmp_path,
+) -> None:
+    """PR #60 리뷰 회귀 테스트 - 예전 ``skip_region`` 지름길이 숨기던 위젯이
+    이제는 그대로 보여야 한다.
+
+    회원 프로필에 지역이 있어도, 백엔드가 ``missing_slots``에 ``region``을
+    넣었다면(예: 채팅에서 새로 말한 지역 텍스트가 정규화에 실패해 슬롯이
+    ``unknown``으로 되돌아간 경우 - 이때는 두 값을 비교할 수 없어
+    ``slot_conflicts``에도 못 싣는다) 위젯 없이 프로필 값을 조용히
+    재제출하면 안 된다. 사용자가 방금 입력해 파싱에 실패한 지역이 안내
+    없이 프로필 값으로 덮여 사라지는 게 원래 버그였다.
+    """
+
+    data_dir = tmp_path / "vector_db"
+    data_dir.mkdir()
+    (data_dir / "chroma.sqlite3").touch()
+
+    script = f'''\
+from pathlib import Path
+import streamlit as st
+from streamlit_ui.session import init_session
+from streamlit_ui.pages import chat
+
+st.session_state.auth_user = {{
+    "username": "user@example.com",
+    "display_name": "김복지",
+    "region": "경기도",
+    "interests": [],
+}}
+init_session()
+chat.VECTOR_DB_DIR = Path({str(data_dir)!r})
+
+def fake_run_pipeline(*, user_input, session_id, awaiting_followup, top_k, extra_interests=None, known_region=None, known_gender=None, known_birth_date=None, known_disability_status=None, known_income_bracket=None, known_household_types=None, known_veteran_status=None):
+    return {{
+        "status": "needs_input",
+        "question": "거주 지역을 알려주세요.",
+        "missing_slots": ["region"],
+        "slot_conflicts": None,
+        "llm_status": {{"enabled": False}},
+    }}
+
+chat.run_pipeline = fake_run_pipeline
+chat.page_chat()
+'''
+    app = AppTest.from_string(script).run(timeout=10)
+    app.chat_input[0].set_value("어쩌구동네로 이사했어요").run(timeout=10)
+
+    assert [box.label for box in app.selectbox] == ["거주 지역"]
+    assert "거주 지역은 회원가입 정보" not in " ".join(_values(app.caption))

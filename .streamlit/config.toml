@@ -89,11 +89,15 @@ grayTextColor = "#475569"
 yellowColor = "#CA8A04"
 
 [theme.light.sidebar]
-backgroundColor = "#EEEEFC"          # 사이드바: 인디고 틴트 패널
-secondaryBackgroundColor = "#E3E3F9"
-codeBackgroundColor = "#E3E3F9"
+# 흰 배경 + 테두리 하나로만 캔버스와 구분한다(카드 비교 서비스 참고, 2026-09-15
+# 확정) - 이전엔 사이드바 전체에 옅은 인디고 틴트를 깔았는데, 포인트 컬러가
+# 배지·버튼·선택된 칩에만 쓰여야 도드라지지, 배경 전체에 깔리면 오히려
+# 화면 전체가 흐릿한 보라색으로 보여서 뺐다.
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F7FA"
+codeBackgroundColor = "#F7F7FA"
 textColor = "#1E2233"
-borderColor = "#E2E1F4"
+borderColor = "#E4E6EF"
 primaryColor = "#4F46E5"
 
 # ── Dark ──────────────────────────────────────────────────────────

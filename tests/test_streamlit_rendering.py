@@ -34,7 +34,12 @@ def _html_values(app) -> list[str]:
     return [str(element.proto.body) for element in app.get("html")]
 
 
-def test_needs_input_renders_question_and_missing_slot_labels() -> None:
+def test_needs_input_renders_question_and_llm_status() -> None:
+    # missing_slots별 라벨(예: "거주 지역", "생년월일")은 더 이상 여기서
+    # 캡션으로 그리지 않는다 - 위젯 폼(streamlit_ui/pages/chat.py의
+    # _render_slot_form)이 담당하는 영역으로 옮겨갔다(2026-09-15, 전체
+    # 테스트 스위트 정리 중 발견 - render_result는 question 문자열과
+    # llm_status만 그린다).
     app = _render(
         {
             "status": "needs_input",
@@ -46,8 +51,6 @@ def test_needs_input_renders_question_and_missing_slot_labels() -> None:
 
     assert "거주 지역과 생년월일을 알려주세요." in _values(app.markdown)
     captions = " ".join(_values(app.caption))
-    assert "거주 지역" in captions
-    assert "생년월일" in captions
     assert "규칙 기반" in captions
 
 
@@ -99,7 +102,11 @@ def test_answer_renders_verified_policy_fields_and_llm_status() -> None:
     # final_answer 문장은 카드가 있을 때는 중복이라 더 보여주지 않는다.
     assert "확인된 범위의 안내입니다." not in markdown
     assert "청년 주거 지원" in grid_html
-    assert "연령만 확인" in grid_html  # 카드 소개문 = verification_note
+    # 카드 소개문은 실제 정책 설명(detail.purpose/support_details)을
+    # verification_note보다 우선한다(rendering.py `_card_intro` 참고,
+    # 2026-09-15 이전 확정 - "이 정책이 뭔지"가 검증 상태 문장에 가려지지
+    # 않게 하려는 의도). 이 fixture는 detail.purpose를 주므로 그게 보인다.
+    assert "주거비 부담 완화" in grid_html
     assert "월 최대 200,000원" in grid_html
     assert "AI 분석 적용" in captions
 
@@ -187,6 +194,18 @@ def test_required_documents_render_as_uniform_bulleted_bars_regardless_of_line_l
             "policies": [
                 {
                     "policy_id": "p1",
+                    "title": "청년월세지원",
+                    "amount_label": "10만원",
+                    "duplicate_status": "가능",
+                },
+                {
+                    "policy_id": "p2",
+                    "title": "청년구직활동지원금",
+                    "amount_label": "20만원",
+                    "duplicate_status": "확인 필요",
+                },
+                {
+                    "policy_id": "p3",
                     "title": "정책 A",
                     "detail": {
                         "required_documents": (
@@ -200,9 +219,23 @@ def test_required_documents_render_as_uniform_bulleted_bars_regardless_of_line_l
         }
     )
 
-    app = next(b for b in app.button if b.key == "policy_open_session-1_p1").click().run(timeout=10)
+    # required_documents가 있는 건 p3뿐이라 p3의 "자세히 보기"로 들어간다
+    # (현재 상세 화면은 grid/detail/compare 3화면 모델이라 한 번에 정책
+    # 하나만 보여준다 - 여러 정책을 화살표로 넘기던 캐러셀은 더 이상 없다,
+    # rendering.py `_render_policy_section` 참고. 2026-09-15, 전체 스위트
+    # 정리 중 발견 - 이 테스트는 그 옛 캐러셀 UI를 기준으로 쓰여 있었다).
+    app = next(b for b in app.button if b.key == "policy_open_session-1_p3").click().run(timeout=10)
     assert not app.exception
+    # 요약 카드 3개만 뜬다 - 상세 화면의 지원금·중복수급은 st.metric이 아니라
+    # HTML stat box로 그린다(`_render_policy_detail_view`의 bkw-statgrid).
+    assert len(app.metric) == 3
+    assert [metric.label for metric in app.metric] == [
+        "확인한 제도", "자격 충족", "미충족·미확인"
+    ]
     detail_html = " ".join(_html_values(app))
+    assert "정책 A" in detail_html
+    back_buttons = [b for b in app.button if "목록으로" in (b.label or "")]
+    assert len(back_buttons) == 1
     assert '<div class="bkw-doclist-row">○ 정부지원 아이돌봄서비스 지원결정서(해당년도 2월 이후 발행분)</div>' in detail_html
     assert '<div class="bkw-doclist-row">○ 수급자 또는 양육자 통장 사본</div>' in detail_html
     # 문단 fallback(md_text로 그냥 뿌리는 경로)으로 빠지지 않는다.

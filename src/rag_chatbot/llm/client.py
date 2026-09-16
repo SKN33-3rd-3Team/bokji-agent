@@ -597,8 +597,8 @@ class HuggingFaceInferenceClient:
                 else "답을 시작도 못 함(추론형 모델이면 사고 과정에 토큰을 다 썼을 수 있음)"
             )
             raise LLMCallError(
-                    f"{'Ollama' if self.base_url else 'HuggingFace'} 응답이 잘림(모델={self.model!r}) - "
-                f"finish_reason='length'로 max_new_tokens={effective_max_tokens} 안에 "
+                f"{'Ollama' if self.base_url else 'HuggingFace'} 응답이 잘림(모델={self.model!r}) - "
+                f"finish_reason='length'로 max_new_tokens={effective_max_tokens} 안에 {detail}"
             )
         if self.base_url and (not isinstance(content, str) or not content.strip()):
             raise LLMCallError("Ollama 응답이 비어 있거나 문자열이 아님")

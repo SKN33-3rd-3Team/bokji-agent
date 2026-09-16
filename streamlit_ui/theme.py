@@ -128,11 +128,63 @@ def _logo_svg(is_dark: bool) -> str:
     )
 
 
+# 프로필 사진 - 실제로 업로드한 사진이 있으면 그걸 쓰고(mypage._profile_edit_form
+# 참고), 없으면 이름 이니셜로 만든 원형 아바타로 대신한다(Slack/Gmail류 기본
+# 아바타 패턴). 이름마다 항상 같은 색이 나오게 문자 코드값 합을 팔레트
+# 인덱스로 쓴다(진짜 랜덤이면 새로고침마다 색이 바뀐다).
+_AVATAR_PALETTE = (
+    "#4F46E5", "#059669", "#D97706", "#DC2626", "#7C3AED", "#2563EB", "#DB2777",
+)
+
+
+def avatar_svg(name: str, *, size: int = 28) -> str:
+    initial = _esc_svg_text((name or "?").strip()[:1] or "?")
+    color = _AVATAR_PALETTE[sum(ord(c) for c in name) % len(_AVATAR_PALETTE)] if name else _AVATAR_PALETTE[0]
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
+        'viewBox="0 0 32 32">'
+        f'<circle cx="16" cy="16" r="16" fill="{color}"/>'
+        '<text x="16" y="21.5" font-family="\'Noto Sans KR\',sans-serif" font-size="15" '
+        f'font-weight="700" fill="#fff" text-anchor="middle">{initial}</text></svg>'
+    )
+
+
+def _esc_svg_text(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def render_avatar(container, *, name: str, size: int = 28) -> None:
+    """아바타 하나를 그린다 - 이름 이니셜이 든 원.
+
+    호출부(사이드바 계정 칸·마이페이지 카드)가 매번 이니셜·색상 계산을
+    직접 하지 않도록 여기 한 곳에 모은다 - 나중에 표시 로직이 바뀌어도
+    이 함수만 고치면 된다.
+
+    (사진 업로드는 아직 없다 - 별도로 다룰 예정.)
+    """
+
+    container.image(avatar_svg(name, size=size), width=size)
+
+
+_HEADER_ROW_KEY = "app_header_row"
+
+
 def render_header() -> None:
     try:
         is_dark = getattr(st.context.theme, "type", "light") == "dark"
     except Exception:  # noqa: BLE001 - 컨텍스트 없으면 라이트로
         is_dark = False
-    row = st.container(horizontal=True, vertical_alignment="center")
-    row.image(_logo_svg(is_dark), width=40)
-    row.title("복지 에이전트")
+
+    border = "#2A2F3C" if is_dark else "#E4E6EF"
+    # 로고+타이틀은 왼쪽, 로그인 상태는 오른쪽 - 컨테이너 자체엔 정렬 옵션이
+    # 없어서 st-key 클래스에 CSS로 직접 space-between을 건다(rendering.py
+    # 비교 바에서 쓰는 것과 같은 방식). 아래쪽 테두리 + 여백도 같이 줘서
+    # "그냥 제목 텍스트"가 아니라 앱 바(topbar)처럼 보이게 한다.
+    st.html(
+        f"<style>[class*='st-key-{_HEADER_ROW_KEY}']{{justify-content:space-between;"
+        f"padding-bottom:14px;margin-bottom:6px;border-bottom:1px solid {border};}}</style>"
+    )
+    row = st.container(horizontal=True, vertical_alignment="center", key=_HEADER_ROW_KEY)
+    brand = row.container(horizontal=True, vertical_alignment="center")
+    brand.image(_logo_svg(is_dark), width=40)
+    brand.title("복지 에이전트")

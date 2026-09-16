@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rag_chatbot.auth import (
     AccountLockedError,
+    AuthError,
     AuthBackendUnavailableError,
     AuthUser,
     InvalidCredentialsError,
@@ -301,7 +302,164 @@ class ServiceTests(unittest.TestCase):
         prof = get_profile("bare@example.com", db_path=self.db)
         self.assertEqual(prof.display_name, "")
         self.assertEqual(prof.region, "")
+        self.assertEqual(prof.gender, "")
+        self.assertEqual(prof.birth_date, "")
         self.assertEqual(prof.interests, ())
+
+    # -- 성별·생년월일 (region과 같은 방식으로 하드게이트 자동 연동에 쓰임) --
+    def test_signup_persists_gender_and_birth_date(self):
+        sign_up("gb@example.com", _GOOD_PW, "김성별", gender="female",
+                birth_date="1998-05-12", db_path=self.db)
+        got = authenticate("gb@example.com", _GOOD_PW, db_path=self.db)
+        self.assertEqual(got.gender, "female")
+        self.assertEqual(got.birth_date, "1998-05-12")
+
+    def test_get_profile_decrypts_gender_and_birth_date(self):
+        sign_up("gb2@example.com", _GOOD_PW, "김성별", gender="male",
+                birth_date="1990-01-01", db_path=self.db)
+        prof = get_profile("gb2@example.com", db_path=self.db)
+        self.assertEqual(prof.gender, "male")
+        self.assertEqual(prof.birth_date, "1990-01-01")
+
+    def test_signup_rejects_invalid_gender(self):
+        with self.assertRaises(AuthError):
+            sign_up("badgender@example.com", _GOOD_PW, "n",
+                    gender="alien", db_path=self.db)
+
+    def test_signup_rejects_malformed_birth_date(self):
+        with self.assertRaises(AuthError):
+            sign_up("badbirth@example.com", _GOOD_PW, "n",
+                    birth_date="1998/05/12", db_path=self.db)
+
+    def test_signup_rejects_future_birth_date(self):
+        with self.assertRaises(AuthError):
+            sign_up("futurebirth@example.com", _GOOD_PW, "n",
+                    birth_date="2999-01-01", db_path=self.db)
+
+    def test_signup_rejects_implausible_birth_date(self):
+        with self.assertRaises(AuthError):
+            sign_up("oldbirth@example.com", _GOOD_PW, "n",
+                    birth_date="1800-01-01", db_path=self.db)
+
+    def test_update_profile_can_set_and_clear_gender_and_birth_date(self):
+        sign_up("gbupdate@example.com", _GOOD_PW, "n", db_path=self.db)
+        updated = update_profile("gbupdate@example.com", gender="female",
+                                 birth_date="2000-03-26", db_path=self.db)
+        self.assertEqual(updated.gender, "female")
+        self.assertEqual(updated.birth_date, "2000-03-26")
+
+        cleared = update_profile("gbupdate@example.com", gender="",
+                                 birth_date="", db_path=self.db)
+        self.assertEqual(cleared.gender, "")
+        self.assertEqual(cleared.birth_date, "")
+
+    def test_update_profile_leaves_gender_and_birth_date_untouched_when_omitted(self):
+        sign_up("gbkeep@example.com", _GOOD_PW, "n", gender="male",
+                birth_date="1995-07-01", db_path=self.db)
+        update_profile("gbkeep@example.com", display_name="renamed", db_path=self.db)
+        prof = get_profile("gbkeep@example.com", db_path=self.db)
+        self.assertEqual(prof.gender, "male")
+        self.assertEqual(prof.birth_date, "1995-07-01")
+
+    def test_birth_date_is_encrypted_at_rest(self):
+        """이름·관심조건처럼 원문 생년월일이 DB 파일에 평문으로 남지 않는다."""
+
+        sign_up("encbirth@example.com", _GOOD_PW, "n", birth_date="1998-05-12",
+                db_path=self.db)
+        self.assertNotIn(b"1998-05-12", Path(self.db).read_bytes())
+
+    # -- 장애·보훈·소득·가구유형 (강사님 주제 컨펌 반영) -------------------
+    def test_signup_persists_disability_veteran_income_household(self):
+        sign_up("ext@example.com", _GOOD_PW, "확장유저",
+                disability_status="registered", veteran_status="registered",
+                income_bracket="under_30",
+                household_types=["single_parent", "newlywed"], db_path=self.db)
+        got = authenticate("ext@example.com", _GOOD_PW, db_path=self.db)
+        self.assertEqual(got.disability_status, "registered")
+        self.assertEqual(got.veteran_status, "registered")
+        self.assertEqual(got.income_bracket, "under_30")
+        self.assertEqual(set(got.household_types), {"single_parent", "newlywed"})
+
+    def test_get_profile_decrypts_disability_veteran_income_household(self):
+        sign_up("ext2@example.com", _GOOD_PW, "확장유저2",
+                disability_status="not_registered", veteran_status="not_registered",
+                income_bracket="pct_100_150", household_types=["multi_child"],
+                db_path=self.db)
+        prof = get_profile("ext2@example.com", db_path=self.db)
+        self.assertEqual(prof.disability_status, "not_registered")
+        self.assertEqual(prof.veteran_status, "not_registered")
+        self.assertEqual(prof.income_bracket, "pct_100_150")
+        self.assertEqual(list(prof.household_types), ["multi_child"])
+
+    def test_signup_without_extra_fields_leaves_them_empty(self):
+        sign_up("bare2@example.com", _GOOD_PW, "", db_path=self.db)
+        prof = get_profile("bare2@example.com", db_path=self.db)
+        self.assertEqual(prof.disability_status, "")
+        self.assertEqual(prof.veteran_status, "")
+        self.assertEqual(prof.income_bracket, "")
+        self.assertEqual(prof.household_types, ())
+
+    def test_signup_rejects_invalid_disability_status(self):
+        with self.assertRaises(AuthError):
+            sign_up("baddis@example.com", _GOOD_PW, "n",
+                    disability_status="alien", db_path=self.db)
+
+    def test_signup_rejects_invalid_veteran_status(self):
+        with self.assertRaises(AuthError):
+            sign_up("badvet@example.com", _GOOD_PW, "n",
+                    veteran_status="alien", db_path=self.db)
+
+    def test_signup_rejects_invalid_income_bracket(self):
+        with self.assertRaises(AuthError):
+            sign_up("badincome@example.com", _GOOD_PW, "n",
+                    income_bracket="alien", db_path=self.db)
+
+    def test_signup_rejects_invalid_household_type(self):
+        with self.assertRaises(AuthError):
+            sign_up("badhousehold@example.com", _GOOD_PW, "n",
+                    household_types=["single_parent", "alien"], db_path=self.db)
+
+    def test_update_profile_can_set_and_clear_extra_fields(self):
+        sign_up("extupdate@example.com", _GOOD_PW, "n", db_path=self.db)
+        updated = update_profile(
+            "extupdate@example.com", disability_status="registered",
+            veteran_status="registered", income_bracket="under_30",
+            household_types=["grandparent"], db_path=self.db,
+        )
+        self.assertEqual(updated.disability_status, "registered")
+        self.assertEqual(updated.veteran_status, "registered")
+        self.assertEqual(updated.income_bracket, "under_30")
+        self.assertEqual(list(updated.household_types), ["grandparent"])
+
+        cleared = update_profile(
+            "extupdate@example.com", disability_status="", veteran_status="",
+            income_bracket="", household_types=[], db_path=self.db,
+        )
+        self.assertEqual(cleared.disability_status, "")
+        self.assertEqual(cleared.veteran_status, "")
+        self.assertEqual(cleared.income_bracket, "")
+        self.assertEqual(cleared.household_types, ())
+
+    def test_update_profile_leaves_extra_fields_untouched_when_omitted(self):
+        sign_up("extkeep@example.com", _GOOD_PW, "n", disability_status="registered",
+                income_bracket="pct_50_75", household_types=["care_leaver"],
+                db_path=self.db)
+        update_profile("extkeep@example.com", display_name="renamed", db_path=self.db)
+        prof = get_profile("extkeep@example.com", db_path=self.db)
+        self.assertEqual(prof.disability_status, "registered")
+        self.assertEqual(prof.income_bracket, "pct_50_75")
+        self.assertEqual(list(prof.household_types), ["care_leaver"])
+
+    def test_extra_fields_are_encrypted_at_rest(self):
+        """장애·소득 코드값 등이 DB 파일에 평문으로 남지 않는다."""
+
+        sign_up("encext@example.com", _GOOD_PW, "n", disability_status="registered",
+                income_bracket="under_30", household_types=["north_korean_defector"],
+                db_path=self.db)
+        raw = Path(self.db).read_bytes()
+        self.assertNotIn(b"registered", raw)
+        self.assertNotIn(b"under_30", raw)
+        self.assertNotIn(b"north_korean_defector", raw)
 
     # -- 회원 탈퇴 -----------------------------------------------------
     def test_delete_account_removes_row(self):

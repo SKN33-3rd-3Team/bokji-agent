@@ -10,10 +10,7 @@ from typing import Any
 
 import streamlit as st
 
-from .constants import (
-    GUIDANCE_OFFICIAL,
-    SLOT_LABELS_KO,
-)
+from .constants import GUIDANCE_OFFICIAL
 from .session import md_text
 
 
@@ -185,10 +182,16 @@ def _policy_css(p: dict[str, str]) -> str:
     .bkw-chip{{display:inline-flex;align-items:center;font-size:11.5px;font-weight:600;
       padding:4px 10px;border-radius:999px;background:{p['gray_bg']};color:{p['gray_text']};
       margin:6px 6px 0 0;}}
-    .bkw-cond{{font-size:12.5px;padding:4px 10px;border-radius:999px;font-weight:500;
+    /* 확인함/미확인이 한눈에 구분되도록 "채워짐 vs 흐림"으로 대비를 준다 -
+       색만으로 구분하면(둘 다 테두리만 있던 버전) 눈에 잘 안 들어온다.
+       확인함은 색을 채운 칩으로 도드라지게, 미확인은 테두리도 없이 옅은
+       회색 글씨로 가라앉혀서 "이건 부가정보"로 읽히게 한다. 위쪽 "자격 충족"
+       배지(bkw-badge, 점+필)와는 모양이 달라 서로 헷갈리지 않는다.
+    */
+    .bkw-cond{{font-size:11.5px;padding:3px 9px;border-radius:999px;font-weight:600;
       margin:0 6px 6px 0;display:inline-block;}}
     .bkw-cond.on{{background:{p['green_bg']};color:{p['green_text']};}}
-    .bkw-cond.off{{background:{p['gray_bg']};color:{p['gray_text']};}}
+    .bkw-cond.off{{background:transparent;color:{p['text_muted']};padding-left:0;padding-right:0;}}
 
     .bkw-summary{{background:{p['primary_soft']};border:1px solid {p['border']};
       border-radius:10px;padding:14px 16px;margin:12px 0 4px;}}
@@ -221,8 +224,15 @@ def _policy_css(p: dict[str, str]) -> str:
       margin-top:6px;width:100%;}}
     .bkw-doclist-subhead:first-child{{margin-top:0;}}
 
-    .bkw-cardtitle{{font-size:15.5px;font-weight:700;margin:0;color:{p['text']};}}
+    .bkw-cardtitle{{font-size:19px;font-weight:700;margin:0;color:{p['text']};}}
     .bkw-cardintro{{font-size:12.5px;line-height:1.5;color:{p['text_muted']};margin:4px 0 6px;}}
+
+    .bkw-rank{{display:block;color:{p['primary']};font-size:12px;font-weight:700;
+      margin-bottom:6px;}}
+
+    .bkw-highlight{{font-size:13px;font-weight:700;color:{p['text']};line-height:1.5;}}
+    .bkw-highlight .bkw-lead{{color:{p['text_muted']};font-weight:500;font-size:11.5px;
+      display:block;margin-bottom:1px;}}
 
     .bkw-listtop h1{{font-size:20px;font-weight:700;margin:0 0 4px;color:{p['text']};}}
     .bkw-listtop p{{font-size:13.5px;color:{p['text_muted']};margin:0 0 14px;}}
@@ -246,6 +256,43 @@ def _policy_css(p: dict[str, str]) -> str:
     """
 
 
+def _policy_checkbox_css(p: dict[str, str]) -> str:
+    """비교 담기 체크박스 스타일 - ``_policy_css()``와 반드시 별도 ``st.html()``
+    호출로 나눠 보낸다.
+
+    이 규칙(``:has()`` + ``!important`` + 와일드카드 속성 선택자 조합)을
+    ``_policy_css()``의 다른 규칙과 한 ``st.html()`` 호출에 같이 넣으면,
+    Python 쪽에서는 정상 HTML이 만들어지는데도(AppTest로 확인) 브라우저에는
+    <style> 태그 자체가 통째로 사라진다(2026-09-15 확인) - 이 블록만 단독으로
+    보내거나 다른 내용과 전혀 안 섞으면 항상 정상 렌더된다. Streamlit의
+    st.html() 새니타이즈 단계 어딘가의 문제로 추정되나 원인 자체는 특정하지
+    못했다 - 그래서 근본 수정 대신 항상 단독 호출로 격리하는 쪽으로 우회한다.
+    앞으로 이 블록에 규칙을 추가하더라도 절대 다른 st.html() 호출과 합치지
+    않는다.
+    """
+
+    return f"""
+    <style>
+    [class*='st-key-policy_selcb_'] label > span + div{{
+      width:22px !important;height:22px !important;border-radius:50% !important;
+      border:1.8px solid {p['border']} !important;background:{p['panel']} !important;
+      position:relative;flex-shrink:0;
+    }}
+    [class*='st-key-policy_selcb_'] label > span + div::after{{
+      content:"✓";position:absolute;inset:0;display:flex;align-items:center;
+      justify-content:center;font-size:13px;font-weight:700;
+      color:{p['border']};line-height:1;
+    }}
+    [class*='st-key-policy_selcb_'] label:has(input:checked) > span + div{{
+      border-color:{p['primary']} !important;background:{p['primary']} !important;
+    }}
+    [class*='st-key-policy_selcb_'] label:has(input:checked) > span + div::after{{
+      color:#fff;
+    }}
+    </style>
+    """
+
+
 _BADGE_COLOR: dict[str, str] = {"충족": "green", "미충족": "red", "미확인": "amber"}
 
 
@@ -262,16 +309,18 @@ def _region_label(policy: Mapping[str, Any]) -> str:
 def _card_intro(policy: Mapping[str, Any]) -> str:
     """카드 소개문 / 상세 화면 "AI 요약" 문구.
 
-    ``verification_note``를 최우선으로 쓴다 - 이미 서비스가 검증 과정을 거쳐
-    만든 문장이라 원문 발췌(purpose/support_details)보다 신뢰도를 그대로
-    보여주기에 알맞다.
+    실제 정책 설명(support_details/purpose)을 최우선으로 쓴다 - 이게 없을
+    때만 검증 문장(verification_note)으로 대신한다. verification_note를
+    우선하면 거의 모든 정책에서 "이 정책이 뭔지"는 한 번도 안 보이고 검증
+    상태 문장만 보이는데다(대부분의 정책에 확인/미확인 조건이 있으므로),
+    그 내용은 바로 아래 "지원자격" 칩으로 이미 따로 보여주고 있어 중복이다.
     """
 
     detail = policy.get("detail") or {}
     text = (
-        policy.get("verification_note")
-        or detail.get("support_details")
+        detail.get("support_details")
         or detail.get("purpose")
+        or policy.get("verification_note")
         or ""
     )
     text = md_text(text).strip()
@@ -355,6 +404,7 @@ def _back_to_policy_list(view_key: str) -> None:
 def _render_policy_card(
     policy: Mapping[str, Any],
     *,
+    rank: int,
     selected: bool,
     checkbox_key: str,
     selected_key: str,
@@ -363,7 +413,12 @@ def _render_policy_card(
     detail_key: str,
     policy_id: str,
 ) -> None:
-    """시안의 리스트 카드 한 장. 체크박스로 비교 담기, 버튼으로 상세 이동."""
+    """정책 카드 한 장. 체크박스로 비교 담기, 버튼으로 상세 이동.
+
+    카드 비교 서비스(신한카드 상품 비교 화면 등)에서 참고한 순위 배지·칩·
+    굵은 강조 라인 구성 - 목록에서부터 "왜 이 순서인지·뭘 확인했는지"가
+    바로 보이게 한다.
+    """
 
     esc = _html_text
     verdict = str(policy.get("eligibility_status") or "미확인")
@@ -371,42 +426,45 @@ def _render_policy_card(
     badge_label = md_text(policy.get("badge") or verdict)
     title = md_text(policy.get("title") or policy.get("policy_id") or "정책")
     region = _region_label(policy)
-    intro = _card_intro(policy)
     amount = md_text(policy.get("amount_label") or "지원금액 확인 필요")
     duplicate = md_text(policy.get("duplicate_status") or "미확인")
+    intro = _card_intro(policy)
 
     with st.container(border=True):
-        check_col, body_col, action_col = st.columns(
-            [0.6, 5, 1.6], vertical_alignment="center"
-        )
-        check_col.checkbox(
+        top = st.container(horizontal=True, vertical_alignment="center")
+        top.html(f'<span class="bkw-rank">가장 적합 #{rank}</span>')
+        top.checkbox(
             "비교 선택",
             value=selected,
             key=checkbox_key,
-            label_visibility="collapsed",
+            help="눌러서 이 정책을 비교 목록에 담아요",
             on_change=_sync_policy_selection,
             args=(selected_key, policy_id, checkbox_key),
         )
-        with body_col:
-            st.html(
-                f'<div class="bkw-cardtitle">{esc(title)} '
-                f'<span class="bkw-region">· {esc(region)}</span></div>'
-                f'<div class="bkw-cardintro">{esc(intro)}</div>'
-                f'<span class="bkw-badge {color}"><span class="bkw-dot"></span>{esc(badge_label)}</span>'
-                f'<span class="bkw-chip">{esc(amount)}</span>'
-                f'<span class="bkw-chip">중복수급 {esc(duplicate)}</span>'
-            )
-        with action_col:
-            if selected:
-                action_col.caption("비교 목록에 담김")
-            action_col.button(
-                "자세히 보기",
-                key=detail_button_key,
-                icon=":material/chevron_right:",
-                width="stretch",
-                on_click=_open_policy_detail,
-                args=(view_key, detail_key, policy_id),
-            )
+
+        st.html(
+            f'<span class="bkw-badge {color}"><span class="bkw-dot"></span>{esc(badge_label)}</span>'
+            f'<div class="bkw-cardtitle" style="margin-top:8px">{esc(title)} '
+            f'<span class="bkw-region">· {esc(region)}</span></div>'
+            f'<div class="bkw-cardintro">{esc(intro)}</div>'
+            + '<div style="margin-top:10px;display:flex;flex-direction:column;gap:5px">'
+            f'<div class="bkw-highlight"><span class="bkw-lead">지원금액</span>{esc(amount)}</div>'
+            f'<div class="bkw-highlight"><span class="bkw-lead">중복수급</span>{esc(duplicate)}</div>'
+            "</div>"
+        )
+        if selected:
+            st.markdown(":primary[비교 목록에 담김]")
+        st.button(
+            "자세히 보기",
+            key=detail_button_key,
+            icon=":material/chevron_right:",
+            width="stretch",
+            on_click=_open_policy_detail,
+            args=(view_key, detail_key, policy_id),
+        )
+
+
+_GRID_COLUMNS = 1
 
 
 def _render_policy_grid_view(
@@ -417,25 +475,30 @@ def _render_policy_grid_view(
     detail_key: str,
     selected_key: str,
 ) -> list[str]:
-    esc = _html_text
     st.html(
         f'<div class="bkw-listtop"><h1>확인한 정책 {len(policies)}건</h1>'
-        "<p>비교하고 싶은 정책을 선택하면 나란히 비교할 수 있어요</p></div>"
+        "<p>적합도가 높은 순서대로, 비교하고 싶은 정책을 선택하면 나란히 비교할 수 있어요</p></div>"
     )
 
     selected_ids = [str(pid) for pid in st.session_state.get(selected_key) or []]
-    for idx, policy in enumerate(policies):
-        policy_id = str(policy.get("policy_id") or idx)
-        _render_policy_card(
-            policy,
-            selected=policy_id in selected_ids,
-            checkbox_key=f"policy_selcb_{session_id}_{policy_id}",
-            selected_key=selected_key,
-            detail_button_key=f"policy_open_{session_id}_{policy_id}",
-            view_key=view_key,
-            detail_key=detail_key,
-            policy_id=policy_id,
-        )
+    for row_start in range(0, len(policies), _GRID_COLUMNS):
+        row = policies[row_start : row_start + _GRID_COLUMNS]
+        cols = st.columns(len(row))
+        for col, (offset, policy) in zip(cols, enumerate(row)):
+            idx = row_start + offset
+            policy_id = str(policy.get("policy_id") or idx)
+            with col:
+                _render_policy_card(
+                    policy,
+                    rank=idx + 1,
+                    selected=policy_id in selected_ids,
+                    checkbox_key=f"policy_selcb_{session_id}_{policy_id}",
+                    selected_key=selected_key,
+                    detail_button_key=f"policy_open_{session_id}_{policy_id}",
+                    view_key=view_key,
+                    detail_key=detail_key,
+                    policy_id=policy_id,
+                )
 
     total = len(selected_ids)
     hint = (
@@ -447,10 +510,10 @@ def _render_policy_grid_view(
     )
     bar_key = f"policy_comparebar_{session_id}"
     st.html(
-        f"<style>[class*='st-key-{bar_key}']{{background:{_palette()['text']};"
-        f"border-radius:14px;padding:6px 16px;margin-top:8px;}}"
-        f"[class*='st-key-{bar_key}'] p{{color:{_palette()['bg']} !important;"
-        "font-weight:600;font-size:13.5px;}}</style>"
+        f"<style>[class*='st-key-{bar_key}']{{background:{_palette()['panel']};"
+        f"border:1px solid {_palette()['border']};border-radius:14px;padding:6px 16px;"
+        "margin-top:8px;}"
+        f"[class*='st-key-{bar_key}'] p{{font-weight:600;font-size:13.5px;}}</style>"
     )
     bar = st.container(horizontal=True, vertical_alignment="center", key=bar_key)
     bar.markdown(hint)
@@ -575,6 +638,26 @@ def _render_policy_detail_view(
         organization = detail.get("organization")
         if organization:
             st.caption(f"문의처: {md_text(organization)}")
+
+        # 이 정책에 대해 상세 질문을 이어갈 수 있는 경량 채팅으로 진입한다.
+        # 무거운 N1~N14 재실행 없이 이 화면이 이미 담고 있는 정보로만 답한다.
+        # 핵심 기능 중 하나라 primary 버튼(포인트 색 채움) + 볼드체로 확실히
+        # 눈에 띄게 한다(리뷰 피드백: "버튼이 잘 안 보인다"). **마크다운은
+        # 버튼 라벨에서 글자만 지우고 굵기는 안 먹혀서, CSS로 직접 건다.
+        ask_key = f"askpolicy-{view_key}-{policy.get('policy_id')}"
+        st.html(f"<style>[class*='st-key-{ask_key}'] p{{font-weight:700;}}</style>")
+        if st.button(
+            "이 정책에 대해 추가 질문하기",
+            key=ask_key,
+            icon=":material/chat:",
+            width="stretch",
+            type="primary",
+        ):
+            # 이 정책 전용 문의 채팅방(모달)을 연다. 다른 정책을 보던 중이면
+            # 그 대화 기록은 버린다(채팅방은 한 번에 정책 하나).
+            st.session_state["detail_chat_policy"] = dict(policy)
+            st.session_state.pop("detail_chat_history", None)
+            st.rerun()
 
 
 def _dup_short_note(policy: Mapping[str, Any]) -> str:
@@ -753,6 +836,8 @@ def _render_policy_section(
     """
 
     st.html(_policy_css(_palette()))
+    # 체크박스 CSS는 반드시 별도 호출로 - _policy_checkbox_css() 문서 참고.
+    st.html(_policy_checkbox_css(_palette()))
 
     view_key = f"policy_view_{session_id}"
     detail_key = f"policy_detail_{session_id}"
@@ -953,13 +1038,8 @@ def render_result(result: Mapping[str, Any]) -> None:
 
     status = result.get("status")
     if status == "needs_input":
+        # 어떤 항목이 필요한지는 아래 위젯 폼(chat.py)이 보여준다.
         st.markdown(str(result.get("question") or "추가 정보가 필요합니다."))
-        missing_slots = [
-            SLOT_LABELS_KO.get(str(slot), str(slot))
-            for slot in result.get("missing_slots") or []
-        ]
-        if missing_slots:
-            st.caption("추가로 필요한 정보: " + ", ".join(missing_slots))
     elif status == "answered":
         _render_answer(result)
     else:
