@@ -196,8 +196,10 @@ from .graph.slot_schema import (
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
 from .llm import (
+    FallbackLLMClient,
     HuggingFaceInferenceClient,
     RecordingLLMClient,
+    RunPodPodClient,
     RunPodServerlessClient,
 )
 from .timing import TIMER, node_title
@@ -283,18 +285,63 @@ def connect_store() -> ChromaVectorStore:
     )
 
 
+def _build_hf_client(token: str) -> HuggingFaceInferenceClient:
+    """``HF_TOKEN``으로 ``HuggingFaceInferenceClient``를 만든다.
+
+    ``build_llm_client()``의 기본 ``hf`` 경로와, RunPod Pod 실패 시 폴백
+    경로(``RUNPOD_POD_ID`` + HF 토큰이 함께 있는 경우) 양쪽에서 같은 모델
+    선택/토큰 예산 로직을 재사용하려고 뽑아냈다.
+    """
+
+    model = (
+        os.environ.get("LLM_MODEL_NAME")
+        or os.environ.get("LLM_HF_MODEL")
+        or _DEFAULT_HF_MODEL
+    )
+    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+    extra_body = None
+    if os.environ.get("LLM_DISABLE_THINKING") == "1":
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    return HuggingFaceInferenceClient(
+        model=model, token=token, max_new_tokens=max_new_tokens, extra_body=extra_body
+    )
+
+
 def build_llm_client() -> RecordingLLMClient | None:
     """``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
     만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
     기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
     성질은 그대로 유지한다.
 
-    백엔드 선택(``LLM_BACKEND`` 환경변수):
-    - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
-      ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
-    - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
-      모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
+    백엔드 선택 우선순위:
+    - ``RUNPOD_POD_ID``가 있으면(영구 GPU Pod, ``PROJECT_STRUCTURE.md`` 2.4절)
+      **``LLM_BACKEND`` 값과 무관하게 최우선**으로 RunPod Pod를 쓴다
+      (2026-09-16 팀 결정: RunPod 1순위, HuggingFace 2순위). 이때 ``HF_TOKEN``도
+      있으면 ``FallbackLLMClient``로 감싸, RunPod Pod 호출이 실패(연결 장애
+      등)할 때마다 같은 요청 안에서 즉시 HuggingFace로 자동 전환한다. HF
+      토큰이 없으면 RunPod Pod 단독으로 동작한다(폴백 불가).
+    - ``RUNPOD_POD_ID``가 없으면 기존 ``LLM_BACKEND`` 환경변수로 분기한다:
+      - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
+        ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
+      - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
+        모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
     """
+
+    pod_id = os.environ.get("RUNPOD_POD_ID")
+    if pod_id:
+        primary = RunPodPodClient(
+            pod_id=pod_id,
+            timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+        )
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+        if not hf_token:
+            return RecordingLLMClient(primary)
+        secondary = _build_hf_client(hf_token)
+        return RecordingLLMClient(
+            FallbackLLMClient(
+                primary, secondary, primary_name="runpod-pod", secondary_name="huggingface"
+            )
+        )
 
     backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
 
@@ -312,38 +359,12 @@ def build_llm_client() -> RecordingLLMClient | None:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
         return None
-    model = (
-        os.environ.get("LLM_MODEL_NAME")
-        or os.environ.get("LLM_HF_MODEL")
-        or _DEFAULT_HF_MODEL
-    )
-    # 토큰 예산과 "생각 끄기"를 환경변수로 조절할 수 있게 한다.
-    #
-    # 왜: 추론형 모델(Qwen3.5 계열)은 답을 쓰기 전에 내부 사고에 토큰을 크게
-    # 써서 호출 하나가 수십 초씩 걸린다(실측: N1 한 번에 50초). 기본
-    # max_new_tokens=8192는 그 사고 길이를 감당하려고 올려둔 값이라,
-    # 비추론형 모델을 쓰면 훨씬 낮춰도 되고 그만큼 빨라진다.
-    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
-
-    # LLM_DISABLE_THINKING=1이면 provider에 "사고 과정을 끄라"고 요청한다.
-    # Qwen3 계열 chat template이 지원한다고 알려진 파라미터인데, 이
-    # HuggingFace Inference Providers 라우팅 경로에서 실제로 먹히는지는
-    # 검증하지 못했다(샌드박스에서 huggingface.co에 접속할 수 없음).
-    # 안 먹히면 조용히 무시되거나 에러가 나므로, 켠 뒤 체감 속도와
-    # llm_status의 평균 호출 시간을 비교해서 판단할 것.
-    extra_body = None
-    if os.environ.get("LLM_DISABLE_THINKING") == "1":
-        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
     # RecordingLLMClient로 감싼다. 노드들은 LLM 호출이 실패해도 규칙 기반으로
     # 조용히 폴백하기 때문에, 감싸지 않으면 "LLM이 한 번도 안 돌았는데 결과는
     # 멀쩡히 나오는" 상태를 아무도 모른다. 여기 모인 실패 사유를
     # ChatResponse["llm_status"]로 화면까지 올린다.
-    return RecordingLLMClient(
-        HuggingFaceInferenceClient(
-            model=model, max_new_tokens=max_new_tokens, extra_body=extra_body
-        )
-    )
+    return RecordingLLMClient(_build_hf_client(token))
 
 
 # 그래프/store/llm_client는 만드는 비용이 크다(vectorDB 연결, LLM 클라이언트

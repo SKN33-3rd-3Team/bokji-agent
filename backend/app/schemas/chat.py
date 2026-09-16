@@ -1,0 +1,151 @@
+"""API-10~13 요청/응답 스키마.
+
+``PolicyDetail``/``PolicyView``/``ChatResponse``의 필드명·타입은
+``src/rag_chatbot/service.py``의 동명 TypedDict(라인 412~507)와 100% 동일하게
+맞춘다(모듈 docstring이 "필드를 지우거나 이름을 바꾸지 않는다"를 명시한
+계약). ``PolicyDetail``의 런타임 dict는 ``rag_design.contracts.
+SUBSIDY_DETAIL_SECTIONS`` 기반으로 정적 TypedDict보다 키가 더 많을 수 있어
+(``required_documents*`` 포함) ``extra="allow"``로 열어 둔다 - 여기 없는
+키도 그대로 통과시켜 프론트에 전달한다.
+
+``required_documents*_items``(S07-06/S10-01, 2026-09-16 옵션 ② 확정)는
+``service.py``가 주는 원문 문자열이 아니라 백엔드가 파생시켜 추가한 필드다
+(``app/core/document_parsing.py``, ``services/chat_adapter.py::
+_augment_required_documents`` 참고) - 원본 문자열 필드는 그대로 유지된다.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Any, Literal
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+
+def _require_non_blank(value: str) -> str:
+    """``Field(min_length=1)``은 공백뿐인 문자열("   ")도 통과시킨다 - API_정의서.xlsx
+    API-10/11/12가 "빈 메시지/빈 질문"을 400 VALIDATION_ERROR로 요구하는데,
+    공백만 보내면 이 체크를 우회해 그대로 그래프까지 넘어간다. 여기서
+    strip() 후 한 번 더 막는다.
+    """
+
+    if not value.strip():
+        raise ValueError("빈 값은 허용되지 않습니다.")
+    return value
+
+
+_NonBlankStr = Annotated[str, Field(min_length=1), AfterValidator(_require_non_blank)]
+
+
+class ChatRequest(BaseModel):
+    """API-10 요청 바디."""
+
+    message: _NonBlankStr
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    extra_interests: list[str] = Field(default_factory=list)
+    known_region: str | None = None
+    known_gender: str | None = None
+    known_birth_date: str | None = None
+    known_disability_status: str | None = None
+    known_income_bracket: str | None = None
+    known_household_types: list[str] = Field(default_factory=list)
+    known_veteran_status: str | None = None
+
+
+class FollowupRequest(BaseModel):
+    """API-11 요청 바디."""
+
+    message: _NonBlankStr
+
+
+class PolicyQuestionRequest(BaseModel):
+    """API-12 요청 바디."""
+
+    question: _NonBlankStr
+
+
+class PolicyQuestionResponse(BaseModel):
+    """API-12 응답."""
+
+    kind: Literal["answer", "guidance"]
+    text: str
+    evidence_quotes: list[str] = Field(default_factory=list)
+
+
+class PolicyDetail(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    purpose: str | None = None
+    support_target: str | None = None
+    eligibility_criteria: str | None = None
+    support_details: str | None = None
+    application_method: str | None = None
+    application_period: str | None = None
+    legal_basis: str | None = None
+    region_names: list[str] | None = None
+    region_scope: str | None = None
+    age_start: int | None = None
+    age_end: int | None = None
+    organization: str | None = None
+    source_url: str | None = None
+    source_name: str | None = None
+    # S07-06/S10-01(2026-09-16 옵션 ② 확정): 원본 원문 문자열은 그대로 두고,
+    # 백엔드가 항목 배열로 구조화한 *_items를 추가로 함께 내려준다
+    # (app/core/document_parsing.py - "지어내지 않는다" 원칙에 따라 원문이
+    # 이미 표현한 구분만 인식, 애매하면 원문 그대로 1개 항목).
+    required_documents: str | None = None
+    required_documents_items: list[str] | None = None
+    required_documents_official: str | None = None
+    required_documents_official_items: list[str] | None = None
+    required_documents_self: str | None = None
+    required_documents_self_items: list[str] | None = None
+
+
+class PolicyView(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    rank: int | None = None
+    policy_id: str
+    title: str
+    badge: str | None = None
+    eligibility_status: str | None = None
+    eligibility_reasons: list[str] = Field(default_factory=list)
+    verification_checked: list[str] = Field(default_factory=list)
+    verification_unchecked: list[str] = Field(default_factory=list)
+    verification_note: str | None = None
+    amount: float | None = None
+    amount_label: str | None = None
+    amount_period: str | None = None
+    amount_is_maximum: bool | None = None
+    amount_per_unit: str | None = None
+    amount_total: float | None = None
+    amount_min: float | None = None
+    amount_max: float | None = None
+    total_amount_min: float | None = None
+    total_amount_max: float | None = None
+    duplicate_status: str | None = None
+    duplicate_note: str | None = None
+    duplicate_clause_kind: str | None = None
+    duplicate_conflicts: list[dict] = Field(default_factory=list)
+    household_limit_clauses: list[str] = Field(default_factory=list)
+    needs_confirmation: list[str] = Field(default_factory=list)
+    related_law: list[dict] = Field(default_factory=list)
+    detail: PolicyDetail = Field(default_factory=PolicyDetail)
+
+
+class ChatResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: Literal["needs_input", "answered"]
+    session_id: str
+    question: str | None = None
+    missing_slots: list[str] = Field(default_factory=list)
+    slot_conflicts: dict[str, dict[str, str]] | None = None
+    answer_status: str | None = None
+    final_answer: str | None = None
+    final_citations: list[dict] = Field(default_factory=list)
+    policies: list[PolicyView] = Field(default_factory=list)
+    output_json: dict[str, Any] = Field(default_factory=dict)
+    output_text: str | None = None
+    output_markdown: str | None = None
+    llm_status: dict[str, Any] = Field(default_factory=dict)
+    timing: dict[str, Any] = Field(default_factory=dict)

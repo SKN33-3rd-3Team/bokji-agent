@@ -451,6 +451,110 @@ class RunPodServerlessClient:
         )
 
 
+class RunPodPodClient:
+    """RunPod에서 대여한 Pod(영구 GPU 인스턴스)에 직접 띄운 OpenAI 호환
+    추론 서버(vLLM 등)를 호출한다. ``RunPodServerlessClient``(과금형
+    Serverless 엔드포인트, ``/v2/{id}/runsync``)와는 별개 제품이니 혼동하지
+    말 것 - 이쪽은 Pod의 공개 프록시 URL로 OpenAI 호환
+    ``/v1/chat/completions``를 직접 부른다.
+
+    주의(팀이 실제 Pod를 띄운 뒤 확인할 것, 미확인 항목,
+    ``PROJECT_STRUCTURE.md`` 2.4절 참고): ``https://{pod_id}-{port}.proxy.runpod.net``
+    프록시 URL 패턴은 RunPod의 일반적인 Pod HTTP 포트 노출 방식을 근거로
+    적었다 - 실제 콘솔에서 발급되는 URL과 다를 수 있으니 Pod를 띄운 뒤
+    콘솔에 표시되는 실제 프록시 주소로 교체 확인할 것. Pod 위에 무엇을
+    띄우느냐(vLLM/TGI/커스텀 서버)에 따라 응답 JSON 모양이 다를 수 있다.
+    """
+
+    def __init__(
+        self,
+        pod_id: str | None = None,
+        *,
+        port: int | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout_seconds: float = 60.0,
+    ):
+        self.pod_id = pod_id or os.environ.get("RUNPOD_POD_ID", "")
+        self.port = int(port or os.environ.get("RUNPOD_POD_PORT") or 8000)
+        self.model = model or os.environ.get("LLM_MODEL_NAME", "")
+        self.api_key = api_key or os.environ.get("RUNPOD_POD_API_KEY", "")
+        self.timeout_seconds = timeout_seconds
+        if not self.pod_id:
+            raise ValueError("RunPodPodClient에는 pod_id가 필요합니다 (RUNPOD_POD_ID).")
+
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        import requests
+
+        url = f"https://{self.pod_id}-{self.port}.proxy.runpod.net/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": self.model, "messages": messages}
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise LLMCallError(f"RunPod Pod 호출 실패: {exc}") from exc
+        try:
+            return response.json()["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise LLMCallError(f"RunPod Pod 응답을 파싱하지 못함: {exc}") from exc
+
+
+class FallbackLLMClient:
+    """1순위 클라이언트 호출이 실패하면 2순위로 자동 전환하는 래퍼.
+
+    RunPod Pod(1순위)가 연결 장애 등으로 실패하면, 같은 요청 안에서 바로
+    HuggingFace Inference API(2순위)로 넘어간다(2026-09-16 팀 결정). 둘 다
+    ``LLMClient`` 프로토콜(``complete()``만 만족)을 따르는 아무 구현체나
+    받을 수 있어 특정 제품에 묶이지 않는다.
+
+    ``RecordingLLMClient``는 이 클래스가 던지는 ``LLMCallError``만 보고
+    "LLM 실패"로 기록한다 - primary/secondary 중 어느 쪽이 응답했는지는
+    ``llm_status``에 통화별로 구분되어 남지 않는다(기존 ``RecordingLLMClient``
+    구조의 한계). 성공/실패 자체와 실패 사유 메시지는 그대로 드러난다.
+    """
+
+    def __init__(
+        self,
+        primary: LLMClient,
+        secondary: LLMClient,
+        *,
+        primary_name: str = "primary",
+        secondary_name: str = "secondary",
+    ):
+        self.primary = primary
+        self.secondary = secondary
+        self.primary_name = primary_name
+        self.secondary_name = secondary_name
+        primary_model = getattr(primary, "model", None)
+        secondary_model = getattr(secondary, "model", None)
+        self.model = f"{primary_name}:{primary_model}→fallback:{secondary_name}:{secondary_model}"
+
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        try:
+            return self.primary.complete(prompt, system=system, max_tokens=max_tokens)
+        except LLMCallError as primary_exc:
+            try:
+                return self.secondary.complete(prompt, system=system, max_tokens=max_tokens)
+            except LLMCallError as secondary_exc:
+                raise LLMCallError(
+                    f"{self.primary_name} 실패({primary_exc}) 후 "
+                    f"{self.secondary_name} 폴백도 실패({secondary_exc})"
+                ) from secondary_exc
+
+
 class HuggingFaceInferenceClient:
     """HuggingFace Inference API(호스팅형 서버리스)를 호출하는 클라이언트.
 

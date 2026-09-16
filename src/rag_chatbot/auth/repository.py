@@ -1,7 +1,7 @@
 """회원 ``users`` 테이블 — 스키마와 저수준 CRUD.
 
 기본은 **SQLite**(``.runtime/auth.db``)이고, ``AUTH_DB_URL`` 환경변수를 주면
-**원격 MySQL/MariaDB**(예: RunPod Pod)로 붙는다. 두 경우 모두 같은
+**원격 MySQL/MariaDB**(예: skn33.iptime.org 의 MariaDB 서버)로 붙는다. 두 경우 모두 같은
 :class:`Backend` 인터페이스를 통해 ``service`` 가 호출한다 — ``service`` 는
 어느 백엔드인지 알 필요가 없다.
 

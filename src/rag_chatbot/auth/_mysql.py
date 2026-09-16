@@ -1,4 +1,4 @@
-"""원격 MySQL/MariaDB 백엔드 (예: RunPod Pod 의 MariaDB 컨테이너).
+"""원격 MySQL/MariaDB 백엔드 (예: skn33.iptime.org 의 MariaDB 서버).
 
 ``AUTH_DB_URL`` 이 설정돼 있을 때만 ``repository.get_backend`` 이 이 모듈을
 import 한다. ``pymysql`` (순수 파이썬, 빌드 도구 불필요) 이 필요하다:
@@ -88,7 +88,7 @@ def _as_backend_unavailable(fn):
             return fn(*args, **kwargs)
         except _MySQLError as exc:
             raise AuthBackendUnavailableError(
-                "회원 데이터베이스 처리 중 연결이 끊겼습니다. RunPod Pod 가 "
+                "회원 데이터베이스 처리 중 연결이 끊겼습니다. 원격 DB 서버가 "
                 "실행 중인지 확인하고 잠시 후 다시 시도해 주세요."
             ) from exc
 
@@ -135,7 +135,7 @@ class MySQLBackend:
             )
         except _MySQLOperationalError as exc:
             raise AuthBackendUnavailableError(
-                "회원 데이터베이스에 연결할 수 없습니다. RunPod Pod 가 실행 "
+                "회원 데이터베이스에 연결할 수 없습니다. 원격 DB 서버가 실행 "
                 "중인지, AUTH_DB_URL 의 호스트/포트/계정/DB이름이 맞는지 "
                 "확인하세요."
             ) from exc

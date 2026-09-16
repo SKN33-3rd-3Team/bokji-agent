@@ -1,18 +1,22 @@
-# 회원 DB 를 RunPod 의 MySQL/MariaDB 로 (로그인·회원가입 원격화)
+# 회원 DB 를 원격 MySQL/MariaDB 로 (로그인·회원가입 원격화)
 
 로그인/회원가입은 기본적으로 로컬 **SQLite**(`.runtime/auth.db`)에 회원을
 저장한다. 팀원 여러 명이 같은 회원 계정을 공유하거나 시연용으로 한 곳에
 모으려면, `AUTH_DB_URL` 환경변수 하나로 **원격 MySQL/MariaDB** 로 바꿀 수
 있다. 코드는 이미 그 분기를 지원한다(`src/rag_chatbot/auth/repository.py` 의
-`get_backend`, `src/rag_chatbot/auth/_mysql.py`).
+`get_backend`, `src/rag_chatbot/auth/_mysql.py`) — 어떤 호스트에 떠 있는
+MySQL/MariaDB 든 `AUTH_DB_URL` 하나만 맞으면 그대로 붙는다(특정 호스팅
+업체에 종속되지 않음).
 
-이 문서는 그 원격 DB 를 **RunPod Pod** 에 MariaDB 로 띄우는 절차다. RunPod
-콘솔 화면은 수시로 바뀌므로 메뉴 이름이 조금 다를 수 있다 — 개념 순서대로
-따라가면 된다.
+> **2026-09-16 변경**: 회원 DB 는 RunPod 이 아니라 팀이 자체 운영하는
+> `skn33.iptime.org` 서버의 MariaDB 를 쓴다. 이 서버는 이미 MariaDB 가 떠
+> 있다고 가정하고, 계정만 새로 만들면 된다(아래 1장) — RunPod Pod 를 직접
+> 배포하던 예전 절차(Network Volume, Container Image 선택 등)는 더 이상
+> 필요 없다. `scripts/runpod_mariadb_bootstrap.sh` 는 RunPod Pod 전용이라
+> 이 서버에는 해당하지 않는다(더 이상 쓰지 않음).
 
-> RunPod 의 LLM Serverless 연동(N1/N5/N9/N10/N13)은 별개다. 그건
-> `docs/RUNPOD_SETUP_DRAFT.md` 를 본다. 회원 DB 는 **Serverless 가 아니라
-> 상시 실행되는 Pod** 여야 한다(요청이 없을 때도 DB 가 살아 있어야 하므로).
+> RunPod 의 LLM Serverless/Pod 연동(N1/N5/N9/N10/N13)은 완전히 별개다. 그건
+> `docs/RUNPOD_SETUP_DRAFT.md` 를 본다. 이 문서는 **회원 DB** 얘기만 다룬다.
 
 ---
 
@@ -37,92 +41,39 @@
 
 ---
 
-## 1. RunPod 에서 해야 하는 것
+## 1. 원격 서버(skn33.iptime.org)에서 해야 하는 것
 
-> **이미지를 반드시 `mariadb:11` 로.** PyTorch/Ubuntu 같은 일반 이미지로 Pod 를
-> 만들면 MariaDB 가 아예 없고, 손으로 `apt install` 해도 컨테이너 디스크라
-> **Pod 를 재시작할 때마다 사라진다.** `mariadb:11` 이미지는 MariaDB 가
-> 들어있고 부팅 시 자동 기동 + `MARIADB_*` env 로 DB/계정 자동 생성한다 —
-> 설치 스크립트가 필요 없다.
->
-> 이미 일반 Ubuntu Pod 를 띄워버려서 재배포가 어렵다면
-> `scripts/runpod_mariadb_bootstrap.sh` (멱등: 설치→기동→DB/계정 보장, 데이터는
-> 영속 볼륨 `/workspace/mariadb` 에)를 접속 후 실행하거나 Pod 의 "Container
-> Start Command" 로 등록한다. 그래도 정석은 `mariadb:11` 재배포다.
+이 서버는 MariaDB 가 이미 떠 있다고 가정한다(RunPod Pod 처럼 이미지를
+새로 배포하거나 Network Volume 을 마운트하는 절차가 필요 없다) — 필요한
+건 앱 전용 계정 하나뿐이다.
 
-### 1-1. Network Volume 먼저 만든다 (필수)
+### 1-1. 앱 전용 계정 생성
 
-Pod 의 컨테이너 디스크는 **Pod 를 Stop/삭제하면 사라진다.** 회원 데이터를
-보존하려면 Network Volume(영속 스토리지)을 붙이고 MariaDB 데이터 디렉터리를
-거기로 둬야 한다.
+`scripts/setup_sing_up_db.sql` 을 쓴다(레포에 이미 있음 - 비밀번호를 파일에
+평문으로 남기지 않고 실행 시점에 주입하는 방식):
 
-1. RunPod 콘솔 → **Storage → Network Volumes → New**
-2. 리전(데이터센터) 선택, 크기 예: **5 GB** (회원 수천 명이면 충분)
-3. 이름 예: `bokji-auth-db`
-
-Network Volume 은 만든 리전에 묶인다 — 다음 단계 Pod 도 **같은 리전**에서
-띄운다.
-
-### 1-2. MariaDB Pod 배포
-
-1. RunPod 콘솔 → **Pods → Deploy**
-2. GPU 는 필요 없다. **CPU Pod** 중 가장 작은 것(또는 가장 싼 GPU 없는 옵션).
-3. **Container Image** 에 공식 이미지 지정: `mariadb:11`
-4. **Volume** : 1-1 에서 만든 Network Volume 을 선택하고
-   **Mount Path 를 `/var/lib/mysql`** 로 지정.
-5. **Environment Variables** :
-   | 이름 | 값 |
-   | --- | --- |
-   | `MARIADB_ROOT_PASSWORD` | 길고 무작위한 문자열 |
-   | `MARIADB_DATABASE` | `bokji` |
-   | `MARIADB_USER` | `bokji_app` |
-   | `MARIADB_PASSWORD` | 길고 무작위한 문자열(위 root 와 다르게) |
-6. **Expose TCP Port** 에 `3306` 추가. (HTTP 가 아니라 **TCP** 포트여야 한다.)
-7. Deploy.
-
-### 1-3. 공인 접속 주소 확인
-
-Pod 가 Running 이 되면 상세 화면의 **Connect → TCP Port Mappings** 에
-`3306` 에 대응하는 공인 주소가 나온다. 예:
-
-```
-213.xxx.xxx.xxx : 40123   ->  내부 3306
+```bash
+DEV_DB_PASSWORD='<길고 무작위한 비밀번호>' envsubst < scripts/setup_sing_up_db.sql \
+  | mysql -h skn33.iptime.org -P <port> -u root -p
 ```
 
-이 `호스트:포트` 가 `AUTH_DB_URL` 에 들어갈 값이다. (RunPod 이 매핑하는
-외부 포트는 3306 이 아닐 수 있다 — 표시된 값을 그대로 쓴다.)
-
-### 1-4. 앱 전용 계정 점검 (선택이지만 권장)
-
-`mariadb:11` 이미지는 위 env 로 `bokji_app` 을 만들고 `bokji` DB 에 대해
-`ALL PRIVILEGES` 를 준다. 첫 실행 때 앱이 `users` 테이블을 자동 생성하므로
-(`init_schema`), **이 계정에는 `CREATE` 권한이 반드시 있어야 한다.** 계정을
-직접 다시 잡을 때도 `bokji` 스키마 한정으로 넓게 준다. 로컬에서 `mysql`
-클라이언트나 DBeaver 로 root 접속 후:
+이 스크립트는 `dev_account01` 계정을 만들고 `bokji_auth` 스키마 한정으로만
+`ALL PRIVILEGES`(CREATE 포함 - 첫 실행 시 `users` 테이블 자동 생성에
+필요)를 준다. 계정/권한을 나중에 다시 확인하려면:
 
 ```sql
--- bokji_app 이 bokji.* 에만 권한이 있는지 확인
-SHOW GRANTS FOR 'bokji_app'@'%';
-
--- 없거나 스키마 범위가 틀리면 다시 잡는다
-CREATE DATABASE IF NOT EXISTS bokji
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'bokji_app'@'%' IDENTIFIED BY '<password>';
--- bokji 스키마 한정 전체 권한 (CREATE 포함 — 첫 실행 시 테이블 자동 생성에 필요).
--- 테이블을 root 로 미리 만들어 뒀다면 DML 만 줘도 된다:
---   GRANT SELECT, INSERT, UPDATE, DELETE ON bokji.* TO 'bokji_app'@'%';
-GRANT ALL PRIVILEGES ON bokji.* TO 'bokji_app'@'%';
-FLUSH PRIVILEGES;
+SHOW GRANTS FOR 'dev_account01'@'%';
 ```
 
-> 앱은 `bokji` 밖의 스키마나 서버 전역 권한은 전혀 필요로 하지 않는다 —
-> `ON bokji.*` 범위를 벗어나지 않게만 한다.
+> 앱은 `bokji_auth` 밖의 스키마나 서버 전역 권한은 전혀 필요로 하지 않는다 -
+> `ON bokji_auth.*` 범위를 벗어나지 않게만 한다.
 
-> **보안 주의**: RunPod 의 공인 TCP 포트는 인터넷에 열려 있다. 반드시
+> **보안 주의**: 이 서버의 3306 포트가 인터넷에 열려 있다면 반드시
 > - 길고 무작위한 비밀번호(20자 이상 권장)를 쓰고,
-> - 애플리케이션 계정은 `bokji` DB 로만 권한을 제한하고,
-> - `AUTH_DB_URL` 이 든 `.env` 는 커밋하지 않는다(이미 `.gitignore` 처리됨).
-> RunPod 콘솔에 IP 화이트리스트 기능이 있으면 팀 IP 만 허용한다.
+> - 애플리케이션 계정은 `bokji_auth` DB 로만 권한을 제한하고,
+> - `AUTH_DB_URL` 이 든 `.env` 는 커밋하지 않으며(이미 `.gitignore` 처리됨),
+> - 서버의 방화벽/공유기 포트포워딩에서 꼭 필요한 곳만 3306 접근을
+>   허용한다(가능하면 팀 IP 화이트리스트).
 
 ---
 
@@ -137,7 +88,7 @@ FLUSH PRIVILEGES;
 
 2. `.env` 에 추가 (`.env.example` 참고):
    ```
-   AUTH_DB_URL=mysql://bokji_app:<password>@<runpod-host>:<runpod-port>/bokji
+   AUTH_DB_URL=mysql://dev_account01:<password>@skn33.iptime.org:<port>/bokji_auth
    AUTH_ENC_KEY=<팀이 공유하는 동일한 키>
    # 선택: 원격 DB 응답 없을 때 대기 시간(초)
    AUTH_DB_CONNECT_TIMEOUT=10
@@ -167,7 +118,7 @@ FLUSH PRIVILEGES;
 
 5. (선택) DBeaver / `mysql` CLI 로 확인:
    ```sql
-   USE bokji;
+   USE bokji_auth;
    SELECT id, username, created_at FROM users;   -- 비번 해시/암호문은 굳이 안 봄
    ```
 
@@ -207,19 +158,19 @@ SQLite 스키마(`repository.py` 의 `_SCHEMA`)와 컬럼 의미가 1:1 로 같�
 
 - **백업**: 주기적으로
   ```
-  mysqldump -h <host> -P <port> -u root -p bokji users > users_backup_$(date +%F).sql
+  mysqldump -h skn33.iptime.org -P <port> -u root -p bokji_auth users > users_backup_$(date +%F).sql
   ```
-  Network Volume 이 있어도 실수로 `DROP` 하면 끝이므로 덤프를 따로 남긴다.
-- **비용**: Pod 는 **켜 있는 내내 과금**된다(Serverless 와 다름). 시연 기간에만
-  Start 하고 평소엔 Stop 해도 된다 — 데이터는 Network Volume 에 남는다.
-  (Stop 후 첫 Start 때 MariaDB 가 다시 뜨는 몇십 초는 감안.)
+  서버가 자체 관리 서버라도 실수로 `DROP` 하면 끝이므로 덤프를 따로 남긴다.
+- **가용성**: RunPod Pod 와 달리 상시 운영되는 서버이므로 Start/Stop 과금
+  같은 건 없다. 다만 서버 재부팅/점검 시 DB 가 일시적으로 끊길 수 있으니
+  팀 내에서 점검 일정은 공유한다.
 - **탈퇴 시 잔재**: SQLite 백엔드는 `secure_delete` PRAGMA 로 삭제 페이지를
-  덮지만, MySQL 은 평범한 `DELETE` 다. 저장소 수준 소거는 RunPod/MariaDB
+  덮지만, MySQL 은 평범한 `DELETE` 다. 저장소 수준 소거는 이 MariaDB 서버의
   운영 정책에 달려 있다.
-- **RunPod 말고**: 코드는 `AUTH_DB_URL` 만 보므로, 상시 과금이 부담되면
-  무료 관리형 MySQL(예: Railway / PlanetScale / Aiven 무료 티어)로 URL 만
-  바꿔 그대로 붙일 수 있다. RunPod 은 관리형 DB 를 제공하지 않아 Pod +
-  직접 운영이 된다는 점만 다르다.
+- **다른 호스팅으로 다시 옮길 때**: 코드는 `AUTH_DB_URL` 만 보므로, 이후
+  다른 서버/관리형 MySQL(RunPod, Railway, PlanetScale, Aiven 등 무엇이든)로
+  옮기더라도 URL 만 바꾸면 그대로 붙는다 — 이 문서의 1장만 그 호스팅
+  환경에 맞게 다시 쓰면 된다.
 
 ---
 
@@ -227,12 +178,12 @@ SQLite 스키마(`repository.py` 의 `_SCHEMA`)와 컬럼 의미가 1:1 로 같�
 
 | 증상 | 원인/조치 |
 | --- | --- |
-| 화면에 "회원 데이터베이스에 연결할 수 없습니다" | Pod 가 Stop 상태이거나 `AUTH_DB_URL` 호스트/포트 오타. TCP Port Mappings 값을 다시 확인 |
+| 화면에 "회원 데이터베이스에 연결할 수 없습니다" | 서버가 꺼져 있거나 `AUTH_DB_URL` 호스트/포트 오타, 또는 방화벽/포트포워딩이 막혀 있음. `python scripts/check_auth_db.py`로 단계별 확인 |
 | 화면에 "회원 DB 설정(AUTH_DB_URL)이 올바르지 않습니다" | URL 형식 오류(스킴/포트/`/dbname` 누락). `mysql://user:pass@host:port/dbname` 형태인지 확인 |
-| 화면에 "회원 테이블(users)을 준비하지 못했습니다 … CREATE 권한" | 앱 계정에 `bokji.*` 의 `CREATE` 권한이 없음(1-4 참고). 또는 root 로 테이블을 미리 만든다 |
+| 화면에 "회원 테이블(users)을 준비하지 못했습니다 … CREATE 권한" | 앱 계정에 `bokji_auth.*` 의 `CREATE` 권한이 없음(1-1 참고). 또는 root 로 테이블을 미리 만든다 |
 | "AUTH_DB_URL 이 설정됐지만 pymysql 이 없습니다" | `pip install pymysql` |
 | 로그인은 되는데 이름/관심조건이 빈칸 | `AUTH_ENC_KEY` 가 가입 때와 다른 값. 팀이 같은 키를 공유해야 함 |
-| `Access denied for user` | 계정/비밀번호 오타 또는 `bokji_app` 권한 미부여(1-4 참고) |
+| `Access denied for user` | 계정/비밀번호 오타 또는 `dev_account01` 권한 미부여(1-1 참고) |
 | 한글 이름이 깨져 저장됨 | DB/테이블이 `utf8mb4` 인지 확인(`init_schema` 가 만들면 자동으로 맞음) |
 
 ---
@@ -242,7 +193,7 @@ SQLite 스키마(`repository.py` 의 `_SCHEMA`)와 컬럼 의미가 1:1 로 같�
 - `tests/test_auth_remote_db.py` — URL 파싱·백엔드 선택·연결 실패는 항상 실행,
   실제 DB 왕복(회원가입~탈퇴)은 `AUTH_TEST_DB_URL` 이 있을 때만:
   ```
-  AUTH_TEST_DB_URL=mysql://bokji_app:<pw>@<host>:<port>/bokji_test \
+  AUTH_TEST_DB_URL=mysql://dev_account01:<pw>@skn33.iptime.org:<port>/bokji_auth_test \
       python -m pytest tests/test_auth_remote_db.py -q
   ```
   (운영 DB 가 아니라 `bokji_test` 같은 별도 DB 를 쓴다 — 테스트가 행을

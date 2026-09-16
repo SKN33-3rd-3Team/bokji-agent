@@ -1,8 +1,8 @@
 # RunPod Serverless 연동 준비 (draft, 2026-08-31 기준)
 
 > 이 문서는 **LLM 추론**용 RunPod Serverless 연동이다. 로그인/회원가입의
-> 회원 DB 를 RunPod **Pod** 의 MariaDB 로 올리는 건 별개이며
-> `docs/AUTH_REMOTE_DB.md` 를 본다.
+> 회원 DB 는 RunPod 이 아니라 `skn33.iptime.org` 의 MariaDB 를 쓴다(별개
+> 사항) — `docs/AUTH_REMOTE_DB.md` 를 본다.
 
 N9/N10이 호출하는 `RunPodServerlessClient`(`src/rag_chatbot/llm/client.py`)는
 아직 실제 RunPod 엔드포인트 없이 코드만 준비된 상태다. 이 문서는 나중에

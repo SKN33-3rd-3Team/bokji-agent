@@ -207,7 +207,7 @@ class UserNotFoundError(AuthError):
 class AuthBackendUnavailableError(AuthError):
     """회원 DB(원격 MySQL/MariaDB 등)에 연결할 수 없음.
 
-    ``AUTH_DB_URL`` 로 원격 DB 를 쓰는데 RunPod Pod 가 꺼져 있거나 주소/계정이
+    ``AUTH_DB_URL`` 로 원격 DB 를 쓰는데 DB 서버가 꺼져 있거나 주소/계정이
     틀렸을 때. 화면단은 ``except AuthError`` 로 잡아 안내만 하면 된다.
     """
 
