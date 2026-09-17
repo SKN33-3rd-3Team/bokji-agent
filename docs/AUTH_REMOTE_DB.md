@@ -112,7 +112,7 @@ SHOW GRANTS FOR 'dev_account01'@'%';
 | --- | --- |
 | 이름·생년월일·관심조건·장애·보훈·소득·가구유형 | `display_name_enc`, `birth_date_enc`, `interests_enc`, `disability_status_enc`, `veteran_status_enc`, `income_bracket_enc`, `household_types_enc` |
 | 지역·성별 | `region`, `gender` 평문 |
-| 마케팅 동의 | `marketing_opt_in` 저장·조회. 수정 요구사항은 API-05 계약 공백으로 남음 |
+| 마케팅 동의 | 백엔드 공개 API에서 제거. 기존 `marketing_opt_in` 컬럼·과거 값과 내부 인증 인터페이스는 유지하며 HTTP 가입은 클라이언트 값을 전달하지 않고 기본값 `false`를 사용 |
 | 약관·개인정보 동의 | 가입 게이트에서 확인하며 동의 버전/이력을 프로필에 저장하지 않음 |
 | 취업 상태 | 회원 테이블에 없으며 상담에서 수집 |
 | 비밀번호·잠금·시간 | 해시, 실패 횟수·잠금 시각, ISO 형식 시간 문자열 |
