@@ -64,6 +64,9 @@ export function BirthDateSelect({ value, onChange }: BirthDateSelectProps) {
             setYear(y);
             setMonth("");
             setDay("");
+            // 일(day)이 리셋되면 더 이상 완전한 날짜가 아니므로, 부모가 예전 값을
+            // 그대로 들고 있지 않도록 값을 비운다(2026-09-17 리뷰 반영).
+            onChange("");
           }}
         >
           <option value="">연도</option>
@@ -83,6 +86,7 @@ export function BirthDateSelect({ value, onChange }: BirthDateSelectProps) {
             const m = e.target.value;
             setMonth(m);
             setDay("");
+            onChange("");
           }}
         >
           <option value="">월</option>

@@ -6,6 +6,7 @@ import { ConfirmModal } from "@/components/common/ConfirmModal";
 import { PasswordInput } from "@/components/common/PasswordInput";
 import { BirthDateSelect } from "@/components/common/BirthDateSelect";
 import { Toast } from "@/components/common/Toast";
+import { ErrorBanner } from "@/components/common/ErrorBanner";
 import { useAuth } from "@/features/auth/useAuth";
 import { useChangePassword, useDeleteAccount, useProfile, useUpdateProfile } from "@/features/auth/useMyPage";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
@@ -23,7 +24,7 @@ import {
   VETERAN_NONE,
 } from "@/constants/labels";
 import { ApiError } from "@/api/client";
-import type { DisabilityStatus, Gender, IncomeBracket, VeteranStatus } from "@/types/auth";
+import type { DisabilityStatus, Gender, HouseholdType, IncomeBracket, VeteranStatus } from "@/types/auth";
 
 function labelOrUnset(value: string, map?: Record<string, string>): string {
   if (!value) return "미설정";
@@ -53,7 +54,7 @@ export function MyPage() {
   const [veteranStatus, setVeteranStatus] = useState<VeteranStatus | "">("");
   const [incomeBracket, setIncomeBracket] = useState<IncomeBracket | "">("");
 
-  useEffect(() => {
+  const resetFormFromProfile = () => {
     if (!profile) return;
     setDisplayName(profile.display_name);
     setRegion(profile.region);
@@ -64,7 +65,20 @@ export function MyPage() {
     setHouseholdTypes(profile.household_types);
     setVeteranStatus((profile.veteran_status as VeteranStatus) || "");
     setIncomeBracket((profile.income_bracket as IncomeBracket) || "");
-  }, [profile]);
+  };
+
+  useEffect(() => {
+    // 편집 중에는 서버 재조회 값으로 입력 중인 폼을 덮어쓰지 않는다.
+    if (editMode) return;
+    resetFormFromProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile, editMode]);
+
+  const handleCancelEdit = () => {
+    resetFormFromProfile();
+    setSaveError(null);
+    setEditMode(false);
+  };
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -99,7 +113,7 @@ export function MyPage() {
         disability_status: disabilityStatus || undefined,
         veteran_status: veteranStatus || undefined,
         income_bracket: incomeBracket || undefined,
-        household_types: householdTypes as never,
+        household_types: householdTypes as HouseholdType[],
       });
       setEditMode(false);
       setSaveToast(true);
@@ -169,9 +183,9 @@ export function MyPage() {
     return (
       <AppShell>
         <div className="app-content">
-          <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "14px 16px", fontSize: 13.5 }}>
+          <ErrorBanner style={{ padding: "14px 16px", fontSize: 13.5, marginBottom: 0 }}>
             {profileError instanceof ApiError ? profileError.message : "내 정보를 불러오지 못했습니다."}
-          </div>
+          </ErrorBanner>
         </div>
       </AppShell>
     );
@@ -265,18 +279,14 @@ export function MyPage() {
               <h2 style={{ fontSize: 15.5, fontWeight: 800, margin: 0 }}>내 가입 정보 수정</h2>
               <button
                 type="button"
-                onClick={() => setEditMode(false)}
+                onClick={handleCancelEdit}
                 style={{ marginLeft: "auto", background: "var(--bg)", color: "var(--text-muted)", border: "1px solid var(--border-strong)", borderRadius: 8, fontSize: 12.5, fontWeight: 700, padding: "6px 12px" }}
               >
                 취소
               </button>
             </div>
 
-            {saveError && (
-              <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
-                {saveError}
-              </div>
-            )}
+            {saveError && <ErrorBanner>{saveError}</ErrorBanner>}
 
             <div className="field">
               <label>이름</label>
@@ -353,7 +363,7 @@ export function MyPage() {
             </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-              <button type="button" className="btn-outline" style={{ flex: "0 0 110px" }} onClick={() => setEditMode(false)}>취소</button>
+              <button type="button" className="btn-outline" style={{ flex: "0 0 110px" }} onClick={handleCancelEdit}>취소</button>
               <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={updateProfile.isPending}>
                 {updateProfile.isPending ? "저장 중…" : "저장"}
               </button>

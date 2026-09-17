@@ -1,7 +1,9 @@
 /**
  * API_정의서.xlsx API-01/02/04~09 계약과 1:1 대응.
- * 필드명은 src/rag_chatbot/auth/service.py 및 backend/app/schemas/auth.py와
- * 동일하게 유지한다 (PROJECT_STRUCTURE.md 3.2 표 참고).
+ * 여기 필드명은 HTTP 계약(API_정의서.xlsx, backend/app/schemas/auth.py) 기준이다.
+ * src/rag_chatbot/auth/service.py의 내부 함수 파라미터명(username 등)과는
+ * 다를 수 있다 - 예: 여기 email은 그쪽 username에 대응(값은 이메일, 이름만 다름).
+ * backend/app/services/auth_adapter.py가 이 계약과 내부 함수 사이를 매핑한다.
  */
 
 export type Gender = "male" | "female";

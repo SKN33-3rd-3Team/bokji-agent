@@ -5,6 +5,7 @@ import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { PasswordInput } from "@/components/common/PasswordInput";
 import { BirthDateSelect } from "@/components/common/BirthDateSelect";
+import { ErrorBanner } from "@/components/common/ErrorBanner";
 import { ApiError } from "@/api/client";
 import {
   DISABILITY_NONE,
@@ -136,11 +137,7 @@ export function SignupPage() {
           가입 후 마이페이지에서 정보를 관리할 수 있어요.
         </p>
 
-        {formError && (
-          <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
-            {formError}
-          </div>
-        )}
+        {formError && <ErrorBanner>{formError}</ErrorBanner>}
 
         <div className="field">
           <label>이메일 *</label>

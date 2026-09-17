@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { PolicyView } from "@/types/chat";
 import { badgeColor, documentChipItems, regionLabel } from "@/utils/policy";
 
@@ -16,8 +17,13 @@ function eligibilitySummary(policy: PolicyView): { value: string; note?: string 
 
 /** S-10 선택한 정책 비교 — policies 배열을 재사용, API 재호출 없음. */
 export function PolicyCompareTable({ policies, onBackToList, onOpenDetail }: PolicyCompareTableProps) {
+  // 렌더링 도중 부모(ChatPage) state를 바꾸면 안 되므로(React 규칙 위반,
+  // StrictMode 경고 유발) 이펙트로 옮긴다.
+  useEffect(() => {
+    if (policies.length === 0) onBackToList();
+  }, [policies.length, onBackToList]);
+
   if (policies.length === 0) {
-    onBackToList();
     return null;
   }
 

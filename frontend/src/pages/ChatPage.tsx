@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
+import { ErrorBanner } from "@/components/common/ErrorBanner";
 import { Toast } from "@/components/common/Toast";
 import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ExamplePrompts } from "@/components/chat/ExamplePrompts";
@@ -231,11 +232,7 @@ export function ChatPage() {
         )}
         </div>
 
-        {sendErrorMessage && (
-          <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "12px 14px", marginTop: 12, fontSize: 13 }}>
-            {sendErrorMessage}
-          </div>
-        )}
+        {sendErrorMessage && <ErrorBanner style={{ marginTop: 12, marginBottom: 0 }}>{sendErrorMessage}</ErrorBanner>}
 
         {(isEmpty || !showFollowupUi) && chat.policyView === "list" && (
           <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 8 }}>

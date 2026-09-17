@@ -2,7 +2,10 @@
  * API_정의서.xlsx API-10~13 계약 + src/rag_chatbot/service.py의
  * PolicyDetail/PolicyView/ChatResponse TypedDict(모듈 docstring 기준,
  * 실제 런타임 dict와 일치 — 클래스 선언보다 docstring이 최신/완전함)와
- * 1:1 대응. 필드명은 절대 임의로 바꾸지 않는다.
+ * 1:1 대응. 여기 필드명은 HTTP 계약(app/schemas/chat.py) 기준이며 함부로
+ * 바꾸지 않는다 - 단 service.ask()의 내부 파라미터명(user_input 등)과는
+ * 다를 수 있다(여기 message가 거기 user_input에 대응). 매핑은
+ * backend/app/services/chat_adapter.py 책임이다.
  */
 
 import type {

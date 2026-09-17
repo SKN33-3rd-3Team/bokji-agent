@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/features/auth/useAuth";
 import { PasswordInput } from "@/components/common/PasswordInput";
+import { ErrorBanner } from "@/components/common/ErrorBanner";
 import { ApiError } from "@/api/client";
 
 /** S-01 로그인 — 복지에이전트_디자인시안.html Main 아트보드 레이아웃 이식. */
@@ -125,11 +126,7 @@ export function LoginPage() {
             </p>
           </div>
 
-          {errorBanner && (
-            <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
-              {errorBanner}
-            </div>
-          )}
+          {errorBanner && <ErrorBanner>{errorBanner}</ErrorBanner>}
           {lockBanner && (
             <div style={{ background: "var(--amber-bg)", border: "1px solid var(--amber-border)", color: "var(--amber-text)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
               {lockBanner}
