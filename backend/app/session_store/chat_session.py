@@ -18,6 +18,7 @@ session_id를 추측해 이어 쓰는 것을 막으려면 이 저장소가 소�
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 
@@ -26,6 +27,7 @@ class ChatSessionRecord:
     user_id: int
     last_policies: list[dict] = field(default_factory=list)
     last_profile: list[dict] = field(default_factory=list)
+    operation_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
 
 class ChatSessionStore:
@@ -45,6 +47,18 @@ class ChatSessionStore:
             if record is None or record.user_id != user_id:
                 return None
             return record
+
+    @contextmanager
+    def locked(self, session_id: str, *, user_id: int):
+        """그래프 실행과 삭제를 직렬화한다. 잠금 수명은 세션 레코드와 같다."""
+
+        record = self.get(session_id, user_id=user_id)
+        if record is None:
+            yield None
+            return
+        with record.operation_lock:
+            # 대기하는 사이 삭제되거나 교체된 레코드는 다시 사용하지 않는다.
+            yield record if self.get(session_id, user_id=user_id) is record else None
 
     def update_last_response(
         self, session_id: str, *, policies: list[dict], profile: list[dict]

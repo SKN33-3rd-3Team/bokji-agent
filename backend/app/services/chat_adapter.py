@@ -104,25 +104,25 @@ def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
 
 
 def continue_chat(session_id: str, message: str, *, user_id: int) -> ChatResponse:
-    if chat_session_store.get(session_id, user_id=user_id) is None:
-        raise ApiError(
-            status.HTTP_404_NOT_FOUND,
-            "SESSION_NOT_FOUND",
-            "세션이 만료되었거나 존재하지 않습니다. 새로 상담을 시작해주세요.",
-        )
-    raw = _run(answer_followup, session_id, message)
-    raw = _augment_required_documents(raw)
-    _cache_last_response(session_id, raw)
-    return ChatResponse.model_validate(raw)
+    with chat_session_store.locked(session_id, user_id=user_id) as record:
+        if record is None:
+            raise ApiError(
+                status.HTTP_404_NOT_FOUND,
+                "SESSION_NOT_FOUND",
+                "세션이 만료되었거나 존재하지 않습니다. 새로 상담을 시작해주세요.",
+            )
+        raw = _run(answer_followup, session_id, message)
+        raw = _augment_required_documents(raw)
+        _cache_last_response(session_id, raw)
+        return ChatResponse.model_validate(raw)
 
 
 def delete_chat_session(session_id: str, *, user_id: int) -> None:
-    if chat_session_store.get(session_id, user_id=user_id) is None:
-        # 소유권이 없거나(다른 사용자 세션) 이미 없는 세션 - 존재 여부를
-        # 노출하지 않기 위해 아무것도 지우지 않고 조용히 멱등 성공 처리한다
-        # (API_정의서.xlsx API-13: "이미 없는 세션도 200으로 응답해도 무방").
-        return
-    graph = get_graph()
-    if graph.checkpointer is not None:
-        graph.checkpointer.delete_thread(session_id)
-    chat_session_store.delete(session_id)
+    with chat_session_store.locked(session_id, user_id=user_id) as record:
+        if record is None:
+            # 소유권이 없거나 이미 없는 세션은 멱등 성공 처리한다(API-13).
+            return
+        graph = get_graph()
+        if graph.checkpointer is not None:
+            graph.checkpointer.delete_thread(session_id)
+        chat_session_store.delete(session_id)
