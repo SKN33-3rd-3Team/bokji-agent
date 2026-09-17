@@ -20,6 +20,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from src.rag_chatbot.graph.slot_schema import is_valid_slot_value, parse_birth_date
+
 
 def _require_non_blank(value: str) -> str:
     """``Field(min_length=1)``은 공백뿐인 문자열("   ")도 통과시킨다 - API_정의서.xlsx
@@ -36,6 +38,46 @@ def _require_non_blank(value: str) -> str:
 _NonBlankStr = Annotated[str, Field(min_length=1), AfterValidator(_require_non_blank)]
 
 
+def _validate_known_slot(field: str, message: str):
+    """``known_gender``류가 코어(``graph/slot_schema.py::is_valid_slot_value``,
+    가입 시 검증하는 것과 동일한 단일 출처)가 모르는 값이면 요청 단계에서
+    막는다. 이전에는 이 값들을 그대로 ``service.ask()``에 넘겨, 코어가
+    무효한 값을 그냥 무시하고 조용히 통과시켰다(API_정의서.xlsx API-10
+    "요청값 오류 -> 400 VALIDATION_ERROR"와 불일치 - 2026-09 검토에서 확인).
+    """
+
+    def _validator(value: str | None) -> str | None:
+        if value is not None and not is_valid_slot_value(field, value):
+            raise ValueError(message)
+        return value
+
+    return _validator
+
+
+def _validate_known_birth_date(value: str | None) -> str | None:
+    if value is not None and parse_birth_date(value) is None:
+        raise ValueError("생년월일 형식이 올바르지 않거나 허용 범위를 벗어났습니다.")
+    return value
+
+
+_KnownGender = Annotated[
+    str | None, AfterValidator(_validate_known_slot("gender", "성별 값이 올바르지 않습니다."))
+]
+_KnownDisabilityStatus = Annotated[
+    str | None,
+    AfterValidator(_validate_known_slot("disability_status", "장애 등록 여부 값이 올바르지 않습니다.")),
+]
+_KnownVeteranStatus = Annotated[
+    str | None,
+    AfterValidator(_validate_known_slot("veteran_status", "보훈대상자 여부 값이 올바르지 않습니다.")),
+]
+_KnownIncomeBracket = Annotated[
+    str | None,
+    AfterValidator(_validate_known_slot("income_bracket", "소득 구간 값이 올바르지 않습니다.")),
+]
+_KnownBirthDate = Annotated[str | None, AfterValidator(_validate_known_birth_date)]
+
+
 class ChatRequest(BaseModel):
     """API-10 요청 바디."""
 
@@ -43,12 +85,12 @@ class ChatRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=20)
     extra_interests: list[str] = Field(default_factory=list)
     known_region: str | None = None
-    known_gender: str | None = None
-    known_birth_date: str | None = None
-    known_disability_status: str | None = None
-    known_income_bracket: str | None = None
+    known_gender: _KnownGender = None
+    known_birth_date: _KnownBirthDate = None
+    known_disability_status: _KnownDisabilityStatus = None
+    known_income_bracket: _KnownIncomeBracket = None
     known_household_types: list[str] = Field(default_factory=list)
-    known_veteran_status: str | None = None
+    known_veteran_status: _KnownVeteranStatus = None
 
 
 class FollowupRequest(BaseModel):

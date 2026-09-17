@@ -125,6 +125,14 @@ def test_me_after_login_returns_profile(client):
     assert r.headers["cache-control"] == "no-store"
 
 
+def test_me_membership_grade_is_fixed_general(client):
+    # 요구사항_정의서.xlsx S09-01: 등급 체계가 백엔드에 없어 항상 "일반 회원" 고정값.
+    _signup(client)
+    r = client.get("/api/v1/users/me")
+    assert r.status_code == 200
+    assert r.json()["membership_grade"] == "일반 회원"
+
+
 def test_update_profile_partial_fields(client):
     _signup(client)
     r = client.patch("/api/v1/users/me", json={"region": "서울특별시", "gender": "female"})

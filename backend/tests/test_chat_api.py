@@ -90,6 +90,27 @@ def test_chat_whitespace_only_message_is_400(client):
     assert r.json()["code"] == "VALIDATION_ERROR"
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("known_gender", "invalid"),
+        ("known_disability_status", "invalid"),
+        ("known_veteran_status", "invalid"),
+        ("known_income_bracket", "invalid"),
+        ("known_birth_date", "2999-01-01"),  # 미래 날짜
+        ("known_birth_date", "not-a-date"),
+    ],
+)
+def test_chat_invalid_known_slot_value_is_400(client, field, value):
+    # 2026-09 검토: 이전에는 잘못된 known_* 값을 코어(service.ask())가 조용히
+    # 무시했다(400 대신 통과) - API_정의서.xlsx API-10 "요청값 오류 -> 400
+    # VALIDATION_ERROR"에 맞춰 요청 스키마 단계에서 막는다.
+    _signup(client, f"chatuser_{field}_{abs(hash(value))}@example.com")
+    r = client.post("/api/v1/chat/messages", json={"message": "안녕", field: value})
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+
+
 def test_chat_start_and_followup_happy_path(client, monkeypatch):
     _signup(client, "chatuser3@example.com")
 

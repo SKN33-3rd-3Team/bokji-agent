@@ -83,6 +83,11 @@ class UserProfile(BaseModel):
     household_types: list[str] = Field(default_factory=list)
     interests: list[str] = Field(default_factory=list)
     marketing_opt_in: bool = False
+    # 요구사항_정의서.xlsx S09-01: 등급 체계 자체가 백엔드에 없어 항상 고정값.
+    # AuthUser에는 이 개념이 없으므로 auth_adapter.py가 응답 조립 시에만 채운다
+    # (코어 스키마/DB 변경 없음 - 등급 체계가 실제로 도입되면 그때 이 필드를
+    # 계산값으로 바꾼다).
+    membership_grade: str = "일반 회원"
 
 
 class SignupResponse(BaseModel):
