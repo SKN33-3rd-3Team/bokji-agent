@@ -23,6 +23,8 @@ from rag_design.embeddings import EmbeddingProviderError
 from rag_design.vector_store import VectorStoreError
 from src.rag_chatbot.auth.service import AuthError
 
+from .config import settings
+
 _log = logging.getLogger(__name__)
 
 
@@ -104,8 +106,15 @@ def register_exception_handlers(app: FastAPI) -> None:
         # chat_adapter가 이 지점에 닿기 전에 ApiError로 먼저 변환한다 - 여기는
         # 그 외 전 구간(라우팅/스키마 버그 등)을 위한 최종 안전망이다.
         _log.exception("unhandled error on %s", request.url.path)
-        return _json_error(
+        response = _json_error(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "INTERNAL_ERROR",
             "일시적인 오류가 발생했습니다. 다시 시도해주세요.",
         )
+        # ServerErrorMiddleware의 500 응답은 내부 CORSMiddleware를 지나지 않는다.
+        origin = request.headers.get("origin")
+        if origin in settings.cors_origin_list:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers.add_vary_header("Origin")
+        return response
