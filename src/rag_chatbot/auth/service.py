@@ -579,8 +579,8 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
             raise AccountLockedError(remaining)
 
         if not verify_password(password, row["password_hash"]):
-            # 실패 횟수 증가와 잠금 판정을 DB에서 원자적으로 처리한다(단일
-            # UPDATE). 이전에는 여기서 값을 읽어 +1 해 다시 썼는데, 동시에
+            # 실패 횟수 증가와 잠금 판정을 DB에서 원자적으로 처리한다.
+            # 이전에는 여기서 값을 읽어 +1 해 다시 썼는데, 동시에
             # 들어온 여러 잘못된 로그인 요청이 같은 이전 값을 읽어 같은 값을
             # 저장할 수 있어(lost update) 실제보다 적게 집계되는 문제가 있었다.
             limit = lockout.max_attempts()

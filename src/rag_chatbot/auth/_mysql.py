@@ -267,34 +267,35 @@ class MySQLBackend:
         max_attempts: int,
         lock_seconds: int,
     ) -> tuple[int, str | None]:
-        """SQLite 백엔드의 ``record_failed_login``과 동일한 계약 -
-        repository.py의 docstring 참고. MySQL/MariaDB의 기본 UPDATE는
-        왼쪽부터 대입하므로 잠금 판정은 이미 증가한 실패 횟수를 쓴다."""
+        """행 잠금 안에서 계산한 값을 저장해 UPDATE 대입 순서에 의존하지 않는다."""
 
-        now_dt = datetime.now(timezone.utc)
-        now_iso = now_dt.isoformat(timespec="seconds")
-        new_lock_iso = (now_dt + timedelta(seconds=lock_seconds)).isoformat(
-            timespec="seconds"
-        )
-        fails_expr = (
-            "CASE WHEN locked_until IS NOT NULL AND locked_until <= %s "
-            "THEN 1 ELSE failed_login_count + 1 END"
-        )
-        with conn.cursor() as cur:
-            cur.execute(
-                f"UPDATE users SET "
-                f"failed_login_count = {fails_expr}, "
-                f"locked_until = CASE WHEN failed_login_count >= %s THEN %s ELSE NULL END "
-                f"WHERE id = %s",
-                (now_iso, max_attempts, new_lock_iso, user_id),
-            )
+        conn.begin()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT failed_login_count, locked_until FROM users "
+                    "WHERE id = %s FOR UPDATE", (user_id,),
+                )
+                row = cur.fetchone()
+                now_dt = datetime.now(timezone.utc)
+                expired = (
+                    row["locked_until"] is not None
+                    and row["locked_until"] <= now_dt.isoformat(timespec="seconds")
+                )
+                fails = 1 if expired else int(row["failed_login_count"]) + 1
+                locked_until = (
+                    (now_dt + timedelta(seconds=lock_seconds)).isoformat(timespec="seconds")
+                    if fails >= max_attempts else None
+                )
+                cur.execute(
+                    "UPDATE users SET failed_login_count = %s, locked_until = %s "
+                    "WHERE id = %s", (fails, locked_until, user_id),
+                )
             conn.commit()
-            cur.execute(
-                "SELECT failed_login_count, locked_until FROM users WHERE id = %s",
-                (user_id,),
-            )
-            row = cur.fetchone()
-        return int(row["failed_login_count"]), row["locked_until"]
+        except Exception:
+            conn.rollback()
+            raise
+        return fails, locked_until
 
     @_as_backend_unavailable
     def delete_user(self, conn, user_id: int) -> None:
