@@ -4,6 +4,7 @@ import { useAuth } from "@/features/auth/useAuth";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { PasswordInput } from "@/components/common/PasswordInput";
+import { BirthDateSelect } from "@/components/common/BirthDateSelect";
 import { ApiError } from "@/api/client";
 import {
   DISABILITY_NONE,
@@ -218,9 +219,7 @@ export function SignupPage() {
 
           <div className="field">
             <label>생년월일</label>
-            <div className="input-shell">
-              <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
-            </div>
+            <BirthDateSelect value={birthDate} onChange={setBirthDate} />
           </div>
 
           <div className="field">

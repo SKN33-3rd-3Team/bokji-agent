@@ -8,6 +8,7 @@ export function ChatBubble({ role, text }: ChatBubbleProps) {
   const isUser = role === "user";
   return (
     <div
+      className="chat-bubble-in"
       style={{
         display: "flex",
         justifyContent: isUser ? "flex-end" : "flex-start",

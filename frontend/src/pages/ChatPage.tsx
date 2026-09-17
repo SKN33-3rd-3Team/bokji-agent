@@ -167,6 +167,7 @@ export function ChatPage() {
           <p className="text-faint" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>{GUIDANCE_OFFICIAL}</p>
         )}
 
+        <div className="view-fade" key={`${chat.messages.length}-${chat.policyView}`}>
         {showFollowupUi && response && (
           response.slot_conflicts ? (
             <SlotConflictForm response={response} onSubmit={submitMessage} isSubmitting={chat.isSending} />
@@ -228,6 +229,7 @@ export function ChatPage() {
         {showPolicyUi && chat.policyView === "compare" && (
           <PolicyCompareTable policies={selectedPolicies} onBackToList={chat.backToList} onOpenDetail={chat.openDetail} />
         )}
+        </div>
 
         {sendErrorMessage && (
           <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "12px 14px", marginTop: 12, fontSize: 13 }}>

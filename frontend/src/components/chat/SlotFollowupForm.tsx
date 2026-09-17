@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChatBubble } from "./ChatBubble";
 import { LlmDebugPanel } from "./LlmDebugPanel";
+import { BirthDateSelect } from "@/components/common/BirthDateSelect";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import {
   DISABILITY_LABELS_KO,
@@ -122,9 +123,7 @@ export function SlotFollowupForm({ response, onSubmit, isSubmitting }: SlotFollo
               )}
 
               {!isSkipped && slot === "birth_date" && (
-                <div className="input-shell">
-                  <input type="date" value={value} onChange={(e) => setValue(slot, e.target.value)} />
-                </div>
+                <BirthDateSelect value={value} onChange={(v) => setValue(slot, v)} />
               )}
 
               {!isSkipped && slot === "income_bracket" && (

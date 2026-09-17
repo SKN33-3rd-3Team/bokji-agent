@@ -170,6 +170,49 @@ ol {
 }
 
 /* ============================================================
+   화면전환 애니메이션 (라우트 전환, 채팅 내부 뷰 전환, 말풍선 등장)
+   ============================================================ */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.route-transition {
+  animation: fade-in-up 0.28s ease-out both;
+}
+.view-fade {
+  animation: fade-in-up 0.22s ease-out both;
+}
+.chat-bubble-in {
+  animation: bubble-in 0.22s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-transition,
+  .view-fade,
+  .chat-bubble-in {
+    animation: none;
+  }
+}
+
+/* ============================================================
    사이드바 (S-03/04, chat.py _render_sidebar 구조)
    ============================================================ */
 
@@ -208,6 +251,11 @@ ol {
   color: var(--text-muted);
   padding: 2px 6px 14px;
   font-weight: 500;
+}
+.sb-account-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text);
 }
 .sb-account svg.status-icon {
   width: 14px;
@@ -399,7 +447,8 @@ ol {
   pointer-events: none;
 }
 .input-shell input,
-.input-shell select {
+.input-shell select,
+.select-shell select {
   width: 100%;
   height: 44px;
   border: 1.5px solid var(--border-strong);
@@ -420,7 +469,8 @@ ol {
   color: var(--text-faint);
 }
 .input-shell input:focus,
-.input-shell select:focus {
+.input-shell select:focus,
+.select-shell select:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
@@ -450,6 +500,20 @@ ol {
   height: 15px;
   color: var(--text-faint);
   pointer-events: none;
+}
+
+.date-select-row {
+  display: flex;
+  gap: 8px;
+}
+.date-select-row .select-shell {
+  flex: 1;
+  min-width: 0;
+}
+.date-select-row .select-shell select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--panel-muted, #f3f4f6);
 }
 
 .inline-err {

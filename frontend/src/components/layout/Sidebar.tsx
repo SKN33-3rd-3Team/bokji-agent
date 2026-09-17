@@ -48,7 +48,7 @@ export function Sidebar({
             <circle cx="12" cy="12" r="10" />
             <path d="M8 12l2.5 2.5L16 9" />
           </svg>
-          {user.display_name} 님으로 로그인됨
+          <span className="sb-account-name">{user.display_name}</span> 님으로 로그인됨
         </div>
       )}
 

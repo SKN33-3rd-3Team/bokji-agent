@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
 import { PasswordInput } from "@/components/common/PasswordInput";
+import { BirthDateSelect } from "@/components/common/BirthDateSelect";
 import { Toast } from "@/components/common/Toast";
 import { useAuth } from "@/features/auth/useAuth";
 import { useChangePassword, useDeleteAccount, useProfile, useUpdateProfile } from "@/features/auth/useMyPage";
@@ -304,7 +305,7 @@ export function MyPage() {
             </div>
             <div className="field">
               <label>생년월일</label>
-              <div className="input-shell"><input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} /></div>
+              <BirthDateSelect value={birthDate} onChange={setBirthDate} />
             </div>
             <div className="field">
               <label>관심 지원조건</label>
@@ -440,7 +441,7 @@ export function MyPage() {
       <ConfirmModal
         open={deleteSuccess}
         title="계정이 삭제되었습니다"
-        description="그동안 이용해 주셔서 감사합니다. 저장된 정보는 모두 삭제되었어요."
+        description="그동안 이용해 주셔서 감사합니다. 저장된 정보는 모두 삭제되었습니다."
         confirmLabel="확인"
         hideCancel
         onConfirm={() => {
