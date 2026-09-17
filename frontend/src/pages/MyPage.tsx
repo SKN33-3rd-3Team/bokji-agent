@@ -180,15 +180,9 @@ export function MyPage() {
   return (
     <AppShell>
       <div className="app-content">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-          <p style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text-faint)", letterSpacing: "0.02em", margin: 0 }}>
-            마이페이지
-          </p>
-          <button type="button" className="btn-outline" style={{ width: "auto", height: 34, padding: "0 14px", fontSize: 12.5 }} onClick={() => navigate("/chat")}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-            상담으로 돌아가기
-          </button>
-        </div>
+        <p style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text-faint)", letterSpacing: "0.02em", margin: "0 0 14px" }}>
+          마이페이지
+        </p>
 
         {/* S09-01: 프로필 헤더 */}
         <div className="card" style={{ display: "flex", alignItems: "center", gap: 16, padding: "22px 26px", marginBottom: 16 }}>
@@ -411,10 +405,16 @@ export function MyPage() {
           </button>
         </div>
 
-        <button type="button" className="btn-outline" style={{ width: "100%" }} onClick={async () => { await logout(); navigate("/login"); }}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
-          로그아웃
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={async () => { await logout(); navigate("/login"); }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
+            로그아웃
+          </button>
+          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={() => navigate("/chat")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            상담으로 돌아가기
+          </button>
+        </div>
       </div>
 
       <ConfirmModal
