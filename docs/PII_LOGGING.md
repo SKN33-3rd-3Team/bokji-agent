@@ -27,10 +27,8 @@
    `AuthError` 계열 메시지는 사용자에게 그대로 보여도 되는 일반 문구만
    담는다(입력값 echo 금지).
 
-5. **Streamlit 디버그 패널.**
-   `st.session_state["auth_user"]` 에는 복호화된 표시이름이 들어간다.
-   디버그 출력에 세션 상태 전체를 덤프하지 않는다(`chat.py` 의 debug 모드
-   확장 시 `auth_user` 를 제외한다).
+5. **화면·HTTP 디버그 출력.**
+   FastAPI 요청 바디·쿠키·프로필 응답과 React 상태를 통째로 덤프하지 않는다. 레거시 Streamlit의 `st.session_state["auth_user"]`에도 복호화된 표시이름이 있으므로 전체 세션 덤프에서 제외한다. 요구사항 S05-04의 `output_*`·`llm_status`·`timing`을 일반 사용자에게 보여줄지, 관리자/QA로 제한할지는 미정이며 API에 필드가 있다는 이유로 공개 범위가 승인된 것은 아니다. [백엔드 계약 차이](../backend/README.md#원본-문서와-남은-계약-차이)를 참고한다.
 
 ## 점검 항목 (auth 관련 PR 리뷰 시)
 
