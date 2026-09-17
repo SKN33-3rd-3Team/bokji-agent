@@ -58,8 +58,6 @@ _ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DB_PATH = _ROOT / ".runtime" / "auth.db"
 _ENV_DB = "AUTH_DB_PATH"
 _ENV_DB_URL = "AUTH_DB_URL"
-_ENV_DUAL_WRITE = "AUTH_DB_DUAL_WRITE"
-_TRUTHY = {"1", "true", "yes", "on"}
 
 # 신규 DB는 이 스키마로 바로 만들어진다.
 _SCHEMA = """
@@ -461,21 +459,13 @@ class SqliteBackend:
         update_profile_fields(conn, user_id, **kw)
 
 
-def _dual_write_enabled() -> bool:
-    return os.environ.get(_ENV_DUAL_WRITE, "").strip().lower() in _TRUTHY
-
-
 def get_backend(db_path: str | Path | None = None):
     """쓸 백엔드를 결정한다.
 
-    1. ``db_path`` 를 명시하면 (테스트 등) 항상 그 SQLite 파일 - 아래 2/4 와
+    1. ``db_path`` 를 명시하면 (테스트 등) 항상 그 SQLite 파일 - 아래 2/3 과
        무관하다.
-    2. ``AUTH_DB_URL`` 이 있고 ``AUTH_DB_DUAL_WRITE`` 도 켜져 있으면, 원격
-       MySQL/MariaDB(primary) + 로컬 SQLite(secondary, 백업)를 동시에 쓰는
-       :class:`~rag_chatbot.auth._dual.DualBackend`
-       (``docs/AUTH_REMOTE_DB.md`` "로컬 동시 저장" 절 참고).
-    3. ``AUTH_DB_URL`` 만 있으면 원격 MySQL/MariaDB 단독.
-    4. 아무 것도 없으면 기본 SQLite(``AUTH_DB_PATH`` -> ``.runtime/auth.db``).
+    2. ``AUTH_DB_URL`` 이 있으면 원격 MySQL/MariaDB.
+    3. 아무 것도 없으면 기본 SQLite(``AUTH_DB_PATH`` -> ``.runtime/auth.db``).
     """
 
     if db_path is not None:
@@ -485,10 +475,5 @@ def get_backend(db_path: str | Path | None = None):
         dsn = parse_db_url(url)  # 스킴/형식 오류는 pymysql 유무와 무관하게 먼저 잡는다
         from ._mysql import MySQLBackend  # pymysql 은 이때만 필요
 
-        primary = MySQLBackend(dsn)
-        if _dual_write_enabled():
-            from ._dual import DualBackend  # 원격+로컬 둘 다 쓸 때만 필요
-
-            return DualBackend(primary, resolve_db_path())
-        return primary
+        return MySQLBackend(dsn)
     return SqliteBackend(None)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import unittest
 import uuid
+from unittest.mock import patch
 
 from rag_chatbot.auth import (
     AuthBackendUnavailableError,
@@ -111,6 +112,8 @@ class BackendSelectionTests(unittest.TestCase):
 
         os.environ["AUTH_DB_URL"] = "mysql://u:p@h:3306/bokji"
         self.assertIsInstance(repo.get_backend(), MySQLBackend)
+        with patch.dict(os.environ, {"AUTH_DB_DUAL_WRITE": "1"}):
+            self.assertIsInstance(repo.get_backend(), MySQLBackend)
 
     def test_service_wraps_bad_url_as_backend_unavailable(self):
         # 형식 오류는 pymysql 유무와 무관하게 화면단이 다루기 쉬운

@@ -74,17 +74,6 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
 
-# 이 스키마가 나온 뒤(#PR review) SQLite 쪽에 먼저 추가됐던 확장 프로필
-# 컬럼들 - 예전 원격 DB에는 없을 수 있어 있으면 건너뛰고 없으면 ADD COLUMN.
-_COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
-    ("gender", "gender VARCHAR(16) NULL"),
-    ("birth_date_enc", "birth_date_enc TEXT NULL"),
-    ("disability_status_enc", "disability_status_enc TEXT NULL"),
-    ("veteran_status_enc", "veteran_status_enc TEXT NULL"),
-    ("income_bracket_enc", "income_bracket_enc TEXT NULL"),
-    ("household_types_enc", "household_types_enc TEXT NULL"),
-)
-
 
 def _as_backend_unavailable(fn):
     """CRUD 경계에서 raw 드라이버 예외(``_MySQLError``)가 새어나가지 않게 감싼다.
@@ -168,15 +157,6 @@ class MySQLBackend:
         try:
             with conn.cursor() as cur:
                 cur.execute(_SCHEMA)
-                cur.execute(
-                    "SELECT COLUMN_NAME FROM information_schema.columns "
-                    "WHERE table_schema = %s AND table_name = 'users'",
-                    (self._dsn["database"],),
-                )
-                have = {row["COLUMN_NAME"] for row in cur.fetchall()}
-                for name, ddl in _COLUMN_MIGRATIONS:
-                    if name not in have:
-                        cur.execute(f"ALTER TABLE users ADD COLUMN {ddl}")
             conn.commit()
         except _MySQLError as exc:
             # 대개 계정에 CREATE 권한이 없을 때. 화면단이 안내만 하도록
