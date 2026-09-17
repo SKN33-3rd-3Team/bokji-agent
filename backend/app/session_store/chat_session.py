@@ -20,6 +20,7 @@ from __future__ import annotations
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from weakref import WeakValueDictionary
 
 
 @dataclass
@@ -34,6 +35,23 @@ class ChatSessionStore:
     def __init__(self):
         self._sessions: dict[str, ChatSessionRecord] = {}
         self._lock = threading.Lock()
+        self._user_locks: WeakValueDictionary[int, threading.Lock] = WeakValueDictionary()
+
+    @contextmanager
+    def locked_user(self, user_id: int):
+        """상담과 탈퇴를 회원별로 직렬화하고, 실행·대기가 끝난 잠금은 회수한다."""
+
+        with self._lock:
+            lock = self._user_locks.get(user_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._user_locks[user_id] = lock
+        with lock:
+            yield
+
+    def session_ids_for_user(self, user_id: int) -> list[str]:
+        with self._lock:
+            return [sid for sid, record in self._sessions.items() if record.user_id == user_id]
 
     def create(self, session_id: str, *, user_id: int) -> None:
         with self._lock:

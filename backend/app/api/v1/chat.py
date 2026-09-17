@@ -14,7 +14,7 @@ from ...schemas.chat import (
 )
 from ...services import chat_adapter, followup_adapter
 from ...session_store.auth_session import AuthSessionRecord
-from ..deps import get_current_user
+from ..deps import get_current_user, user_operation
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -23,7 +23,8 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 def send_message(
     payload: ChatRequest, current: AuthSessionRecord = Depends(get_current_user)
 ) -> ChatResponse:
-    return chat_adapter.start_chat(payload, user_id=current.user_id)
+    with user_operation(current):
+        return chat_adapter.start_chat(payload, user_id=current.user_id)
 
 
 @router.post("/sessions/{session_id}/followup", response_model=ChatResponse)
@@ -32,7 +33,8 @@ def send_followup(
     payload: FollowupRequest,
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> ChatResponse:
-    return chat_adapter.continue_chat(session_id, payload.message, user_id=current.user_id)
+    with user_operation(current):
+        return chat_adapter.continue_chat(session_id, payload.message, user_id=current.user_id)
 
 
 @router.post(
@@ -45,14 +47,16 @@ def ask_policy_question(
     payload: PolicyQuestionRequest,
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> PolicyQuestionResponse:
-    return followup_adapter.ask_policy_question(
-        session_id, policy_id, payload.question, user_id=current.user_id
-    )
+    with user_operation(current):
+        return followup_adapter.ask_policy_question(
+            session_id, policy_id, payload.question, user_id=current.user_id
+        )
 
 
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
 def delete_session(
     session_id: str, current: AuthSessionRecord = Depends(get_current_user)
 ) -> MessageResponse:
-    chat_adapter.delete_chat_session(session_id, user_id=current.user_id)
+    with user_operation(current):
+        chat_adapter.delete_chat_session(session_id, user_id=current.user_id)
     return MessageResponse(message="상담 세션이 초기화되었습니다.")

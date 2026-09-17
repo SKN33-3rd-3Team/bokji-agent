@@ -150,3 +150,16 @@ def delete_chat_session(session_id: str, *, user_id: int) -> None:
         if graph.checkpointer is not None:
             graph.checkpointer.delete_thread(session_id)
         chat_session_store.delete(session_id)
+
+
+def delete_all_chat_sessions(*, user_id: int) -> None:
+    """탈퇴 완료 후 호출한다. 호출자는 회원 잠금을 보유해 새 상담을 막는다."""
+
+    for session_id in chat_session_store.session_ids_for_user(user_id):
+        try:
+            delete_chat_session(session_id, user_id=user_id)
+        except (Exception, SystemExit):
+            _log.warning("탈퇴한 회원의 상담 체크포인트 정리에 실패했습니다.")
+        finally:
+            # 그래프 조회/삭제 실패가 탈퇴 결과를 가리거나 개인정보 캐시를 남기면 안 된다.
+            chat_session_store.delete(session_id)

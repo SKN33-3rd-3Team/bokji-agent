@@ -13,9 +13,9 @@ from ...schemas.auth import (
     UpdateProfileRequest,
     UserProfile,
 )
-from ...services import auth_adapter
+from ...services import auth_adapter, chat_adapter
 from ...session_store.auth_session import AuthSessionRecord, auth_session_store
-from ..deps import get_current_user
+from ..deps import get_current_user, user_operation
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -61,9 +61,11 @@ def delete_me(
     response: Response,
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> MessageResponse:
-    auth_adapter.delete_account(current.username, payload.password, user_id=current.user_id)
-    auth_session_store.delete_all_for_user(current.user_id)
-    clear_session_cookie(response)
+    with user_operation(current):
+        auth_adapter.delete_account(current.username, payload.password, user_id=current.user_id)
+        auth_session_store.delete_all_for_user(current.user_id)
+        clear_session_cookie(response)
+        chat_adapter.delete_all_chat_sessions(user_id=current.user_id)
     return MessageResponse(message="회원 탈퇴가 완료되었습니다.")
 
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from fastapi import Request, status
 
 from ..core.errors import ApiError
 from ..core.security import read_session_token
 from ..services import auth_adapter
 from ..session_store.auth_session import AuthSessionRecord, auth_session_store
+from ..session_store.chat_session import chat_session_store
 
 
 def get_current_user(request: Request) -> AuthSessionRecord:
@@ -24,3 +27,12 @@ def get_current_user(request: Request) -> AuthSessionRecord:
             auth_session_store.delete(token)
         raise
     return record
+
+
+@contextmanager
+def user_operation(current: AuthSessionRecord):
+    """인증 이후 기다리던 상담도 탈퇴 후 실행되지 않도록 잠금 안에서 재확인한다."""
+
+    with chat_session_store.locked_user(current.user_id):
+        auth_adapter.get_profile(current.username, user_id=current.user_id)
+        yield
