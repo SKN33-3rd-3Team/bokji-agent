@@ -81,6 +81,7 @@ export function useChatSession() {
     sendError: sendMutation.error,
     resetConversation: resetMutation.mutateAsync,
     isResetting: resetMutation.isPending,
+    resetError: resetMutation.error,
     openDetail,
     backToList,
     openCompare,

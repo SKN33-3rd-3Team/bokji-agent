@@ -92,7 +92,7 @@ export function SignupPage() {
         terms_agreed: termsAgreed,
         privacy_agreed: privacyAgreed,
       });
-      navigate("/chat");
+      navigate("/chat", { state: { justSignedUp: true } });
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.errorCode === "USERNAME_TAKEN") {

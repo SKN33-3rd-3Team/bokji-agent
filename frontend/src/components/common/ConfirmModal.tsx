@@ -9,11 +9,13 @@ interface ConfirmModalProps {
   danger?: boolean;
   isSubmitting?: boolean;
   onConfirm: () => void;
-  onCancel: () => void;
+  onCancel?: () => void;
+  /** 안내/완료 팝업처럼 취소 없이 확인 버튼 하나만 필요할 때. */
+  hideCancel?: boolean;
   children?: ReactNode;
 }
 
-/** 회원 탈퇴 등 되돌릴 수 없는 액션 전 확인 모달(API-07 등에서 재사용). */
+/** 회원 탈퇴 확인, 완료 안내 등에서 재사용하는 팝업(API-07 등). */
 export function ConfirmModal({
   open,
   title,
@@ -24,6 +26,7 @@ export function ConfirmModal({
   isSubmitting,
   onConfirm,
   onCancel,
+  hideCancel,
   children,
 }: ConfirmModalProps) {
   if (!open) return null;
@@ -49,9 +52,11 @@ export function ConfirmModal({
         )}
         {children}
         <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={onCancel}>
-            {cancelLabel}
-          </button>
+          {!hideCancel && (
+            <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={onCancel}>
+              {cancelLabel}
+            </button>
+          )}
           <button
             type="button"
             className={danger ? "btn-danger" : "btn-primary"}

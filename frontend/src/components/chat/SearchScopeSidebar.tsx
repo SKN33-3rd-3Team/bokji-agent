@@ -1,7 +1,6 @@
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import {
-  FALLBACK_DEFAULT_TOP_K,
   FALLBACK_INTEREST_FIELD_OPTIONS,
   FALLBACK_SIDEBAR_INTEREST_OPTIONS,
 } from "@/constants/labels";
@@ -34,7 +33,6 @@ export function SearchScopeSidebar({
   const { data: options } = useSearchOptions();
   const sidebarInterestOptions = options?.sidebar_interest_options ?? FALLBACK_SIDEBAR_INTEREST_OPTIONS;
   const interestFieldOptions = options?.interest_field_options ?? FALLBACK_INTEREST_FIELD_OPTIONS;
-  const defaultTopK = options?.default_top_k ?? FALLBACK_DEFAULT_TOP_K;
 
   return (
     <>
@@ -61,7 +59,7 @@ export function SearchScopeSidebar({
           type="range"
           min={TOP_K_MIN}
           max={TOP_K_MAX}
-          value={topK || defaultTopK}
+          value={topK}
           onChange={(e) => onTopKChange(Number(e.target.value))}
         />
       </div>

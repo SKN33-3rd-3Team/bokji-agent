@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { ChatBubble } from "./ChatBubble";
 import { LlmDebugPanel } from "./LlmDebugPanel";
+import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import {
   DISABILITY_LABELS_KO,
+  FALLBACK_HOUSEHOLD_TYPE_OPTIONS,
   FALLBACK_SIDO_OPTIONS,
   GENDER_LABELS_KO,
   INCOME_BRACKET_LABELS_KO,
@@ -18,7 +20,7 @@ const EXTRA_SLOT_LABELS_KO: Record<string, string> = {
   household_types: "가구 유형",
 };
 
-const CODE_WIDGET_SLOTS = ["region", "gender", "disability_status", "birth_date", "income_bracket", "employment_status"];
+const CODE_WIDGET_SLOTS = ["region", "gender", "disability_status", "birth_date", "income_bracket", "employment_status", "household_types"];
 
 function slotLabel(slot: string): string {
   return SLOT_LABELS_KO[slot as HardGateSlot] ?? EXTRA_SLOT_LABELS_KO[slot] ?? slot;
@@ -76,6 +78,7 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
   const incomeBracketLabelMap =
     options?.income_bracket_options?.reduce<Record<string, string>>((acc, o) => ({ ...acc, [o.code]: o.label }), {}) ??
     INCOME_BRACKET_LABELS_KO;
+  const householdTypeLabels = (options?.household_type_options ?? FALLBACK_HOUSEHOLD_TYPE_OPTIONS).map((o) => o.label);
 
   return (
     <div>
@@ -148,6 +151,14 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
                 <div className="input-shell">
                   <input type="text" value={value} onChange={(e) => setValue(slot, e.target.value)} />
                 </div>
+              )}
+
+              {slot === "household_types" && (
+                <PillMultiSelect
+                  options={householdTypeLabels}
+                  selected={value ? value.split(/,\s*/).filter(Boolean) : []}
+                  onChange={(labels) => setValue(slot, labels.join(", "))}
+                />
               )}
 
               {!CODE_WIDGET_SLOTS.includes(slot) && (

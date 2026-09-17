@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { usePolicyQuestion } from "@/features/chat/usePolicyQuestion";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { ApiError } from "@/api/client";
 import type { PolicyView } from "@/types/chat";
 
@@ -93,6 +94,8 @@ export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuest
                 </div>
               ))
             )}
+            {/* S08-02: 응답 대기 중 로딩 표시 */}
+            {isAsking && <TypingIndicator />}
           </div>
 
           {errorMessage && (

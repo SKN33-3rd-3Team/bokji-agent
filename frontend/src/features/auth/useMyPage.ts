@@ -38,11 +38,14 @@ export function useChangePassword() {
   });
 }
 
-/** API-07 — 회원 탈퇴(S09-06) */
+/**
+ * API-07 — 회원 탈퇴(S09-06).
+ * 성공해도 여기서 바로 setUser(null)을 하지 않는다 — 그러면 RequireAuth가
+ * user를 잃은 걸 보고 완료 팝업이 뜨기도 전에 /login으로 튕겨버린다.
+ * 로그아웃 처리는 호출부(MyPage)가 완료 팝업의 "확인" 클릭 시점에 한다.
+ */
 export function useDeleteAccount() {
-  const { setUser } = useAuth();
   return useMutation({
     mutationFn: (payload: DeleteAccountRequest) => deleteAccountApi(payload),
-    onSuccess: () => setUser(null),
   });
 }

@@ -60,20 +60,59 @@ export function LlmDebugPanel({ response }: LlmDebugPanelProps) {
         응답 원문 보기
       </button>
       {open && (
-        <pre
-          style={{
-            fontSize: 11,
-            lineHeight: 1.6,
-            background: "var(--gray-bg)",
-            color: "var(--gray-text)",
-            padding: "10px 12px",
-            borderRadius: 8,
-            overflowX: "auto",
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {response.output_markdown || JSON.stringify(response.output_json, null, 2)}
-        </pre>
+        <>
+          <pre
+            style={{
+              fontSize: 11,
+              lineHeight: 1.6,
+              background: "var(--gray-bg)",
+              color: "var(--gray-text)",
+              padding: "10px 12px",
+              borderRadius: 8,
+              overflowX: "auto",
+              whiteSpace: "pre-wrap",
+              marginBottom: response.timing?.phases?.length || response.timing?.node_path?.length ? 8 : 0,
+            }}
+          >
+            {response.output_markdown || JSON.stringify(response.output_json, null, 2)}
+          </pre>
+
+          {/* S05-04: output_markdown/output_json과 함께 timing(단계별 소요 시간)도 표시 */}
+          {(response.timing?.phases?.length ?? 0) > 0 && (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginBottom: 8 }}>
+              <thead>
+                <tr style={{ color: "var(--text-faint)", textAlign: "left" }}>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>단계</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>횟수</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>총 시간</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>평균</th>
+                  <th style={{ fontWeight: 600, padding: "4px 6px" }}>비중</th>
+                </tr>
+              </thead>
+              <tbody>
+                {response.timing.phases.map((phase) => (
+                  <tr key={phase.name} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "4px 6px" }}>{phase.name}</td>
+                    <td style={{ padding: "4px 6px" }}>{phase.count}</td>
+                    <td style={{ padding: "4px 6px" }}>{phase.total_s.toFixed(2)}s</td>
+                    <td style={{ padding: "4px 6px" }}>{phase.avg_s.toFixed(2)}s</td>
+                    <td style={{ padding: "4px 6px" }}>{Math.round(phase.share * 100)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {(response.timing?.node_path?.length ?? 0) > 0 && (
+            <div style={{ fontSize: 11, color: "var(--gray-text)", lineHeight: 1.8 }}>
+              {response.timing.node_path.map((node, i) => (
+                <span key={`${node.node}-${i}`}>
+                  {node.node}({node.title}) {node.seconds.toFixed(2)}s{i < response.timing.node_path.length - 1 ? " → " : ""}
+                </span>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

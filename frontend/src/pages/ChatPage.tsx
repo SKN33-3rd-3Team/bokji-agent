@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
+import { Toast } from "@/components/common/Toast";
 import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ExamplePrompts } from "@/components/chat/ExamplePrompts";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
@@ -12,27 +14,48 @@ import { PolicyCard } from "@/components/chat/PolicyCard";
 import { PolicyDetailView } from "@/components/chat/PolicyDetailView";
 import { PolicyCompareTable } from "@/components/chat/PolicyCompareTable";
 import { LlmDebugPanel } from "@/components/chat/LlmDebugPanel";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { PolicyQuestionDialog } from "@/components/dialogs/PolicyQuestionDialog";
 import { useChatSession } from "@/features/chat/useChatSession";
 import { usePolicySelection } from "@/features/chat/usePolicySelection";
+import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { useAuth } from "@/features/auth/useAuth";
 import { getChatDefaults } from "@/api/userApi";
 import { ApiError } from "@/api/client";
 import { CHAT_INPUT_PLACEHOLDER, GUIDANCE_OFFICIAL, INTRO_GREETING_BODY, INTRO_GREETING_HINT, INTRO_GREETING_TITLE } from "@/constants/labels";
-import type { HardGateSlot, PolicyView } from "@/types/chat";
+import type { PolicyView } from "@/types/chat";
 import { FALLBACK_DEFAULT_TOP_K } from "@/constants/labels";
 
 export function ChatPage() {
   const { user } = useAuth();
   const chat = useChatSession();
   const compare = usePolicySelection();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // API-01 비고: 회원가입 직후 S-03으로 넘어올 때 딱 한 번 성공 토스트를 보여준다.
+  const [signupToast, setSignupToast] = useState(
+    Boolean((location.state as { justSignedUp?: boolean } | null)?.justSignedUp),
+  );
+  useEffect(() => {
+    if (!signupToast) return;
+    navigate(location.pathname, { replace: true, state: {} }); // 새로고침 시 재노출 방지
+    const timer = setTimeout(() => setSignupToast(false), 2500);
+    return () => clearTimeout(timer);
+    // 마운트 시 1회만 — location.state는 위에서 이미 초기값으로 읽었다.
+  }, []);
 
   const [input, setInput] = useState("");
   const [supportConditions, setSupportConditions] = useState<string[]>([]);
   const [interestFields, setInterestFields] = useState<string[]>([]);
-  const [topK, setTopK] = useState(FALLBACK_DEFAULT_TOP_K);
+  // API-09의 default_top_k(서버 값)가 로딩되기 전까지만 프론트 상수로 보여준다.
+  // 사용자가 슬라이더를 직접 움직이면 그 값이 항상 우선한다.
+  const [topKOverride, setTopKOverride] = useState<number | null>(null);
+  const { data: searchOptions } = useSearchOptions();
+  const topK = topKOverride ?? searchOptions?.default_top_k ?? FALLBACK_DEFAULT_TOP_K;
   const [askingPolicy, setAskingPolicy] = useState<PolicyView | null>(null);
   const [confirmingNewChat, setConfirmingNewChat] = useState(false);
+  const [newChatError, setNewChatError] = useState<string | null>(null);
 
   // S03-07: 로그인 사용자는 채팅 화면 진입 시 API-08을 1회 호출해 known_* 값을 보관한다.
   const { data: chatDefaults } = useQuery({
@@ -71,8 +94,13 @@ export function ChatPage() {
   };
 
   const confirmNewChat = async () => {
-    await handleNewChat();
-    setConfirmingNewChat(false);
+    setNewChatError(null);
+    try {
+      await handleNewChat();
+      setConfirmingNewChat(false);
+    } catch (err) {
+      setNewChatError(err instanceof ApiError ? err.message : "새 상담을 시작하지 못했습니다. 다시 시도해주세요.");
+    }
   };
 
   const handleCompareClick = () => {
@@ -109,7 +137,7 @@ export function ChatPage() {
           interestFields={interestFields}
           onInterestFieldsChange={setInterestFields}
           topK={topK}
-          onTopKChange={setTopK}
+          onTopKChange={setTopKOverride}
         />
       }
     >
@@ -132,6 +160,9 @@ export function ChatPage() {
           <ChatBubble key={i} role={turn.role} text={turn.text} />
         ))}
 
+        {/* S03-06: 응답 대기 중 로딩 인디케이터 */}
+        {chat.isSending && <TypingIndicator />}
+
         {response && !showFollowupUi && !showPolicyUi && (
           <p className="text-faint" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>{GUIDANCE_OFFICIAL}</p>
         )}
@@ -142,7 +173,6 @@ export function ChatPage() {
           ) : (
             <SlotFollowupForm
               response={response}
-              slot={(response.missing_slots[0] ?? "region") as HardGateSlot}
               onSubmit={submitMessage}
               isSubmitting={chat.isSending}
             />
@@ -236,8 +266,15 @@ export function ChatPage() {
         cancelLabel="취소"
         isSubmitting={chat.isResetting}
         onConfirm={confirmNewChat}
-        onCancel={() => setConfirmingNewChat(false)}
-      />
+        onCancel={() => {
+          setConfirmingNewChat(false);
+          setNewChatError(null);
+        }}
+      >
+        {newChatError && <p className="inline-err">{newChatError}</p>}
+      </ConfirmModal>
+
+      {signupToast && <Toast message="회원가입이 완료되었습니다!" />}
     </AppShell>
   );
 }

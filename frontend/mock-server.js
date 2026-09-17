@@ -17,6 +17,12 @@ const chatSessions = new Map(); // chatSessionId -> { userId, step }
 
 let nextUserId = 1;
 
+// mock 응답이 너무 빨라서(수 ms) 로딩 인디케이터를 눈으로 확인할 수 없다는
+// QA 피드백 반영 — 채팅/정책 문의처럼 실제로 시간이 걸리는 API에만 일부러
+// 지연을 준다. 실제 서비스와는 무관한 QA 전용 값이다.
+const QA_DELAY_MS = 700;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** UI 힌트("8자 이상, 영문·숫자·특수문자를 섞어 주세요")와 동일한 정책. */
 function passwordViolations(password) {
   const violations = [];
@@ -166,7 +172,9 @@ const SEARCH_OPTIONS = {
     "육아", "출산", "보육", "주거", "취업", "일자리", "창업", "교육", "장학",
     "의료", "건강", "돌봄", "노인", "장애인", "저소득", "청년", "다문화", "한부모", "지원금",
   ],
-  default_top_k: 5,
+  // 일부러 프론트의 하드코딩 폴백(5)과 다른 값으로 둬서 "서버 값과 실제로
+  // 동기화되는지"를 눈으로 바로 확인할 수 있게 한다.
+  default_top_k: 7,
 };
 
 function emptyLlmStatus() {
@@ -340,8 +348,15 @@ function chatResponseNeedsRegion(sessionId) {
   return {
     status: "needs_input",
     session_id: sessionId,
-    question: "거주하시는 지역이 어디신가요? 정확한 지원 대상 확인을 위해 필요해요.",
-    missing_slots: ["region"],
+    // N3(request_missing_slots.py)는 부족한 하드 게이트 슬롯을 한 턴에 전부
+    // 모아 번호 목록으로 묻는다 — 지역만 먼저 묻고 다음 턴에 나머지를 물으면
+    // 되묻기 왕복이 늘어 MAX_SLOT_ASKS 상한에 먼저 닿는 문제가 있었기 때문
+    // (llm_gateway.py generate_followup_question 문서 참고). mock도 이 다중
+    // 슬롯 동시 요청 형태를 재현해야 프론트가 missing_slots 전체를 실제로
+    // 처리하는지 검증할 수 있다.
+    question:
+      "아래 정보를 알려주시면 더 정확하게 확인해드릴게요.\n1. 거주 지역이 어디신가요?\n2. 성별이 어떻게 되시나요?\n3. 생년월일이 언제신가요?\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+    missing_slots: ["region", "gender", "birth_date"],
     slot_conflicts: null,
     answer_status: null,
     final_answer: null,
@@ -359,10 +374,12 @@ function chatResponseConflict(sessionId) {
   return {
     status: "needs_input",
     session_id: sessionId,
-    question: "회원 정보에는 소득 수준이(가) '중위소득 75~100%'로 되어 있는데, 방금은 '중위소득 50~75%'라고 하셨어요. 어느 쪽이 맞는지 다시 알려주세요.",
+    question:
+      "회원 정보에는 소득 수준이(가) '중위소득 75~100%'로 되어 있는데, 방금은 '중위소득 50~75%'라고 하셨어요.\n회원 정보에는 가구 유형이(가) '다자녀'로 되어 있는데, 방금은 '한부모, 1인 가구'라고 하셨어요. 어느 쪽이 맞는지 다시 알려주세요.",
     missing_slots: [],
     slot_conflicts: {
       income_bracket: { profile: "중위소득 75~100%", chat: "중위소득 50~75%" },
+      household_types: { profile: "다자녀", chat: "한부모, 1인 가구" },
     },
     answer_status: null,
     final_answer: null,
@@ -530,6 +547,7 @@ const routes = [
       const user = getCurrentUser(req);
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
       const body = await readBody(req);
+      await delay(QA_DELAY_MS);
       const sessionId = crypto.randomUUID();
       // top_k(사이드바 "정책 후보 수" 슬라이더)는 이 첫 호출에만 실려 오고, 이후 followup(API-11)
       // 요청에는 없으므로 세션 상태에 기억해뒀다가 답변 단계에서 그대로 쓴다.
@@ -544,6 +562,7 @@ const routes = [
       const user = getCurrentUser(req);
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
       await readBody(req);
+      await delay(QA_DELAY_MS);
       const state = chatSessions.get(sessionId) ?? { userId: user.id, step: 1 };
       state.step += 1;
       chatSessions.set(sessionId, state);
@@ -557,6 +576,7 @@ const routes = [
     handler: async (req, res, [, policyId]) => {
       const user = getCurrentUser(req);
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
+      await delay(QA_DELAY_MS);
       const body = await readBody(req);
       sendJson(res, 200, {
         kind: "answer",

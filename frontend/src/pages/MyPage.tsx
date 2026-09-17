@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
 import { PasswordInput } from "@/components/common/PasswordInput";
+import { Toast } from "@/components/common/Toast";
 import { useAuth } from "@/features/auth/useAuth";
 import { useChangePassword, useDeleteAccount, useProfile, useUpdateProfile } from "@/features/auth/useMyPage";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
@@ -30,8 +31,8 @@ function labelOrUnset(value: string, map?: Record<string, string>): string {
 
 export function MyPage() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
-  const { data: profile, isLoading } = useProfile();
+  const { logout, setUser } = useAuth();
+  const { data: profile, isLoading, error: profileError } = useProfile();
   const { data: options } = useSearchOptions();
   const updateProfile = useUpdateProfile();
   const changePassword = useChangePassword();
@@ -39,6 +40,7 @@ export function MyPage() {
 
   const [editMode, setEditMode] = useState(false);
   const [saveToast, setSaveToast] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [displayName, setDisplayName] = useState("");
   const [region, setRegion] = useState("");
@@ -65,12 +67,16 @@ export function MyPage() {
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [newPasswordMismatch, setNewPasswordMismatch] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [passwordToast, setPasswordToast] = useState(false);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState("");
   const [deleteAgree, setDeleteAgree] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState(false);
 
   const householdTypeOptions = options?.household_type_options ?? FALLBACK_HOUSEHOLD_TYPE_OPTIONS;
   const householdOptions = householdTypeOptions.map((o) => o.label);
@@ -80,31 +86,45 @@ export function MyPage() {
 
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
-    // API-05 비고: 부분 diff 대신 화면에 있는 값 전부를 매번 전송한다(실수 방지 권장 방식).
-    await updateProfile.mutateAsync({
-      display_name: displayName,
-      region,
-      gender: gender || undefined,
-      birth_date: birthDate,
-      interests,
-      disability_status: disabilityStatus || undefined,
-      veteran_status: veteranStatus || undefined,
-      income_bracket: incomeBracket || undefined,
-      household_types: householdTypes as never,
-    });
-    setEditMode(false);
-    setSaveToast(true);
-    setTimeout(() => setSaveToast(false), 3000);
+    setSaveError(null);
+    try {
+      // API-05 비고: 부분 diff 대신 화면에 있는 값 전부를 매번 전송한다(실수 방지 권장 방식).
+      await updateProfile.mutateAsync({
+        display_name: displayName,
+        region,
+        gender: gender || undefined,
+        birth_date: birthDate,
+        interests,
+        disability_status: disabilityStatus || undefined,
+        veteran_status: veteranStatus || undefined,
+        income_bracket: incomeBracket || undefined,
+        household_types: householdTypes as never,
+      });
+      setEditMode(false);
+      setSaveToast(true);
+      setTimeout(() => setSaveToast(false), 3000);
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : "저장에 실패했습니다. 다시 시도해주세요.");
+    }
   };
 
   const handleChangePassword = async (e: FormEvent) => {
     e.preventDefault();
     setPasswordMessage(null);
+
+    if (newPassword !== newPasswordConfirm) {
+      setNewPasswordMismatch(true);
+      return;
+    }
+    setNewPasswordMismatch(false);
+
     try {
       await changePassword.mutateAsync({ current_password: currentPassword, new_password: newPassword });
-      setPasswordMessage({ ok: true, text: "비밀번호가 변경되었습니다." });
       setCurrentPassword("");
       setNewPassword("");
+      setNewPasswordConfirm("");
+      setPasswordToast(true);
+      setTimeout(() => setPasswordToast(false), 2500);
     } catch (err) {
       if (err instanceof ApiError) {
         // API-06 비고: PASSWORD_POLICY_VIOLATION은 위반 항목 목록을 별도 배열로 내려준다.
@@ -128,16 +148,30 @@ export function MyPage() {
     }
     try {
       await deleteAccount.mutateAsync({ password: deletePassword });
-      navigate("/login");
+      setDeleteModalOpen(false);
+      setDeleteSuccess(true);
     } catch (err) {
       setDeleteError(err instanceof ApiError ? err.message : "회원 탈퇴에 실패했습니다.");
     }
   };
 
-  if (isLoading || !profile) {
+  if (isLoading) {
     return (
       <AppShell>
         <div className="app-content">불러오는 중…</div>
+      </AppShell>
+    );
+  }
+
+  // API-04 실패(UNAUTHORIZED/USER_NOT_FOUND 등) — 로딩 중과 구분해서 원인을 보여준다.
+  if (profileError || !profile) {
+    return (
+      <AppShell>
+        <div className="app-content">
+          <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "14px 16px", fontSize: 13.5 }}>
+            {profileError instanceof ApiError ? profileError.message : "내 정보를 불러오지 못했습니다."}
+          </div>
+        </div>
       </AppShell>
     );
   }
@@ -148,12 +182,6 @@ export function MyPage() {
         <p style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text-faint)", letterSpacing: "0.02em", margin: "0 0 14px" }}>
           마이페이지
         </p>
-
-        {saveToast && (
-          <div style={{ background: "var(--green-bg)", color: "var(--green-text)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13 }}>
-            다음 채팅부터 바뀐 값이 반영됩니다.
-          </div>
-        )}
 
         {/* S09-01: 프로필 헤더 */}
         <div className="card" style={{ display: "flex", alignItems: "center", gap: 16, padding: "22px 26px", marginBottom: 16 }}>
@@ -242,6 +270,12 @@ export function MyPage() {
                 취소
               </button>
             </div>
+
+            {saveError && (
+              <div style={{ background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red-text)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
+                {saveError}
+              </div>
+            )}
 
             <div className="field">
               <label>이름</label>
@@ -338,9 +372,22 @@ export function MyPage() {
             <label>현재 비밀번호</label>
             <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
           </div>
-          <div className="field" style={{ marginBottom: 0 }}>
+          <div className="field">
             <label>새 비밀번호</label>
             <PasswordInput value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>새 비밀번호 확인</label>
+            <PasswordInput
+              value={newPasswordConfirm}
+              onChange={(v) => {
+                setNewPasswordConfirm(v);
+                if (newPasswordMismatch) setNewPasswordMismatch(false);
+              }}
+              autoComplete="new-password"
+              shellClassName={newPasswordMismatch ? "err" : undefined}
+            />
+            {newPasswordMismatch && <span className="inline-err">새 비밀번호와 새 비밀번호 확인이 일치하지 않습니다.</span>}
           </div>
           <button type="submit" className="btn-primary" style={{ marginTop: 20 }} disabled={changePassword.isPending}>
             {changePassword.isPending ? "변경 중…" : "비밀번호 변경"}
@@ -389,6 +436,21 @@ export function MyPage() {
         </div>
         {deleteError && <p className="inline-err">{deleteError}</p>}
       </ConfirmModal>
+
+      <ConfirmModal
+        open={deleteSuccess}
+        title="계정이 삭제되었습니다"
+        description="그동안 이용해 주셔서 감사합니다. 저장된 정보는 모두 삭제되었어요."
+        confirmLabel="확인"
+        hideCancel
+        onConfirm={() => {
+          setUser(null);
+          navigate("/login");
+        }}
+      />
+
+      {saveToast && <Toast message="다음 채팅부터 바뀐 값이 반영됩니다." />}
+      {passwordToast && <Toast message="비밀번호가 성공적으로 변경되었습니다." />}
     </AppShell>
   );
 }
