@@ -20,15 +20,28 @@ from ..deps import get_current_user
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 
+def _no_store(response: Response) -> None:
+    """개인정보가 담긴 프로필 응답은 브라우저/CDN에 캐시되면 안 된다
+    (API 정의서 요구사항)."""
+
+    response.headers["Cache-Control"] = "no-store"
+
+
 @router.get("/me", response_model=UserProfile)
-def get_me(current: AuthSessionRecord = Depends(get_current_user)) -> UserProfile:
+def get_me(
+    response: Response, current: AuthSessionRecord = Depends(get_current_user)
+) -> UserProfile:
+    _no_store(response)
     return auth_adapter.get_profile(current.username)
 
 
 @router.patch("/me", response_model=UserProfile)
 def update_me(
-    payload: UpdateProfileRequest, current: AuthSessionRecord = Depends(get_current_user)
+    payload: UpdateProfileRequest,
+    response: Response,
+    current: AuthSessionRecord = Depends(get_current_user),
 ) -> UserProfile:
+    _no_store(response)
     return auth_adapter.update_profile(current.username, payload)
 
 
@@ -54,6 +67,8 @@ def delete_me(
 
 @router.get("/me/chat-defaults", response_model=ChatDefaultsResponse)
 def get_chat_defaults(
+    response: Response,
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> ChatDefaultsResponse:
+    _no_store(response)
     return auth_adapter.get_chat_defaults(current.username)

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from .repository import _UNSET, DuplicateUsername, _utcnow
@@ -50,22 +51,39 @@ _schema_ready: set[tuple[str, int, str]] = set()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id                  BIGINT       NOT NULL AUTO_INCREMENT,
-    username            VARCHAR(254) NOT NULL,
-    password_hash       VARCHAR(255) NOT NULL,
-    display_name_enc    TEXT         NULL,
-    region              VARCHAR(255) NULL,
-    interests_enc       TEXT         NULL,
-    marketing_opt_in    TINYINT      NOT NULL DEFAULT 0,
-    created_at          VARCHAR(32)  NOT NULL,
-    updated_at          VARCHAR(32)  NOT NULL,
-    password_changed_at VARCHAR(32)  NULL,
-    failed_login_count  INT          NOT NULL DEFAULT 0,
-    locked_until        VARCHAR(32)  NULL,
+    id                     BIGINT       NOT NULL AUTO_INCREMENT,
+    username               VARCHAR(254) NOT NULL,
+    password_hash          VARCHAR(255) NOT NULL,
+    display_name_enc       TEXT         NULL,
+    region                 VARCHAR(255) NULL,
+    gender                 VARCHAR(16)  NULL,
+    birth_date_enc         TEXT         NULL,
+    interests_enc          TEXT         NULL,
+    disability_status_enc  TEXT         NULL,
+    veteran_status_enc     TEXT         NULL,
+    income_bracket_enc     TEXT         NULL,
+    household_types_enc    TEXT         NULL,
+    marketing_opt_in       TINYINT      NOT NULL DEFAULT 0,
+    created_at             VARCHAR(32)  NOT NULL,
+    updated_at             VARCHAR(32)  NOT NULL,
+    password_changed_at    VARCHAR(32)  NULL,
+    failed_login_count     INT          NOT NULL DEFAULT 0,
+    locked_until           VARCHAR(32)  NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uq_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 """
+
+# 이 스키마가 나온 뒤(#PR review) SQLite 쪽에 먼저 추가됐던 확장 프로필
+# 컬럼들 - 예전 원격 DB에는 없을 수 있어 있으면 건너뛰고 없으면 ADD COLUMN.
+_COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("gender", "gender VARCHAR(16) NULL"),
+    ("birth_date_enc", "birth_date_enc TEXT NULL"),
+    ("disability_status_enc", "disability_status_enc TEXT NULL"),
+    ("veteran_status_enc", "veteran_status_enc TEXT NULL"),
+    ("income_bracket_enc", "income_bracket_enc TEXT NULL"),
+    ("household_types_enc", "household_types_enc TEXT NULL"),
+)
 
 
 def _as_backend_unavailable(fn):
@@ -150,6 +168,15 @@ class MySQLBackend:
         try:
             with conn.cursor() as cur:
                 cur.execute(_SCHEMA)
+                cur.execute(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema = %s AND table_name = 'users'",
+                    (self._dsn["database"],),
+                )
+                have = {row["COLUMN_NAME"] for row in cur.fetchall()}
+                for name, ddl in _COLUMN_MIGRATIONS:
+                    if name not in have:
+                        cur.execute(f"ALTER TABLE users ADD COLUMN {ddl}")
             conn.commit()
         except _MySQLError as exc:
             # 대개 계정에 CREATE 권한이 없을 때. 화면단이 안내만 하도록
@@ -173,7 +200,13 @@ class MySQLBackend:
         password_hash: str,
         display_name_enc: str | None,
         region: str | None = None,
+        gender: str | None = None,
+        birth_date_enc: str | None = None,
         interests_enc: str | None = None,
+        disability_status_enc: str | None = None,
+        veteran_status_enc: str | None = None,
+        income_bracket_enc: str | None = None,
+        household_types_enc: str | None = None,
         marketing_opt_in: bool = False,
     ) -> tuple[int, str]:
         now = _utcnow()
@@ -181,15 +214,23 @@ class MySQLBackend:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO users "
-                    "(username, password_hash, display_name_enc, region, "
-                    "interests_enc, marketing_opt_in, created_at, updated_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "(username, password_hash, display_name_enc, region, gender, "
+                    "birth_date_enc, interests_enc, disability_status_enc, "
+                    "veteran_status_enc, income_bracket_enc, household_types_enc, "
+                    "marketing_opt_in, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         username,
                         password_hash,
                         display_name_enc,
                         region,
+                        gender,
+                        birth_date_enc,
                         interests_enc,
+                        disability_status_enc,
+                        veteran_status_enc,
+                        income_bracket_enc,
+                        household_types_enc,
                         1 if marketing_opt_in else 0,
                         now,
                         now,
@@ -238,6 +279,43 @@ class MySQLBackend:
         conn.commit()
 
     @_as_backend_unavailable
+    def record_failed_login(
+        self,
+        conn,
+        user_id: int,
+        *,
+        max_attempts: int,
+        lock_seconds: int,
+    ) -> tuple[int, str | None]:
+        """SQLite 백엔드의 ``record_failed_login``과 동일한 계약 -
+        repository.py의 docstring 참고. 방언 차이(``%s`` 자리표시자)만 있다."""
+
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat(timespec="seconds")
+        new_lock_iso = (now_dt + timedelta(seconds=lock_seconds)).isoformat(
+            timespec="seconds"
+        )
+        fails_expr = (
+            "CASE WHEN locked_until IS NOT NULL AND locked_until <= %s "
+            "THEN 1 ELSE failed_login_count + 1 END"
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE users SET "
+                f"failed_login_count = {fails_expr}, "
+                f"locked_until = CASE WHEN ({fails_expr}) >= %s THEN %s ELSE NULL END "
+                f"WHERE id = %s",
+                (now_iso, now_iso, max_attempts, new_lock_iso, user_id),
+            )
+            conn.commit()
+            cur.execute(
+                "SELECT failed_login_count, locked_until FROM users WHERE id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+        return int(row["failed_login_count"]), row["locked_until"]
+
+    @_as_backend_unavailable
     def delete_user(self, conn, user_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
@@ -251,14 +329,26 @@ class MySQLBackend:
         *,
         display_name_enc: object = _UNSET,
         region: object = _UNSET,
+        gender: object = _UNSET,
+        birth_date_enc: object = _UNSET,
         interests_enc: object = _UNSET,
+        disability_status_enc: object = _UNSET,
+        veteran_status_enc: object = _UNSET,
+        income_bracket_enc: object = _UNSET,
+        household_types_enc: object = _UNSET,
     ) -> None:
         sets: list[str] = []
         params: list[object] = []
         for column, value in (
             ("display_name_enc", display_name_enc),
             ("region", region),
+            ("gender", gender),
+            ("birth_date_enc", birth_date_enc),
             ("interests_enc", interests_enc),
+            ("disability_status_enc", disability_status_enc),
+            ("veteran_status_enc", veteran_status_enc),
+            ("income_bracket_enc", income_bracket_enc),
+            ("household_types_enc", household_types_enc),
         ):
             if value is not _UNSET:
                 sets.append(f"{column} = %s")

@@ -60,6 +60,16 @@ def signup(payload: SignupRequest) -> UserProfile:
         raise ApiError(
             status.HTTP_400_BAD_REQUEST, "VALIDATION_ERROR", "비밀번호가 일치하지 않습니다."
         )
+    if not auth_service._clean_display_name(payload.name):
+        # SignupRequest.name 은 pydantic에서 필수지만 공백/제어문자만 있는
+        # 문자열은 통과한다 - API가 직접 호출될 수 있으므로 실제 저장 시
+        # 쓰는 것과 같은 정리 기준(auth.service._clean_display_name)으로
+        # 여기서 막는다. auth.service.sign_up()은 다른 내부 호출부(테스트
+        # 등)를 위해 빈 이름을 그대로 허용하므로(마이페이지 "이름 지움" 같은
+        # 의미가 아님) 서비스가 아니라 API 어댑터가 필수값을 검사한다.
+        raise ApiError(
+            status.HTTP_400_BAD_REQUEST, "VALIDATION_ERROR", "이름을 입력해 주세요."
+        )
     try:
         user = auth_service.sign_up(
             payload.email,

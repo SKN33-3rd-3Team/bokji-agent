@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 from . import lockout
 from . import repository as repo
@@ -88,6 +88,32 @@ _HOUSEHOLD_TYPE_VALUES = frozenset(
     }
 )
 
+# 시/도: streamlit_ui.constants.SIDO_OPTIONS 와 같은 값을 그대로 쓴다(위
+# 성별 등과 같은 이유로 streamlit_ui 패키지 자체는 import하지 않는다 - 이
+# 모듈은 API가 직접 호출될 수도 있으므로 폼 제한과 별개로 서버에서도
+# 검증한다/fail-closed). 값이 바뀌면 두 곳을 같이 고쳐야 한다.
+_SIDO_VALUES = frozenset(
+    {
+        "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시",
+        "대전광역시", "울산광역시", "세종특별자치시", "경기도", "강원특별자치도",
+        "충청북도", "충청남도", "전북특별자치도", "전라남도", "경상북도",
+        "경상남도", "제주특별자치도",
+    }
+)
+
+# 관심 지원조건: streamlit_ui.constants.INTEREST_OPTIONS 와 같은 값을 그대로
+# 쓴다(위 시/도와 같은 이유). 회원가입 폼은 이 중 일부(SIGNUP_INTEREST_OPTIONS)
+# 만 보여주지만(장애/보훈/기초수급/한부모는 별도 구조화 필드와 중복이라 폼에서
+# 뺐을 뿐 - streamlit_ui/constants.py 주석 참고) 저장되는 ``interests`` 필드
+# 자체의 유효값 범위는 전체 INTEREST_OPTIONS다(채팅 사이드바 등 다른 진입점도
+# 같은 필드를 전체 목록으로 채운다).
+_INTEREST_VALUES = frozenset(
+    {
+        "기초생활수급/차상위", "장애인", "임신/출산", "국가유공자/보훈",
+        "노인/어르신", "한부모/조손가정", "농어업인", "청년",
+    }
+)
+
 # 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
 # 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가
 # 하드게이트 슬롯으로 쓰기 직전에 다시 검증한다). 미래 날짜만 걸러
@@ -119,9 +145,20 @@ def _clean_birth_date(value: object) -> str:
     today = _utcnow_date()
     if parsed > today:
         raise AuthError("생년월일이 미래일 수 없습니다.")
-    if today.year - parsed.year > _MAX_PLAUSIBLE_AGE_YEARS:
+    if parsed < _earliest_plausible_birth_date(today):
         raise AuthError("생년월일이 올바르지 않습니다.")
     return parsed.isoformat()
+
+
+def _earliest_plausible_birth_date(today: date) -> date:
+    """"오늘 기준 120년 전" 날짜. 연도만 빼면 2/29 같은 날은 실제 120년보다
+    최대 며칠 더 넉넉하게 통과시키는 경계 오류가 생겨(연도 차만 비교) 여기서는
+    실제 날짜로 뺀다. 오늘이 2/29 인 마지막 해가 윤년이 아니면 2/28 로 내림."""
+
+    try:
+        return today.replace(year=today.year - _MAX_PLAUSIBLE_AGE_YEARS)
+    except ValueError:
+        return today.replace(year=today.year - _MAX_PLAUSIBLE_AGE_YEARS, day=28)
 
 
 def _utcnow_date() -> date:
@@ -165,6 +202,31 @@ def _clean_household_types(values: object) -> tuple[str, ...]:
     for item in items:
         if item not in _HOUSEHOLD_TYPE_VALUES:
             raise AuthError("가구 유형 값이 올바르지 않습니다.")
+    return tuple(dict.fromkeys(items))
+
+
+def _clean_region(value: object) -> str:
+    """빈 값은 "선택 안 함"으로 허용한다. API-09 시/도 목록에 없는 값은
+    거부한다(폼 위조 방지 - fail-closed)."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text not in _SIDO_VALUES:
+        raise AuthError("거주 지역 값이 올바르지 않습니다.")
+    return text
+
+
+def _clean_interests(values: object) -> tuple[str, ...]:
+    """관심 지원조건 목록을 검증한다. 계약 밖 값이 하나라도 있으면 거부한다
+    (폼 위조 방지 - fail-closed). 중복은 제거하고 입력 순서는 유지한다."""
+
+    if values is None:
+        return ()
+    items = [str(x).strip() for x in values if str(x).strip()]
+    for item in items:
+        if item not in _INTEREST_VALUES:
+            raise AuthError("관심 지원조건 값이 올바르지 않습니다.")
     return tuple(dict.fromkeys(items))
 
 
@@ -446,12 +508,10 @@ def sign_up(
         raise PasswordPolicyError(violations)
 
     name = _clean_display_name(display_name)
-    region = (region or "").strip()
+    region = _clean_region(region)
     gender = _clean_gender(gender)
     birth_date = _clean_birth_date(birth_date)
-    interest_items = tuple(
-        str(x).strip() for x in (interests or []) if str(x).strip()
-    )
+    interest_items = _clean_interests(interests)
     disability_status = _clean_disability_status(disability_status)
     veteran_status = _clean_veteran_status(veteran_status)
     income_bracket = _clean_income_bracket(income_bracket)
@@ -527,26 +587,22 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
             _log.info("login blocked (locked) username=%s", mask_email(uname))
             raise AccountLockedError(remaining)
 
-        # 잠금 창이 지났으면(자동 해제) 카운터를 새로 센다.
-        prev_fails = 0 if locked_until is not None else int(row["failed_login_count"] or 0)
-
         if not verify_password(password, row["password_hash"]):
-            fails = prev_fails + 1
+            # 실패 횟수 증가와 잠금 판정을 DB에서 원자적으로 처리한다(단일
+            # UPDATE). 이전에는 여기서 값을 읽어 +1 해 다시 썼는데, 동시에
+            # 들어온 여러 잘못된 로그인 요청이 같은 이전 값을 읽어 같은 값을
+            # 저장할 수 있어(lost update) 실제보다 적게 집계되는 문제가 있었다.
             limit = lockout.max_attempts()
-            if fails >= limit:
-                secs = lockout.lockout_seconds()
-                new_lock = (now + timedelta(seconds=secs)).isoformat(timespec="seconds")
-                backend.set_login_security(
-                    conn, user_id, failed_login_count=fails, locked_until=new_lock
-                )
+            secs = lockout.lockout_seconds()
+            fails, locked_after = backend.record_failed_login(
+                conn, user_id, max_attempts=limit, lock_seconds=secs
+            )
+            if locked_after is not None:
                 _log.info(
                     "login fail username=%s (locked, fails=%d)",
                     mask_email(uname), fails,
                 )
                 raise AccountLockedError(secs)
-            backend.set_login_security(
-                conn, user_id, failed_login_count=fails, locked_until=None
-            )
             _log.info(
                 "login fail username=%s (fails=%d/%d)",
                 mask_email(uname), fails, limit,
@@ -623,15 +679,14 @@ def update_profile(
             trimmed = _clean_display_name(display_name)
             changes["display_name_enc"] = _encrypt_safe(trimmed) if trimmed else None
         if region is not None:
-            trimmed = region.strip()
-            changes["region"] = trimmed or None
+            changes["region"] = _clean_region(region) or None
         if gender is not None:
             changes["gender"] = _clean_gender(gender) or None
         if birth_date is not None:
             cleaned = _clean_birth_date(birth_date)
             changes["birth_date_enc"] = encrypt_pii(cleaned) if cleaned else None
         if interests is not None:
-            changes["interests_enc"] = _encrypt_interests(interests)
+            changes["interests_enc"] = _encrypt_interests(_clean_interests(interests))
         if disability_status is not None:
             cleaned = _clean_disability_status(disability_status)
             changes["disability_status_enc"] = encrypt_pii(cleaned) if cleaned else None

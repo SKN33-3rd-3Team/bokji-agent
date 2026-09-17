@@ -46,6 +46,24 @@ def test_signup_password_mismatch_is_400(client):
     assert r.json()["code"] == "VALIDATION_ERROR"
 
 
+def test_signup_blank_name_is_400(client):
+    r = _signup(client, name="   ")
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_signup_invalid_region_is_400(client):
+    r = _signup(client, region="없는지역")
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_signup_invalid_interest_is_400(client):
+    r = _signup(client, interests=["없는조건"])
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+
+
 def test_login_success(client):
     _signup(client)
     r = client.post(
@@ -77,6 +95,7 @@ def test_me_after_login_returns_profile(client):
     r = client.get("/api/v1/users/me")
     assert r.status_code == 200
     assert r.json()["email"] == _SIGNUP_PAYLOAD["email"]
+    assert r.headers["cache-control"] == "no-store"
 
 
 def test_update_profile_partial_fields(client):
@@ -90,6 +109,13 @@ def test_update_profile_partial_fields(client):
     # 다시 조회해도 값이 유지되는지 (실제 DB round-trip 확인)
     r = client.get("/api/v1/users/me")
     assert r.json()["region"] == "서울특별시"
+
+
+def test_update_profile_invalid_region_is_400(client):
+    _signup(client)
+    r = client.patch("/api/v1/users/me", json={"region": "없는지역"})
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
 
 
 def test_update_profile_omitted_field_is_unchanged_but_explicit_null_clears_it(client):

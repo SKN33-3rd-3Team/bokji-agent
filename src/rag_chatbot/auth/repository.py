@@ -49,7 +49,7 @@ from __future__ import annotations
 import functools
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
@@ -58,6 +58,8 @@ _ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DB_PATH = _ROOT / ".runtime" / "auth.db"
 _ENV_DB = "AUTH_DB_PATH"
 _ENV_DB_URL = "AUTH_DB_URL"
+_ENV_DUAL_WRITE = "AUTH_DB_DUAL_WRITE"
+_TRUTHY = {"1", "true", "yes", "on"}
 
 # 신규 DB는 이 스키마로 바로 만들어진다.
 _SCHEMA = """
@@ -299,6 +301,54 @@ def set_login_security(
 
 
 @_as_backend_unavailable
+def record_failed_login(
+    conn: sqlite3.Connection,
+    user_id: int,
+    *,
+    max_attempts: int,
+    lock_seconds: int,
+) -> tuple[int, str | None]:
+    """로그인 실패를 원자적으로 반영하고 ``(새 실패 횟수, 새 잠금 해제 시각)``
+    을 돌려준다(잠기지 않았으면 두번째 값은 ``None``).
+
+    호출 전(``service.authenticate``)에 이미 "현재 잠겨 있지 않음"(잠금이
+    없거나 만료됨)은 확인이 끝난 상태다. 예전에는 여기서 ``failed_login_count``
+    를 읽어 +1 한 값을 다시 썼는데, 동시에 들어온 여러 로그인 실패 요청이
+    같은 이전 값을 읽고 같은 값을 저장할 수 있어(lost update) 실제보다 적게
+    집계되는 문제가 있었다. 단일 UPDATE 문 안에서 "잠금이 이미 만료됐으면
+    1로 리셋, 아니면 +1"과 "그 결과가 임계치 이상이면 잠금"을 함께 계산해
+    행 잠금(row lock) 구간 안에서 원자적으로 처리한다.
+
+    ``locked_until`` 비교는 ISO8601(UTC, 초 단위)로 저장된 문자열끼리 사전식
+    비교로 하는데, 이 모듈이 항상 같은 포맷으로 쓰기 때문에 사전식 순서가
+    시간 순서와 같다.
+    """
+
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat(timespec="seconds")
+    new_lock_iso = (now_dt + timedelta(seconds=lock_seconds)).isoformat(
+        timespec="seconds"
+    )
+    fails_expr = (
+        "CASE WHEN locked_until IS NOT NULL AND locked_until <= ? "
+        "THEN 1 ELSE failed_login_count + 1 END"
+    )
+    conn.execute(
+        f"UPDATE users SET "
+        f"failed_login_count = {fails_expr}, "
+        f"locked_until = CASE WHEN ({fails_expr}) >= ? THEN ? ELSE NULL END "
+        f"WHERE id = ?",
+        (now_iso, now_iso, max_attempts, new_lock_iso, user_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT failed_login_count, locked_until FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    return int(row["failed_login_count"]), row["locked_until"]
+
+
+@_as_backend_unavailable
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     """회원 행과 그 내용을 삭제한다 (탈퇴).
 
@@ -397,6 +447,11 @@ class SqliteBackend:
     ) -> None:
         set_login_security(conn, user_id, **kw)
 
+    def record_failed_login(
+        self, conn: sqlite3.Connection, user_id: int, **kw: Any
+    ) -> tuple[int, str | None]:
+        return record_failed_login(conn, user_id, **kw)
+
     def delete_user(self, conn: sqlite3.Connection, user_id: int) -> None:
         delete_user(conn, user_id)
 
@@ -406,12 +461,21 @@ class SqliteBackend:
         update_profile_fields(conn, user_id, **kw)
 
 
+def _dual_write_enabled() -> bool:
+    return os.environ.get(_ENV_DUAL_WRITE, "").strip().lower() in _TRUTHY
+
+
 def get_backend(db_path: str | Path | None = None):
     """쓸 백엔드를 결정한다.
 
-    1. ``db_path`` 를 명시하면 (테스트 등) 항상 그 SQLite 파일.
-    2. ``AUTH_DB_URL`` 이 있으면 원격 MySQL/MariaDB.
-    3. 둘 다 없으면 기본 SQLite(``AUTH_DB_PATH`` -> ``.runtime/auth.db``).
+    1. ``db_path`` 를 명시하면 (테스트 등) 항상 그 SQLite 파일 - 아래 2/4 와
+       무관하다.
+    2. ``AUTH_DB_URL`` 이 있고 ``AUTH_DB_DUAL_WRITE`` 도 켜져 있으면, 원격
+       MySQL/MariaDB(primary) + 로컬 SQLite(secondary, 백업)를 동시에 쓰는
+       :class:`~rag_chatbot.auth._dual.DualBackend`
+       (``docs/AUTH_REMOTE_DB.md`` "로컬 동시 저장" 절 참고).
+    3. ``AUTH_DB_URL`` 만 있으면 원격 MySQL/MariaDB 단독.
+    4. 아무 것도 없으면 기본 SQLite(``AUTH_DB_PATH`` -> ``.runtime/auth.db``).
     """
 
     if db_path is not None:
@@ -421,5 +485,10 @@ def get_backend(db_path: str | Path | None = None):
         dsn = parse_db_url(url)  # 스킴/형식 오류는 pymysql 유무와 무관하게 먼저 잡는다
         from ._mysql import MySQLBackend  # pymysql 은 이때만 필요
 
-        return MySQLBackend(dsn)
+        primary = MySQLBackend(dsn)
+        if _dual_write_enabled():
+            from ._dual import DualBackend  # 원격+로컬 둘 다 쓸 때만 필요
+
+            return DualBackend(primary, resolve_db_path())
+        return primary
     return SqliteBackend(None)
