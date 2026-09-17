@@ -27,22 +27,38 @@ class AuthSessionStore:
         self._ttl = timedelta(days=ttl_days)
         self._sessions: dict[str, AuthSessionRecord] = {}
         self._lock = threading.Lock()
+        self._next_cleanup: datetime | None = None
+
+    def _prune_expired(self, now: datetime) -> None:
+        """호출자는 _lock을 보유한다. 사용하지 않는 만료 토큰도 회수한다."""
+
+        if self._next_cleanup is not None and now < self._next_cleanup:
+            return
+        # ponytail: 분당 최대 한 번 O(n) 순회. 대규모 세션은 TTL 저장소로 전환.
+        expired = [token for token, record in self._sessions.items() if record.expires_at < now]
+        for token in expired:
+            del self._sessions[token]
+        self._next_cleanup = now + timedelta(minutes=1)
 
     def create(self, token: str, *, user_id: int, username: str) -> None:
+        now = datetime.now(timezone.utc)
         record = AuthSessionRecord(
             user_id=user_id,
             username=username,
-            expires_at=datetime.now(timezone.utc) + self._ttl,
+            expires_at=now + self._ttl,
         )
         with self._lock:
+            self._prune_expired(now)
             self._sessions[token] = record
 
     def get(self, token: str) -> AuthSessionRecord | None:
         with self._lock:
+            now = datetime.now(timezone.utc)
+            self._prune_expired(now)
             record = self._sessions.get(token)
             if record is None:
                 return None
-            if record.expires_at < datetime.now(timezone.utc):
+            if record.expires_at < now:
                 del self._sessions[token]
                 return None
             return record
