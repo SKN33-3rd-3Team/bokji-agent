@@ -28,6 +28,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
+from streamlit_ui.constants import SIGNUP_INTEREST_OPTIONS
+
 from . import lockout
 from . import repository as repo
 from .crypto import (
@@ -101,18 +103,8 @@ _SIDO_VALUES = frozenset(
     }
 )
 
-# 관심 지원조건: streamlit_ui.constants.INTEREST_OPTIONS 와 같은 값을 그대로
-# 쓴다(위 시/도와 같은 이유). 회원가입 폼은 이 중 일부(SIGNUP_INTEREST_OPTIONS)
-# 만 보여주지만(장애/보훈/기초수급/한부모는 별도 구조화 필드와 중복이라 폼에서
-# 뺐을 뿐 - streamlit_ui/constants.py 주석 참고) 저장되는 ``interests`` 필드
-# 자체의 유효값 범위는 전체 INTEREST_OPTIONS다(채팅 사이드바 등 다른 진입점도
-# 같은 필드를 전체 목록으로 채운다).
-_INTEREST_VALUES = frozenset(
-    {
-        "기초생활수급/차상위", "장애인", "임신/출산", "국가유공자/보훈",
-        "노인/어르신", "한부모/조손가정", "농어업인", "청년",
-    }
-)
+# API-01/05의 프로필 관심조건은 API-09와 같은 순수 상수를 사용한다.
+_INTEREST_VALUES = frozenset(SIGNUP_INTEREST_OPTIONS)
 
 # 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
 # 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가

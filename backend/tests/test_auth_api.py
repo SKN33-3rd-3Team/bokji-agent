@@ -64,6 +64,33 @@ def test_signup_invalid_interest_is_400(client):
     assert r.json()["code"] == "VALIDATION_ERROR"
 
 
+def test_signup_and_profile_interests_follow_signup_options(client):
+    options = client.get("/api/v1/config/search-options").json()
+    allowed = options["signup_interest_options"]
+    sidebar_only = set(options["sidebar_interest_options"]) - set(allowed)
+    assert sidebar_only
+    for interest in sidebar_only:
+        r = _signup(client, interests=[interest])
+        assert r.status_code == 400
+        assert r.json()["code"] == "VALIDATION_ERROR"
+
+    r = _signup(client, interests=allowed)
+    assert r.status_code == 201
+    assert r.json()["user"]["interests"] == allowed
+    for interest in sidebar_only:
+        r = client.patch("/api/v1/users/me", json={"interests": [interest]})
+        assert r.status_code == 400
+        assert r.json()["code"] == "VALIDATION_ERROR"
+        assert client.get("/api/v1/users/me").json()["interests"] == allowed
+
+    r = client.patch("/api/v1/users/me", json={"interests": allowed[::-1]})
+    assert r.status_code == 200
+    assert r.json()["interests"] == allowed[::-1]
+    r = client.patch("/api/v1/users/me", json={"interests": None})
+    assert r.status_code == 200
+    assert r.json()["interests"] == []
+
+
 def test_login_success(client):
     _signup(client)
     r = client.post(

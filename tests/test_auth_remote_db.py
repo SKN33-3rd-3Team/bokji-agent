@@ -270,12 +270,12 @@ class LiveRemoteDbTests(unittest.TestCase):
 
     def test_signup_authenticate_roundtrip_decrypts_pii(self):
         sign_up(self._email, _GOOD_PW, "홍길동", region="서울특별시",
-                interests=["장애인", "청년"], marketing_opt_in=True)
+                interests=["임신/출산", "청년"], marketing_opt_in=True)
         user = authenticate(self._email, _GOOD_PW)
         self.assertEqual(user.username, self._email)
         self.assertEqual(user.display_name, "홍길동")
         self.assertEqual(user.region, "서울특별시")
-        self.assertEqual(set(user.interests), {"장애인", "청년"})
+        self.assertEqual(set(user.interests), {"임신/출산", "청년"})
         self.assertTrue(user.marketing_opt_in)
 
     def test_duplicate_signup_rejected(self):

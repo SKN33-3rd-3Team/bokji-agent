@@ -247,10 +247,10 @@ class ServiceTests(unittest.TestCase):
     # -- 프로필(회원가입 입력 내용) 저장·조회·수정 -----------------------
     def test_signup_persists_profile_and_authenticate_returns_it(self):
         sign_up("p@example.com", _GOOD_PW, "복지왕", region="서울특별시",
-                interests=["장애인", "청년"], marketing_opt_in=True, db_path=self.db)
+                interests=["임신/출산", "청년"], marketing_opt_in=True, db_path=self.db)
         got = authenticate("p@example.com", _GOOD_PW, db_path=self.db)
         self.assertEqual(got.region, "서울특별시")
-        self.assertEqual(set(got.interests), {"장애인", "청년"})
+        self.assertEqual(set(got.interests), {"임신/출산", "청년"})
         self.assertTrue(got.marketing_opt_in)
 
     def test_get_profile_decrypts_without_password(self):
@@ -270,11 +270,11 @@ class ServiceTests(unittest.TestCase):
         sign_up("u@example.com", _GOOD_PW, "old", region="대구광역시",
                 interests=["청년"], db_path=self.db)
         updated = update_profile("u@example.com", display_name="new",
-                                 region="인천광역시", interests=["장애인", "한부모/조손가정"],
+                                 region="인천광역시", interests=["임신/출산", "노인/어르신"],
                                  db_path=self.db)
         self.assertEqual(updated.display_name, "new")
         self.assertEqual(updated.region, "인천광역시")
-        self.assertEqual(set(updated.interests), {"장애인", "한부모/조손가정"})
+        self.assertEqual(set(updated.interests), {"임신/출산", "노인/어르신"})
         # 재조회해도 유지된다
         again = get_profile("u@example.com", db_path=self.db)
         self.assertEqual(again.display_name, "new")
