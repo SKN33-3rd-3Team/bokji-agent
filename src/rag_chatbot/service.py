@@ -145,7 +145,7 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, nullcontext
 from datetime import date
 import sys
@@ -1165,6 +1165,7 @@ def ask(
     known_income_bracket: str | None = None,
     known_household_types: list[str] | None = None,
     known_veteran_status: str | None = None,
+    _on_graph_ready: Callable[[Any], None] | None = None,
 ) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
     질문을 입력했을 때 호출한다.
@@ -1227,6 +1228,9 @@ def ask(
     with ExitStack() as request_timer:
         request_timer.enter_context(TIMER.measure("request_total"))
         graph = get_graph()
+        # HTTP 어댑터가 실패한 첫 요청의 실제 그래프만 정리할 수 있게 전달한다.
+        if _on_graph_ready is not None:
+            _on_graph_ready(graph)
         store = get_store()
         with _llm_request_scope():
             interests = [str(item) for item in (extra_interests or []) if item]

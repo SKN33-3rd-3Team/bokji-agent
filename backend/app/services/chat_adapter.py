@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import status
@@ -19,6 +20,8 @@ from ..core.document_parsing import split_document_items
 from ..core.errors import ApiError
 from ..schemas.chat import ChatRequest, ChatResponse
 from ..session_store.chat_session import chat_session_store
+
+_log = logging.getLogger(__name__)
 
 
 def _run(fn, *args, **kwargs) -> dict:
@@ -82,25 +85,46 @@ def _cache_last_response(session_id: str, raw: dict) -> None:
 
 def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
     session_id = str(uuid.uuid4())
-    raw = _run(
-        ask,
-        payload.message,
-        session_id,
-        top_k=payload.top_k if payload.top_k is not None else 5,
-        extra_interests=payload.extra_interests or None,
-        known_region=payload.known_region,
-        known_gender=payload.known_gender,
-        known_birth_date=payload.known_birth_date,
-        known_disability_status=payload.known_disability_status,
-        known_income_bracket=payload.known_income_bracket,
-        known_household_types=payload.known_household_types or None,
-        known_veteran_status=payload.known_veteran_status,
-    )
-    raw = _augment_required_documents(raw)
-    response = ChatResponse.model_validate(raw)
-    chat_session_store.create(session_id, user_id=user_id)
-    _cache_last_response(session_id, raw)
-    return response
+    graph = None
+
+    def capture_graph(instance):
+        nonlocal graph
+        graph = instance
+
+    try:
+        raw = _run(
+            ask,
+            payload.message,
+            session_id,
+            top_k=payload.top_k if payload.top_k is not None else 5,
+            extra_interests=payload.extra_interests or None,
+            known_region=payload.known_region,
+            known_gender=payload.known_gender,
+            known_birth_date=payload.known_birth_date,
+            known_disability_status=payload.known_disability_status,
+            known_income_bracket=payload.known_income_bracket,
+            known_household_types=payload.known_household_types or None,
+            known_veteran_status=payload.known_veteran_status,
+            _on_graph_ready=capture_graph,
+        )
+        raw = _augment_required_documents(raw)
+        response = ChatResponse.model_validate(raw)
+        chat_session_store.create(session_id, user_id=user_id)
+        _cache_last_response(session_id, raw)
+        return response
+    except Exception:
+        # 초기화 실패 때 get_graph()를 다시 호출하면 다른 그래프를 만들 수 있다.
+        # 두 정리는 독립적으로 시도하고 원래 HTTP 오류는 그대로 전달한다.
+        try:
+            if graph is not None and graph.checkpointer is not None:
+                graph.checkpointer.delete_thread(session_id)
+        except Exception:
+            _log.warning("실패한 새 상담의 체크포인트 정리에 실패했습니다.")
+        try:
+            chat_session_store.delete(session_id)
+        except Exception:
+            _log.warning("실패한 새 상담의 소유권 정리에 실패했습니다.")
+        raise
 
 
 def continue_chat(session_id: str, message: str, *, user_id: int) -> ChatResponse:
