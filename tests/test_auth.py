@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -44,6 +46,18 @@ from rag_chatbot.auth.service import _clean_display_name
 
 _GOOD_PW = "Abcd1234!"
 _GOOD_PW2 = "Zyxw9876$"
+
+
+class AuthCliTests(unittest.TestCase):
+    def test_keygen_script_runs_without_repo_root_on_import_path(self):
+        script = Path(__file__).resolve().parents[1] / "src/rag_chatbot/auth/__main__.py"
+        with tempfile.TemporaryDirectory() as workdir:
+            result = subprocess.run(
+                [sys.executable, "-B", "-E", str(script), "keygen"],
+                cwd=workdir, capture_output=True, text=True, timeout=15,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(bool(result.stdout.strip()))
 
 
 class PasswordPolicyTests(unittest.TestCase):

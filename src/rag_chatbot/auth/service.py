@@ -28,8 +28,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
-from streamlit_ui.constants import SIGNUP_INTEREST_OPTIONS
-
 from . import lockout
 from . import repository as repo
 from .crypto import (
@@ -103,8 +101,9 @@ _SIDO_VALUES = frozenset(
     }
 )
 
-# API-01/05의 프로필 관심조건은 API-09와 같은 순수 상수를 사용한다.
-_INTEREST_VALUES = frozenset(SIGNUP_INTEREST_OPTIONS)
+# UI 의존 없이 API-01/05의 가입 관심조건을 검증한다. API 테스트가
+# API-09의 signup_interest_options와 일치하는지 확인한다.
+_INTEREST_VALUES = frozenset({"임신/출산", "노인/어르신", "농어업인", "청년"})
 
 # 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
 # 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가
