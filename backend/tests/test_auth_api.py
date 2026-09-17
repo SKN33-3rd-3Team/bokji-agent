@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 _SIGNUP_PAYLOAD = {
     "email": "tester@example.com",
     "password": "Passw0rd!123",
@@ -38,6 +40,48 @@ def test_signup_without_required_agreements_is_400(client):
     r = _signup(client, terms_agreed=False)
     assert r.status_code == 400
     assert r.json()["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("birth_date", [
+    "20000101", "2000-W01-1", "2000-2-29", " 2000-02-29",
+    "2000-02-29\n", "２０００-０２-２９", "2001-02-29", "2999-01-01", "1800-01-01",
+])
+def test_auth_invalid_birth_date_is_400_without_profile_change(client, birth_date):
+    r = _signup(client, birth_date=birth_date)
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+    assert "session_id" not in r.cookies
+
+    assert _signup(client, birth_date="2000-02-29").status_code == 201
+    r = client.patch("/api/v1/users/me", json={"birth_date": birth_date})
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+    assert client.get("/api/v1/users/me").json()["birth_date"] == "2000-02-29"
+
+
+def test_birth_date_leap_date_omission_and_profile_clearing(client):
+    r = _signup(client, birth_date="2000-02-29")
+    assert r.status_code == 201
+    assert r.json()["user"]["birth_date"] == "2000-02-29"
+    assert client.patch("/api/v1/users/me", json={}).json()["birth_date"] == "2000-02-29"
+    for clear_value in (None, ""):
+        r = client.patch("/api/v1/users/me", json={"birth_date": clear_value})
+        assert r.status_code == 200
+        assert r.json()["birth_date"] == ""
+        r = client.patch("/api/v1/users/me", json={"birth_date": "2000-02-29"})
+        assert r.status_code == 200
+        assert r.json()["birth_date"] == "2000-02-29"
+
+
+def test_display_name_is_normalized_then_truncated(client):
+    name = "  홍\t길\n동\x00  " + "가" * 40
+    expected = "홍 길 동 " + "가" * 34
+    r = _signup(client, name=name)
+    assert r.status_code == 201
+    assert r.json()["user"]["display_name"] == expected
+    r = client.patch("/api/v1/users/me", json={"display_name": name})
+    assert r.status_code == 200
+    assert r.json()["display_name"] == expected
 
 
 def test_signup_password_mismatch_is_400(client):

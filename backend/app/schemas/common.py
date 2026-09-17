@@ -1,4 +1,4 @@
-"""공통 에러 응답 스키마.
+"""공통 요청 타입과 에러 응답 스키마.
 
 API_정의서.xlsx는 각 API마다 "HTTP 상태/에러 코드/메시지" 표만 정의하고
 에러 응답 바디의 정확한 JSON 모양은 명시하지 않는다 - 프로젝트 관례상
@@ -9,7 +9,12 @@ violations(비밀번호 정책 위반 목록)나 remaining_seconds(계정 잠금
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+# HTTP 날짜 표기만 제한한다. 달력·미래·나이 검증은 각 기존 경로가 맡는다.
+BirthDateString = Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")]
 
 
 class ErrorResponse(BaseModel):

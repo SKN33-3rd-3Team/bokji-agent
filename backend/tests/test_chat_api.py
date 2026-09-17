@@ -8,6 +8,8 @@ monkeypatch해서 HTTP 계약(상태 코드/필드/에러 매핑/세션 소유�
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
 from rag_design.vector_store import ChromaUnavailableError
@@ -97,18 +99,74 @@ def test_chat_whitespace_only_message_is_400(client):
         ("known_disability_status", "invalid"),
         ("known_veteran_status", "invalid"),
         ("known_income_bracket", "invalid"),
+        ("known_gender", "unknown"),
+        ("known_disability_status", "unknown"),
+        ("known_veteran_status", "unknown"),
+        ("known_income_bracket", "unknown"),
+        ("known_region", "not-a-region"),
+        ("known_region", ""),
+        ("known_household_types", ["single_parent", "invalid"]),
+        ("known_household_types", ["unknown"]),
+        ("known_household_types", [None]),
+        ("known_household_types", "single_parent"),
+        ("known_household_types", None),
+        ("known_gender", ""),
+        ("known_birth_date", "20000101"),
+        ("known_birth_date", "2000-W01-1"),
+        ("known_birth_date", "2000-2-29"),
+        ("known_birth_date", "2000-02-29\n"),
+        ("known_birth_date", "２０００-０２-２９"),
+        ("known_birth_date", "2001-02-29"),
+        ("known_birth_date", "1800-01-01"),
+        ("known_birth_date", ""),
         ("known_birth_date", "2999-01-01"),  # 미래 날짜
         ("known_birth_date", "not-a-date"),
     ],
 )
-def test_chat_invalid_known_slot_value_is_400(client, field, value):
+def test_chat_invalid_known_slot_value_is_400(client, monkeypatch, field, value):
     # 2026-09 검토: 이전에는 잘못된 known_* 값을 코어(service.ask())가 조용히
     # 무시했다(400 대신 통과) - API_정의서.xlsx API-10 "요청값 오류 -> 400
     # VALIDATION_ERROR"에 맞춰 요청 스키마 단계에서 막는다.
-    _signup(client, f"chatuser_{field}_{abs(hash(value))}@example.com")
+    _signup(client, "invalid-prefill@example.com")
+    ask = Mock(side_effect=AssertionError("invalid prefill reached graph"))
+    create = Mock(side_effect=AssertionError("invalid prefill created session"))
+    monkeypatch.setattr(chat_adapter, "ask", ask)
+    monkeypatch.setattr(chat_adapter.chat_session_store, "create", create)
     r = client.post("/api/v1/chat/messages", json={"message": "안녕", field: value})
     assert r.status_code == 400
     assert r.json()["code"] == "VALIDATION_ERROR"
+    ask.assert_not_called()
+    create.assert_not_called()
+    assert chat_adapter.chat_session_store._sessions == {}
+
+
+def test_chat_accepts_public_choices_and_optional_prefill(client, monkeypatch):
+    _signup(client, "valid-prefill@example.com")
+    options = client.get("/api/v1/config/search-options").json()
+    ask = Mock(side_effect=lambda message, session_id, **kwargs: _fake_chat_response(session_id))
+    monkeypatch.setattr(chat_adapter, "ask", ask)
+    cases = [{}, {"known_birth_date": "2000-02-29"}, {"known_household_types": []}]
+    for field, option in [
+        ("known_region", "sido_options"),
+        ("known_gender", "gender_options"),
+        ("known_disability_status", "disability_status_options"),
+        ("known_veteran_status", "veteran_status_options"),
+        ("known_income_bracket", "income_bracket_options"),
+    ]:
+        cases.append({field: None})
+        cases.extend({field: item if isinstance(item, str) else item["code"]}
+                     for item in options[option])
+    cases.append({"known_birth_date": None})
+    cases.append({"known_household_types": [item["code"] for item in options["household_type_options"]]})
+    for prefill in cases:
+        ask.reset_mock()
+        r = client.post("/api/v1/chat/messages", json={"message": "지원 정책", **prefill})
+        assert r.status_code == 200, prefill
+        ask.assert_called_once()
+        for field, value in prefill.items():
+            expected = None if field == "known_household_types" and value == [] else value
+            assert ask.call_args.kwargs[field] == expected
+        assert r.json()["session_id"] in chat_adapter.chat_session_store._sessions
 
 
 def test_chat_start_and_followup_happy_path(client, monkeypatch):

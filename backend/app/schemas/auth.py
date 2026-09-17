@@ -1,16 +1,17 @@
 """API-01~08 요청/응답 스키마.
 
-이메일 형식/비밀번호 정책/생년월일 범위/enum 값 검증은 여기서 다시
-구현하지 않는다 - ``src/rag_chatbot/auth/service.py``가 서버 재검증까지
-책임지는 단일 출처이고(``_normalize_username``/``validate_password``/
-``parse_birth_date`` 등), 위반 시 던지는 예외를 ``app/core/errors.py``가
-받아 정확한 HTTP 코드로 매핑한다(fail-closed, 이중 구현으로 인한 값
-드리프트를 피함).
+생년월일 표기는 HTTP 경계에서 YYYY-MM-DD로 제한한다. 이메일 형식,
+비밀번호 정책, 날짜 범위와 프로필 선택지 검증은 기존 인증 서비스에
+위임하며 예외는 ``app/core/errors.py``가 HTTP 코드로 매핑한다.
 """
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+from .common import BirthDateString
 
 
 class SignupRequest(BaseModel):
@@ -20,7 +21,7 @@ class SignupRequest(BaseModel):
     name: str
     region: str = ""
     gender: str = ""
-    birth_date: str = ""
+    birth_date: BirthDateString | Literal[""] = ""
     interests: list[str] = Field(default_factory=list)
     disability_status: str = ""
     veteran_status: str = ""
@@ -59,7 +60,7 @@ class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
     region: str | None = None
     gender: str | None = None
-    birth_date: str | None = None
+    birth_date: BirthDateString | Literal[""] | None = None
     interests: list[str] | None = None
     disability_status: str | None = None
     veteran_status: str | None = None

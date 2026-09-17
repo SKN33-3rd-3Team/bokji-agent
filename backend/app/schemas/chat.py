@@ -16,11 +16,22 @@ _augment_required_documents`` 참고) - 원본 문자열 필드는 그대로 유
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-from src.rag_chatbot.graph.slot_schema import is_valid_slot_value, parse_birth_date
+from src.rag_chatbot.graph.slot_schema import parse_birth_date
+
+from ..core.options import (
+    DISABILITY_LABELS_KO,
+    GENDER_LABELS_KO,
+    HOUSEHOLD_TYPE_LABELS_KO,
+    INCOME_BRACKET_LABELS_KO,
+    SIDO_OPTIONS,
+    VETERAN_LABELS_KO,
+)
+from .common import BirthDateString
 
 
 def _require_non_blank(value: str) -> str:
@@ -38,16 +49,11 @@ def _require_non_blank(value: str) -> str:
 _NonBlankStr = Annotated[str, Field(min_length=1), AfterValidator(_require_non_blank)]
 
 
-def _validate_known_slot(field: str, message: str):
-    """``known_gender``류가 코어(``graph/slot_schema.py::is_valid_slot_value``,
-    가입 시 검증하는 것과 동일한 단일 출처)가 모르는 값이면 요청 단계에서
-    막는다. 이전에는 이 값들을 그대로 ``service.ask()``에 넘겨, 코어가
-    무효한 값을 그냥 무시하고 조용히 통과시켰다(API_정의서.xlsx API-10
-    "요청값 오류 -> 400 VALIDATION_ERROR"와 불일치 - 2026-09 검토에서 확인).
-    """
+def _validate_public_choice(choices: Collection[str], message: str):
+    """API-09 공개 선택지만 허용한다. 그래프 내부 unknown은 공개 코드가 아니다."""
 
     def _validator(value: str | None) -> str | None:
-        if value is not None and not is_valid_slot_value(field, value):
+        if value is not None and value not in choices:
             raise ValueError(message)
         return value
 
@@ -60,22 +66,28 @@ def _validate_known_birth_date(value: str | None) -> str | None:
     return value
 
 
+_KnownRegion = Annotated[
+    str | None, AfterValidator(_validate_public_choice(SIDO_OPTIONS, "거주 지역 값이 올바르지 않습니다."))
+]
 _KnownGender = Annotated[
-    str | None, AfterValidator(_validate_known_slot("gender", "성별 값이 올바르지 않습니다."))
+    str | None, AfterValidator(_validate_public_choice(GENDER_LABELS_KO, "성별 값이 올바르지 않습니다."))
 ]
 _KnownDisabilityStatus = Annotated[
     str | None,
-    AfterValidator(_validate_known_slot("disability_status", "장애 등록 여부 값이 올바르지 않습니다.")),
+    AfterValidator(_validate_public_choice(DISABILITY_LABELS_KO, "장애 등록 여부 값이 올바르지 않습니다.")),
 ]
 _KnownVeteranStatus = Annotated[
     str | None,
-    AfterValidator(_validate_known_slot("veteran_status", "보훈대상자 여부 값이 올바르지 않습니다.")),
+    AfterValidator(_validate_public_choice(VETERAN_LABELS_KO, "보훈대상자 여부 값이 올바르지 않습니다.")),
 ]
 _KnownIncomeBracket = Annotated[
     str | None,
-    AfterValidator(_validate_known_slot("income_bracket", "소득 구간 값이 올바르지 않습니다.")),
+    AfterValidator(_validate_public_choice(INCOME_BRACKET_LABELS_KO, "소득 구간 값이 올바르지 않습니다.")),
 ]
-_KnownBirthDate = Annotated[str | None, AfterValidator(_validate_known_birth_date)]
+_KnownHouseholdType = Annotated[
+    str, AfterValidator(_validate_public_choice(HOUSEHOLD_TYPE_LABELS_KO, "가구 유형 값이 올바르지 않습니다."))
+]
+_KnownBirthDate = Annotated[BirthDateString | None, AfterValidator(_validate_known_birth_date)]
 
 
 class ChatRequest(BaseModel):
@@ -84,12 +96,12 @@ class ChatRequest(BaseModel):
     message: _NonBlankStr
     top_k: int | None = Field(default=None, ge=1, le=20)
     extra_interests: list[str] = Field(default_factory=list)
-    known_region: str | None = None
+    known_region: _KnownRegion = None
     known_gender: _KnownGender = None
     known_birth_date: _KnownBirthDate = None
     known_disability_status: _KnownDisabilityStatus = None
     known_income_bracket: _KnownIncomeBracket = None
-    known_household_types: list[str] = Field(default_factory=list)
+    known_household_types: list[_KnownHouseholdType] = Field(default_factory=list)
     known_veteran_status: _KnownVeteranStatus = None
 
 
