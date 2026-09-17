@@ -23,6 +23,7 @@ dist/
 # IDE and OS
 .vscode/
 .idea/
+.claude/
 .DS_Store
 Thumbs.db
 Desktop.ini
