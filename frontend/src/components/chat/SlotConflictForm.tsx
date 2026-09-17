@@ -3,6 +3,7 @@ import { ChatBubble } from "./ChatBubble";
 import { LlmDebugPanel } from "./LlmDebugPanel";
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { BirthDateSelect } from "@/components/common/BirthDateSelect";
+import { stripNumberedSlotList } from "@/utils/chatQuestion";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import {
   DISABILITY_LABELS_KO,
@@ -83,7 +84,7 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
 
   return (
     <div>
-      <ChatBubble role="assistant" text={response.question ?? ""} />
+      <ChatBubble role="assistant" text={stripNumberedSlotList(response.question ?? "")} />
       <LlmDebugPanel response={response} />
       <div className="card" style={{ padding: "18px 20px", marginTop: 10 }}>
         {slots.map((slot) => {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { usePolicyQuestion } from "@/features/chat/usePolicyQuestion";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { ConfirmModal } from "@/components/common/ConfirmModal";
 import { ApiError } from "@/api/client";
 import type { PolicyView } from "@/types/chat";
 
@@ -18,6 +19,7 @@ interface PolicyQuestionDialogProps {
 export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuestionDialogProps) {
   const { history, ask, isAsking, error } = usePolicyQuestion(sessionId, policy.policy_id);
   const [input, setInput] = useState("");
+  const [confirmingClose, setConfirmingClose] = useState(false);
 
   const errorMessage = error ? (error instanceof ApiError ? error.message : "일시적인 오류가 발생했습니다. 다시 시도해주세요.") : null;
 
@@ -26,6 +28,11 @@ export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuest
     if (!question || isAsking) return;
     setInput("");
     void ask(question);
+  };
+
+  const handleCloseClick = () => {
+    if (history.length > 0) setConfirmingClose(true);
+    else onClose();
   };
 
   return (
@@ -47,10 +54,10 @@ export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuest
           <button
             type="button"
             aria-label="닫기"
-            onClick={onClose}
+            onClick={handleCloseClick}
             style={{ width: 32, height: 32, borderRadius: 999, background: "var(--gray-bg)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)" }}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round">
+            <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
@@ -126,6 +133,17 @@ export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuest
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        open={confirmingClose}
+        title="정말 나가시겠습니까?"
+        description="대화 내용은 모두 삭제됩니다."
+        confirmLabel="나가기"
+        cancelLabel="취소"
+        danger
+        onConfirm={onClose}
+        onCancel={() => setConfirmingClose(false)}
+      />
     </div>
   );
 }

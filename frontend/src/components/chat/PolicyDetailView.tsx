@@ -68,7 +68,7 @@ export function PolicyDetailView({ policy, onBack, onAskQuestion }: PolicyDetail
         {policy.needs_confirmation.length > 0 && (
           <div style={{ background: "var(--amber-bg)", border: "1px solid var(--amber-border)", borderRadius: 11, padding: "15px 17px", marginTop: 22 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, color: "var(--amber-text)", marginBottom: 9 }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round">
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
                 <path d="M12 9v4M12 17h.01" />
               </svg>
