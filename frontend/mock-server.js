@@ -252,9 +252,10 @@ function buildPolicy({
       application_method: "읍/면/동 주민센터 방문 신청 또는 복지로 온라인 신청",
       application_period: "상시 접수",
       legal_basis: "국민기초생활 보장법 제7조",
-      required_documents: "신분증, 소득증빙서류, 가족관계증명서, 통장사본",
+      // 줄바꿈으로 한 줄에 하나씩 — DocumentChipList가 이 형태만 칩으로 쪼갠다(콤마는 안 쪼갬).
+      required_documents: "신분증\n주민등록등본\n가족관계증명서",
       required_documents_official: "행정정보 공동이용으로 자동 확인(소득/재산 조회)",
-      required_documents_self: "임대차계약서(해당 시), 기타 증빙서류",
+      required_documents_self: "임대차계약서(해당 시)\n기타 증빙서류",
       region_names: ["전국"],
       region_scope: "national",
       age_start: null,

@@ -41,3 +41,28 @@ export function amountNote(policy: PolicyView): string {
     ? "지급 상한 기준 금액이며, 실제 지급액은 가구 상황에 따라 다를 수 있습니다."
     : "정책 원문 기준 금액입니다.";
 }
+
+const DOC_HEADER_RE = /^(?:[□■▪◇◆]|\d{1,2}[).])\s*\S/;
+
+/**
+ * rendering.py `_document_chip_items`와 동일한 로직 — 원문에 이미 있는
+ * 줄바꿈만 기준으로 나눈다(콤마 등 임의 구분자를 새로 만들어 쪼개지
+ * 않는다 — "지어내지 않는다" 원칙, S07-06/S10-01 "보류" 항목 해결).
+ * 한 줄에 항목이 하나씩 나열된 형태(2줄 이상)면 배열로, 줄바꿈 없는
+ * 문단형이면 null을 돌려줘서 호출부가 원문 그대로 표시하게 한다.
+ */
+export function documentChipItems(text: string | null | undefined): string[] | null {
+  if (!text) return null;
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim().replace(/^[ \-•·○\t]+/, "").replace(/[ \-•·○\t]+$/, ""))
+    .filter(Boolean);
+  if (lines.length < 2) return null;
+  return lines.slice(0, 12);
+}
+
+/** rendering.py `_is_document_header_line`과 동일 — "1) 세대원 변경..." 같은
+ * 상위 구분 줄은 칩이 아니라 굵은 구분 텍스트로 그린다. */
+export function isDocumentHeaderLine(text: string): boolean {
+  return DOC_HEADER_RE.test(text.trim());
+}

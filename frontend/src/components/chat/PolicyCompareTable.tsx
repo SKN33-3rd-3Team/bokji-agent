@@ -1,5 +1,5 @@
 import type { PolicyView } from "@/types/chat";
-import { badgeColor, regionLabel } from "@/utils/policy";
+import { badgeColor, documentChipItems, regionLabel } from "@/utils/policy";
 
 interface PolicyCompareTableProps {
   policies: PolicyView[];
@@ -21,7 +21,7 @@ export function PolicyCompareTable({ policies, onBackToList, onOpenDetail }: Pol
     return null;
   }
 
-  const rows: { label: string; render: (p: PolicyView) => { text: string; sub?: string } }[] = [
+  const rows: { label: string; render: (p: PolicyView) => { text: string; sub?: string; items?: string[] } }[] = [
     { label: "지역", render: (p) => ({ text: regionLabel(p) }) },
     { label: "지원자격", render: (p) => { const s = eligibilitySummary(p); return { text: s.value, sub: s.note }; } },
     { label: "지원금액", render: (p) => ({ text: p.amount_label || "지원금액 확인 필요" }) },
@@ -32,8 +32,13 @@ export function PolicyCompareTable({ policies, onBackToList, onOpenDetail }: Pol
     },
     {
       label: "구비서류",
-      // ⚠ required_documents가 배열이 아니라 문자열 1개라 항목 단위 비교는 보류(S10-01 비고) — 원문 한 줄로만 비교.
-      render: (p) => ({ text: p.detail.required_documents || "확인된 구비서류 없음" }),
+      // 원문에 줄바꿈으로 항목이 나열돼 있으면 칩으로(streamlit_ui/rendering.py 로직 포팅), 아니면 원문 한 줄.
+      render: (p) => {
+        const items = documentChipItems(p.detail.required_documents);
+        return items
+          ? { text: items.join(", "), items }
+          : { text: p.detail.required_documents || "확인된 구비서류 없음" };
+      },
     },
   ];
 
@@ -93,7 +98,17 @@ export function PolicyCompareTable({ policies, onBackToList, onOpenDetail }: Pol
                         다름
                       </span>
                     )}
-                    <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text)", display: "block" }}>{cell.text}</span>
+                    {cell.items ? (
+                      <div>
+                        {cell.items.map((item, itemIdx) => (
+                          <span key={itemIdx} className="chip" style={{ fontSize: 11 }}>
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text)", display: "block" }}>{cell.text}</span>
+                    )}
                     {cell.sub && (
                       <span className="text-muted" style={{ fontSize: 11.5, lineHeight: 1.5, display: "block", marginTop: 2 }}>
                         {cell.sub}

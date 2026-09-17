@@ -1,3 +1,4 @@
+import { DocumentChipList } from "./DocumentChipList";
 import type { PolicyView } from "@/types/chat";
 import { amountNote, badgeColor, cardIntro, dupShortNote, regionLabel } from "@/utils/policy";
 
@@ -102,23 +103,21 @@ export function PolicyDetailView({ policy, onBack, onAskQuestion }: PolicyDetail
           </>
         )}
 
-        {/* S07-06: 구비서류 — ⚠ 배열이 아니라 원문 문자열 1개(보류 항목). 칩으로 쪼개지 않고 그대로 표시 */}
+        {/* S07-06: 구비서류 — 원문에 줄바꿈으로 항목이 나열돼 있으면 칩으로, 문단형이면 그대로(streamlit_ui/rendering.py 로직 포팅) */}
         {(detail.required_documents || detail.required_documents_official || detail.required_documents_self) && (
           <>
             <div style={{ fontSize: 13, fontWeight: 700, margin: "22px 0 9px" }}>구비서류</div>
-            {detail.required_documents && (
-              <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{detail.required_documents}</p>
-            )}
+            <DocumentChipList text={detail.required_documents} />
             {detail.required_documents_official && (
               <>
                 <p style={{ fontSize: 12.5, fontWeight: 700, margin: "10px 0 4px" }}>공무원 확인 구비서류</p>
-                <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{detail.required_documents_official}</p>
+                <DocumentChipList text={detail.required_documents_official} />
               </>
             )}
             {detail.required_documents_self && (
               <>
                 <p style={{ fontSize: 12.5, fontWeight: 700, margin: "10px 0 4px" }}>본인확인 필요 구비서류</p>
-                <p style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{detail.required_documents_self}</p>
+                <DocumentChipList text={detail.required_documents_self} />
               </>
             )}
           </>
