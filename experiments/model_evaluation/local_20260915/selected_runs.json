@@ -1,0 +1,41 @@
+{
+  "qwen": {
+    "gpu_backend": "CUDA 13",
+    "independent": {
+      "path": "experiments/model_evaluation/local_20260915/independent_stable/qwen.jsonl",
+      "rows": 45,
+      "sha256": "ae6f1559fa60fa4ee3aef7e3a67f76c06575bb475cfb807a14c3c6822a26b5ac"
+    },
+    "team": {
+      "path": "experiments/model_evaluation/local_20260915/team_final/qwen.jsonl",
+      "rows": 8,
+      "sha256": "8341ce7c35b00b2a90ac03124217834b746d96142a1869b60eb098d0b8a72637"
+    }
+  },
+  "ax": {
+    "gpu_backend": "Vulkan",
+    "independent": {
+      "path": "experiments/model_evaluation/local_20260915/independent_final/ax.jsonl",
+      "rows": 45,
+      "sha256": "9ddaa7f05a0f0fbc837102f217f2c592a21ca47ad6fb9c258b62018d0004710f"
+    },
+    "team": {
+      "path": "experiments/model_evaluation/local_20260915/team_final/ax.jsonl",
+      "rows": 8,
+      "sha256": "c3995df81d136ce28f50a9d0c65877ee85bec9a922229586bd7a0e316cbd08f5"
+    }
+  },
+  "bllossom": {
+    "gpu_backend": "Vulkan",
+    "independent": {
+      "path": "experiments/model_evaluation/local_20260915/independent_final/bllossom.jsonl",
+      "rows": 45,
+      "sha256": "42802a231f8e47ca846239bf0d5522cccb7ac465e1fe8cc6eb3ffbdd76fbc3d1"
+    },
+    "team": {
+      "path": "experiments/model_evaluation/local_20260915/team_final/bllossom.jsonl",
+      "rows": 8,
+      "sha256": "b9f1d13e9d370a73e4c4b4942367905ef21f8b3ab8ad00d957b961e7d4693e38"
+    }
+  }
+}

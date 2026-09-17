@@ -1,0 +1,30 @@
+{
+  "prepared_at": "2026-09-15T14:21:18.313677+00:00",
+  "git_commit": "f4661da0220fa538c9a38d38c7aa20bef9987cca",
+  "cases_sha256": "7b2965e805494308fef200959fdc85e65855b1a3c2f9db0eaa5673efaab15f1e",
+  "source_sha256": {
+    "data/evaluation/light_followup_dev.jsonl": "53c90e4531cf52f2b09b941949b5e2de575652d0514eeda7d4b84e0f10b7ac39",
+    "data/evaluation/light_followup_policies.json": "171f207dd4c29597c7a217c1f3d0fdbc38e0ae2f64a4346faa26a9413b8d1746",
+    "src/rag_chatbot/light_followup.py": "7f91a702ecb1f37ebe15f25c5638a0440005ed261dfa3a9bb0714ede77c25e3e",
+    "src/rag_chatbot/graph/nodes/answer_generation.py": "77cb72ad40990249898646f22cb1a123c2c6bfd12b8441b3d560f9a6349eb47f",
+    "experiments/model_evaluation/LOCAL_PROTOCOL.md": "a399e8e75a3ae67bcec43f35834e84310d0b3ffcda42ec53c5fd7db04ad086ba"
+  },
+  "cases": 45,
+  "models": {
+    "qwen": "qwen3.5:9b",
+    "ax": "hf.co/Ghiwook/A.X-4.0-Light-Q4_K_M-GGUF:Q4_K_M",
+    "bllossom": "hf.co/Bllossom/llama-3.2-Korean-Bllossom-3B-gguf-Q4_K_M:Q4_K_M"
+  },
+  "generation": {
+    "num_ctx": 8192,
+    "num_predict": 1024,
+    "temperature": 0,
+    "seed": 42,
+    "top_p": 1,
+    "top_k": 0,
+    "repeat_penalty": 1,
+    "presence_penalty": 0,
+    "frequency_penalty": 0,
+    "num_batch": 128
+  }
+}

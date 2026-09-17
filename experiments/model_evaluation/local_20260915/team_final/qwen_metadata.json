@@ -1,0 +1,144 @@
+{
+  "model": "qwen3.5:9b",
+  "base_url": "http://127.0.0.1:11435",
+  "digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
+  "options": {
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "repeat_penalty": 1,
+    "seed": 42,
+    "presence_penalty": 0,
+    "frequency_penalty": 0,
+    "num_batch": 128,
+    "num_ctx": 8192,
+    "num_predict": 1024
+  },
+  "disable_thinking": true,
+  "capabilities": [
+    "completion",
+    "vision",
+    "tools",
+    "thinking"
+  ],
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "qwen35",
+    "families": [
+      "qwen35"
+    ],
+    "parameter_size": "9.7B",
+    "quantization_level": "Q4_K_M"
+  },
+  "model_info": {
+    "general.architecture": "qwen35",
+    "general.file_type": 15,
+    "general.parameter_count": 9653104368,
+    "general.quantization_version": 2,
+    "qwen35.attention.head_count": 16,
+    "qwen35.attention.head_count_kv": null,
+    "qwen35.attention.key_length": 256,
+    "qwen35.attention.layer_norm_rms_epsilon": 1e-06,
+    "qwen35.attention.value_length": 256,
+    "qwen35.block_count": 32,
+    "qwen35.context_length": 262144,
+    "qwen35.embedding_length": 4096,
+    "qwen35.feed_forward_length": 12288,
+    "qwen35.full_attention_interval": 4,
+    "qwen35.image_token_id": 248056,
+    "qwen35.mrope_sections": null,
+    "qwen35.rope.dimension_count": 64,
+    "qwen35.rope.dimension_sections": null,
+    "qwen35.rope.freq_base": 10000000,
+    "qwen35.rope.mrope_interleaved": true,
+    "qwen35.rope.mrope_section": null,
+    "qwen35.ssm.conv_kernel": 4,
+    "qwen35.ssm.group_count": 16,
+    "qwen35.ssm.inner_size": 4096,
+    "qwen35.ssm.state_size": 128,
+    "qwen35.ssm.time_step_rank": 32,
+    "qwen35.ssm.v_head_reordered": true,
+    "qwen35.vision.attention.head_count": 16,
+    "qwen35.vision.block_count": 27,
+    "qwen35.vision.deepstack_visual_indexes": [],
+    "qwen35.vision.embedding_length": 1152,
+    "qwen35.vision.image_mean": null,
+    "qwen35.vision.image_std": null,
+    "qwen35.vision.longest_edge": 16777216,
+    "qwen35.vision.num_channels": 3,
+    "qwen35.vision.patch_size": 16,
+    "qwen35.vision.shortest_edge": 65536,
+    "qwen35.vision.spatial_merge_size": 2,
+    "qwen35.vision.temporal_patch_size": 2,
+    "qwen35.vision_end_token_id": 248054,
+    "qwen35.vision_start_token_id": 248053,
+    "tokenizer.ggml.add_eos_token": false,
+    "tokenizer.ggml.add_padding_token": false,
+    "tokenizer.ggml.eos_token_id": 248046,
+    "tokenizer.ggml.merges": null,
+    "tokenizer.ggml.model": "gpt2",
+    "tokenizer.ggml.padding_token_id": 248044,
+    "tokenizer.ggml.pre": "qwen35",
+    "tokenizer.ggml.scores": null,
+    "tokenizer.ggml.token_type": null,
+    "tokenizer.ggml.tokens": null
+  },
+  "ollama": {
+    "version": "0.34.0"
+  },
+  "python": "3.11.4",
+  "started_at": "2026-09-15T14:38:38.698939+00:00",
+  "manifest_sha256": "14ea3bcd0794d978f1464ea571ecf7d80017068fd0feda57aaa863a3eba2f5a1",
+  "cases_sha256": "50516e8bed8ee83c2bb7d3d2a2cf88d902dd3fc0f2f6e922977e7a9a537fcd95",
+  "running_models_before_unload": [],
+  "running_models_after_initial_unload": [],
+  "warmup": {
+    "scored": false,
+    "max_tokens": 32,
+    "calls": [
+      {
+        "prompt_sha256": "85ec91ecc45e77efd110dfdca576ff7aebd57e13feeee865f62ce6dead65e013",
+        "system_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "raw": "{\"ready\": true}",
+        "parsed": {
+          "ready": true
+        },
+        "strict_json": true,
+        "done": true,
+        "done_reason": "stop",
+        "total_duration": 7252727200,
+        "load_duration": 6906202800,
+        "prompt_eval_count": 25,
+        "prompt_eval_duration": 201678000,
+        "eval_count": 6,
+        "eval_duration": 141378000,
+        "thinking_present": false,
+        "prompt_eval_cached_count": 0,
+        "elapsed_s": 7.2865
+      }
+    ]
+  },
+  "running_models_after_warmup": [
+    {
+      "name": "qwen3.5:9b",
+      "model": "qwen3.5:9b",
+      "size": 10234563132,
+      "digest": "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35",
+        "families": [
+          "qwen35"
+        ],
+        "parameter_size": "9.7B",
+        "quantization_level": "Q4_K_M"
+      },
+      "expires_at": "2026-09-15T23:43:45.989638+09:00",
+      "size_vram": 10234563132,
+      "context_length": 8192
+    }
+  ],
+  "running_models_after_final_unload": []
+}
