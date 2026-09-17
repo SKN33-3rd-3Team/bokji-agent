@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 _SIGNUP_PAYLOAD = {
@@ -26,7 +28,7 @@ def test_signup_sets_session_cookie_and_returns_user(client):
     body = r.json()["user"]
     assert body["email"] == _SIGNUP_PAYLOAD["email"]
     assert body["display_name"] == "Tester"
-    assert body["marketing_opt_in"] is False
+    assert "marketing_opt_in" not in body
 
 
 def test_signup_duplicate_email_is_409(client):
@@ -36,10 +38,31 @@ def test_signup_duplicate_email_is_409(client):
     assert r.json()["code"] == "USERNAME_TAKEN"
 
 
-def test_signup_without_required_agreements_is_400(client):
-    r = _signup(client, terms_agreed=False)
+@pytest.mark.parametrize("field", ["terms_agreed", "privacy_agreed"])
+@pytest.mark.parametrize("omitted", [False, True])
+def test_signup_without_required_agreements_is_400(client, field, omitted):
+    payload = {**_SIGNUP_PAYLOAD, "marketing_opt_in": True, field: False}
+    if omitted:
+        payload.pop(field)
+    r = client.post("/api/v1/auth/signup", json=payload)
     assert r.status_code == 400
     assert r.json()["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("retired_value", [True, False, {"unexpected": "value"}])
+def test_signup_ignores_retired_marketing_field(client, isolated_auth_db, retired_value):
+    r = _signup(client, marketing_opt_in=retired_value)
+    assert r.status_code == 201
+    assert "marketing_opt_in" not in r.json()["user"]
+    # 기존 extra 무시 정책을 유지하며 클라이언트 값은 저장하지 않는다.
+    with sqlite3.connect(isolated_auth_db) as conn:
+        assert conn.execute("SELECT marketing_opt_in FROM users").fetchall() == [(0,)]
+
+
+def test_openapi_has_no_marketing_field(client):
+    r = client.get("/openapi.json")
+    assert r.status_code == 200
+    assert "marketing_opt_in" not in r.text
 
 
 @pytest.mark.parametrize("birth_date", [
@@ -169,12 +192,29 @@ def test_me_after_login_returns_profile(client):
     assert r.headers["cache-control"] == "no-store"
 
 
-def test_me_membership_grade_is_fixed_general(client):
-    # 요구사항_정의서.xlsx S09-01: 등급 체계가 백엔드에 없어 항상 "일반 회원" 고정값.
-    _signup(client)
+def test_profile_routes_keep_grade_and_hide_legacy_marketing(client, isolated_auth_db):
+    r = _signup(client)
+    assert r.status_code == 201
+    profiles = [r.json()["user"]]
+    # 과거 동의 데이터는 유지하되 HTTP 프로필에 노출하거나 수정하지 않는다.
+    with sqlite3.connect(isolated_auth_db) as conn:
+        conn.execute("UPDATE users SET marketing_opt_in = 1")
+    r = client.post("/api/v1/auth/login", json={
+        "email": _SIGNUP_PAYLOAD["email"], "password": _SIGNUP_PAYLOAD["password"],
+    })
+    assert r.status_code == 200
+    profiles.append(r.json()["user"])
     r = client.get("/api/v1/users/me")
     assert r.status_code == 200
-    assert r.json()["membership_grade"] == "일반 회원"
+    profiles.append(r.json())
+    r = client.patch("/api/v1/users/me", json={"marketing_opt_in": False})
+    assert r.status_code == 200
+    profiles.append(r.json())
+    for profile in profiles:
+        assert profile["membership_grade"] == "일반 회원"
+        assert "marketing_opt_in" not in profile
+    with sqlite3.connect(isolated_auth_db) as conn:
+        assert conn.execute("SELECT marketing_opt_in FROM users").fetchall() == [(1,)]
 
 
 def test_update_profile_partial_fields(client):

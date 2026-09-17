@@ -45,7 +45,6 @@ def _to_user_profile(user: AuthUser) -> UserProfile:
         income_bracket=user.income_bracket,
         household_types=list(user.household_types),
         interests=list(user.interests),
-        marketing_opt_in=user.marketing_opt_in,
     )
 
 
@@ -83,7 +82,6 @@ def signup(payload: SignupRequest) -> UserProfile:
             veteran_status=payload.veteran_status,
             income_bracket=payload.income_bracket,
             household_types=payload.household_types,
-            marketing_opt_in=payload.marketing_opt_in,
         )
     except UsernameTakenError as exc:
         raise ApiError(status.HTTP_409_CONFLICT, "USERNAME_TAKEN", str(exc)) from exc
