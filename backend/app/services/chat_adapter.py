@@ -82,7 +82,6 @@ def _cache_last_response(session_id: str, raw: dict) -> None:
 
 def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
     session_id = str(uuid.uuid4())
-    chat_session_store.create(session_id, user_id=user_id)
     raw = _run(
         ask,
         payload.message,
@@ -98,8 +97,10 @@ def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
         known_veteran_status=payload.known_veteran_status,
     )
     raw = _augment_required_documents(raw)
+    response = ChatResponse.model_validate(raw)
+    chat_session_store.create(session_id, user_id=user_id)
     _cache_last_response(session_id, raw)
-    return ChatResponse.model_validate(raw)
+    return response
 
 
 def continue_chat(session_id: str, message: str, *, user_id: int) -> ChatResponse:

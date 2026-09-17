@@ -8,6 +8,10 @@ monkeypatch해서 HTTP 계약(상태 코드/필드/에러 매핑/세션 소유�
 
 from __future__ import annotations
 
+import pytest
+
+from rag_design.vector_store import ChromaUnavailableError
+
 from backend.app.services import chat_adapter, followup_adapter
 
 _SIGNUP_PAYLOAD = {
@@ -173,6 +177,22 @@ def test_vector_store_error_maps_to_503(client, monkeypatch):
     r = client.post("/api/v1/chat/messages", json={"message": "hi"})
     assert r.status_code == 503
     assert r.json()["code"] == "VECTOR_STORE_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("error, expected_status", [
+    (RuntimeError("boom"), 500),
+    (SystemExit("no vector db"), 503),
+    (ChromaUnavailableError("boom"), 503),
+])
+def test_failed_start_does_not_leave_session(client, monkeypatch, error, expected_status):
+    def failing_ask(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(chat_adapter, "ask", failing_ask)
+    _signup(client, "failed-chat@example.com")
+    r = client.post("/api/v1/chat/messages", json={"message": "hi"})
+    assert r.status_code == expected_status
+    assert chat_adapter.chat_session_store._sessions == {}
 
 
 def test_missing_local_vector_db_system_exit_maps_to_503(client, monkeypatch):
