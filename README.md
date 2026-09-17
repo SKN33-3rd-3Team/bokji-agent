@@ -8,10 +8,10 @@
 <br/>
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.62.0-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square)](backend/README.md)
 [![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-000000?style=flat-square&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
 [![VectorDB](https://img.shields.io/badge/VectorDB-ChromaDB-blueviolet?style=flat-square)](https://www.trychroma.com/)
-[![Tests](https://img.shields.io/badge/Tests-673%20Passed-success?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-pytest-blue?style=flat-square&logo=pytest&logoColor=white)](tests/)
 
 <br/>
 
@@ -19,6 +19,8 @@
 수혜 가능한 정부 지원 제도를 검색하고 **자격 요건 · 지원 금액 · 중복수급 가능 여부**를 공문서 및 법령 근거와 함께 제공하는 에이전트 서비스입니다.
 
 </div>
+
+최종 서비스 구성은 **React + FastAPI**입니다. 이 브랜치에는 FastAPI 백엔드가 있으며 React 화면은 별도 브랜치에서 개발 중입니다. Streamlit은 향후 제거할 레거시 데모입니다. 기준 자료와 확정 결정은 [프로젝트 준수 기준](docs/PROJECT_COMPLIANCE.md#서비스-전환-기준), 현재 API 동작·미결 계약은 [백엔드 안내](backend/README.md)에 정리합니다.
 
 ---
 
@@ -68,14 +70,16 @@
 3. **자격 · 지원금 · 중복수급 삼각 판정**
    - 단순히 정책을 요약하는 것을 넘어, 사용자의 슬롯 조건을 기반으로 **충족/미충족/미확인**, **계산 가능한 지원금액**, **타 복지와의 중복수급 제한**을 구조화하여 산출합니다.
 4. **규칙 기반 안전 폴백(Graceful Fallback)**
-   - 외부 LLM API 지연/단절 시에도 서비스 전체가 멈추지 않고, 규칙 기반 템플릿과 검증된 DB 데이터로 안전하게 즉시 대체 응답합니다.
+   - 설정에 따라 RunPod Pod 실패 시 HuggingFace로 전환하고, LLM을 사용할 수 없으면 코어의 규칙·템플릿 또는 보류 안내 경로를 사용합니다. 재시도 지연과 기능 제한이 있어 정상 LLM 응답과 같은 결과를 보장하지 않습니다.
 
 ---
 
 <a name="system-architecture"></a>
 ## 🏗️ 시스템 아키텍처
 
-온라인 상담 런타임과 오프라인 데이터 수집·색인 경로를 분리한 전체 시스템 구성입니다.
+온라인 상담은 `React → FastAPI → 기존 서비스·LangGraph → Vector DB / LLM` 흐름을 목표로 합니다. 회원 정보는 별도의 SQLite 또는 MySQL/MariaDB에 저장합니다. React 통합은 아직 완료되지 않았으며, 기존 그래프·RAG를 재사용하면서 인증 서비스·저장소와 LLM 연동도 수정했습니다.
+
+아래 이미지는 기존 Streamlit 구성의 참고 그림입니다. 현재 API 구성은 [백엔드 구조](backend/README.md#구성과-api-범위)를 따릅니다. 오프라인 수집·색인 경로는 상담 요청 처리와 분리합니다.
 
 ![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture_fixed.png)
 
@@ -135,7 +139,7 @@ flowchart TD
     subgraph S3 ["3. 병렬 판정 및 결과 조립"]
         direction TB
 
-        n9["🎯 N9. 자격 판정<br/><small>충족 · 미충족 · 미확인 · 현재 직접 대조 가능한 조건은 연령</small>"]:::c_node
+        n9["🎯 N9. 자격 판정<br/><small>충족 · 미충족 · 미확인 · 문서에서 대조한 조건과 미확인 항목 제공</small>"]:::c_node
 
         subgraph S3_mid [" "]
             direction LR
@@ -220,12 +224,13 @@ flowchart TD
 | 계층 | 기술 / 도구 | 선정 및 사용 이유 |
 | :--- | :--- | :--- |
 | **Orchestration** | `LangGraph`, `LangChain` | 14개 노드 간 조건부 라우팅 및 Stateful Checkpointing (`MemorySaver`) |
-| **LLM & Inference** | `Qwen/Qwen3.5-9B`, HuggingFace API, RunPod | 한국어 문맥 이해 및 추론 지원, API 단절 시 규칙 기반 Fallback 탑재 |
+| **LLM & Inference** | HuggingFace API, RunPod Pod / Serverless | Pod 우선, HF 자격 증명이 있으면 호출 실패 시 HF 폴백. 모델은 환경설정으로 지정 |
 | **Embedding & Vector DB** | `ChromaDB`, `intfloat/multilingual-e5-base` | 768차원 다국어 고밀도 벡터 임베딩 및 메타데이터 필터링 |
-| **Frontend UI** | `Streamlit 1.62.0` | 대화형 챗, 정책 비교 캐러셀, 진단 카드 및 실시간 노드 타이밍 시각화 |
+| **Frontend UI** | React (목표), `Streamlit 1.62.0` (레거시) | React는 별도 브랜치에서 개발 중. 기존 데모는 Streamlit으로 실행 |
+| **HTTP API** | FastAPI, Pydantic, Uvicorn | 회원·옵션·상담 API-01~13, 서버 세션 및 소유권 검증 |
 | **Data & Scraping** | `Python 3.11`, `Requests`, `xmltodict` | 공공데이터포털(공공서비스) 및 국가법령정보센터 대규모 수집 |
-| **Security & Storage** | `SQLite`, `bcrypt`, `cryptography (Fernet)` | 사용자 프로필 PII(개인식별정보) 안전 암호화 저장 |
-| **Quality & Testing** | `pytest`, `pytest-subtests`, `Streamlit AppTest` | 600개 이상의 엄격한 회귀 테스트 및 가상 위젯 트리 렌더링 검증 |
+| **Security & Storage** | SQLite / MySQL·MariaDB, `bcrypt`, `cryptography (Fernet)` | 회원 저장소 선택, 민감 프로필 암호화. 원격 DB 드라이버는 별도 설치 |
+| **Quality & Testing** | `pytest`, `pytest-subtests`, FastAPI TestClient, Streamlit AppTest | 코어·HTTP 계약 및 레거시 UI 검사. 실제 서비스 통합은 별도 검증 |
 
 ---
 
@@ -251,8 +256,9 @@ flowchart TD
 
 ```plaintext
 bokji-agent/
-├── app.py                         # Streamlit 애플리케이션 진입점
-├── streamlit_ui/                  # 화면 프레젠테이션 계층
+├── backend/                       # FastAPI 앱, 스키마, 세션 저장소, HTTP 테스트
+├── app.py                         # 레거시 Streamlit 데모 진입점
+├── streamlit_ui/                  # 레거시 화면 계층(API-09가 constants.py 재사용)
 │   ├── pages/                     # chat / auth / mypage 뷰
 │   ├── pipeline.py                # 공식 서비스 계층 API 어댑터
 │   ├── rendering.py               # 위젯(요약 카드, 정책 캐러셀, 근거 뷰어) 렌더러
@@ -269,9 +275,11 @@ bokji-agent/
 │   └── timing.py                  # 노드별 레이턴시 계측 프로파일러
 ├── rag_design/                    # 데이터 청크/벡터스토어 스키마 공용 계약
 ├── scripts/                       # 진단, 재색인 및 벤치마크 유틸리티
-├── tests/                         # 단위/통합/UI 검증 테스트 슈트 (673+ Passed)
+├── tests/                         # 코어·인증·LLM·레거시 UI 검증
 └── docs/                          # 시스템 설계서 및 준수 기준(Gate 0~6)
 ```
+
+`frontend/`는 별도 React 브랜치의 개발 대상이며 현재 체크아웃에는 포함되지 않습니다. 화면 목록·상세·비교는 같은 상담 응답을 재사용하고, 정책 문의는 별도 다이얼로그로 제공하는 설계입니다.
 
 ---
 
@@ -279,7 +287,8 @@ bokji-agent/
 
 ### 사전 요구사항
 - **Python**: `3.11.x` 권장
-- **Streamlit**: 반드시 `1.62.0` 사용 (버전 불일치 시 UI 렌더링 에러 발생)
+- **React**: 별도 브랜치 개발·통합 후 해당 실행 절차 확인 필요
+- **Streamlit**: 레거시 데모 실행 시에만 `requirements-streamlit.txt`의 `1.62.0` 사용
 
 ### 설치 및 설정
 
@@ -289,8 +298,7 @@ git clone https://github.com/SKN33-3rd-3Team/bokji-agent.git
 cd bokji-agent
 
 # 2. 의존성 패키지 설치
-pip install -r requirements.txt
-pip install -r requirements-streamlit.txt
+python -m pip install -r backend/requirements-backend.txt
 
 # 3. 환경 변수 템플릿 복사
 cp .env.example .env
@@ -306,25 +314,34 @@ cp .env.example .env
 | `EMBEDDING_MODEL_NAME`| 선택 | `intfloat/multilingual-e5-base` | 사용할 HuggingFace 임베딩 모델명 |
 | `HF_TOKEN` | 선택 | `hf_...` | HuggingFace Inference API 액세스 토큰 |
 | `LLM_MODEL_NAME` | 선택 | `Qwen/Qwen3.5-9B` | 추론 모델명 |
-| `LLM_MAX_NEW_TOKENS` | 권장 | `4096` | 생성 토큰 상한 (낮을 시 추론 중 끊김 방지용) |
+| `LLM_MAX_NEW_TOKENS` | 선택 | `8192` | HF 클라이언트 기본 생성 토큰 상한. 잘림 발생 시 설정 확인 |
 | `BOKJI_TRACE` | 선택 | `1` | `1`로 설정 시 콘솔에 노드별 추론 로그 출력 |
 | `AUTH_ENC_KEY` | 선택 | `(Fernet key)` | 개인정보(PII) DB 암호화 대칭키 |
+| `AUTH_DB_URL` | 선택 | `mysql://<user>:<password>@<host>:<port>/<dbname>` | 원격 회원 DB 선택. 미설정 시 SQLite, 자동 장애 전환 없음 |
+| `RUNPOD_POD_ID` | 선택 | `(Pod ID)` | 설정 시 Pod 우선. [선택 규칙](docs/RUNPOD_SETUP_DRAFT.md) 참고 |
+| `CORS_ORIGINS` | 선택 | `http://localhost:5173` | credentials를 허용할 프론트 origin 목록 |
+| `COOKIE_SECURE` | 운영 필수 | 개발 `false`, HTTPS 운영 `true` | 세션 쿠키의 Secure 속성 |
 
 > ⚠️ **데이터 준비:** 전체 공공서비스 문서와 법령 메타데이터, ChromaDB 벡터 인덱스는 Git 저장소에 포함되지 않습니다. 서비스 실행 전에 원천 문서를 준비한 뒤 `python scripts/reindex_korean.py`로 인덱스를 생성해 주세요.
-> 💡 **Tip (Zero-LLM 모드):** LLM API 키를 설정하지 않더라도 모든 노드가 자체 **규칙 기반(Rule-based) 엔진**으로 자동 폴백되어 정상 작동합니다.
+> **LLM 미설정:** 선택한 클라이언트를 구성할 자격 증명이 없으면 코어의 규칙·템플릿 경로를 사용합니다. 정책 문의는 안내로 제한될 수 있으며, 벡터 데이터와 임베딩 준비는 별도로 필요합니다. 원격 회원 DB는 [별도 드라이버·암호화 키 설정](docs/AUTH_REMOTE_DB.md)을 확인하세요.
 
 ### 서비스 실행
 
 ```bash
-# Streamlit 웹 대시보드 실행
-streamlit run app.py
+# 저장소 루트에서 FastAPI 실행
+python -m uvicorn backend.app.main:app --reload --port 8000
 ```
 
-> **Windows PowerShell 환경에서 모듈 경로 에러 발생 시:**
-> ```powershell
-> $env:PYTHONPATH = ".;src"
-> streamlit run app.py
-> ```
+실행 후 `http://localhost:8000/docs`에서 API를 확인할 수 있습니다. 브라우저에서 인증 API를 사용할 때는 `credentials: 'include'` 또는 `withCredentials: true`가 필요합니다. 현재 로그인·채팅 세션은 메모리 저장이므로 단일 프로세스로 실행하며 재시작하면 사라집니다.
+
+레거시 데모가 필요한 경우:
+
+```bash
+python -m pip install -r requirements-streamlit.txt
+python -m streamlit run app.py
+```
+
+최종 React 화면은 이 브랜치에 없어 여기서 실행할 수 없습니다. React 통합과 API-09 상수 의존성 정리가 끝나기 전에는 `streamlit_ui/`를 일괄 삭제하지 않습니다.
 
 <details>
 <summary><b>🛠️ 유용한 CLI 진단 도구들</b></summary>
@@ -352,10 +369,11 @@ python scripts/reindex_korean.py --device cuda
 안정적인 복지 서비스 제공을 위해 단위 기능부터 E2E UI 위젯 렌더링까지 다층 회귀 테스트 파이프라인을 운영합니다.
 
 ```bash
-# 전체 테스트 실행 (현재 673개 테스트 통과)
+# 전체 코어·백엔드 테스트 실행
 python -m pytest -q
 
 # 핵심 영역별 개별 테스트
+python -m pytest backend/tests/ -q                   # FastAPI HTTP 계약
 python -m pytest -q tests/test_graph_nodes.py          # 14개 노드 개별 로직
 python -m pytest -q tests/test_service.py              # ask() 서비스 계약
 python -m pytest -q tests/test_streamlit_rendering.py  # Streamlit 위젯 렌더링
@@ -364,6 +382,8 @@ python -m pytest -q tests/test_streamlit_rendering.py  # Streamlit 위젯 렌더
 python scripts/run_dev_validation.py
 ```
 
+위 명령은 검증 방법이며 현재 실행 결과를 뜻하지 않습니다. 실제 DB·벡터 인덱스·LLM·React 통합 여부와 skip은 각 실행 결과에 별도로 기록합니다.
+
 ---
 
 ## ⚠️ 투명한 한계 및 엔지니어링 고려사항 (Known Limitations)
@@ -371,7 +391,8 @@ python scripts/run_dev_validation.py
 우리는 프로젝트의 기술적 한계를 투명하게 공유합니다 ([`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md)).
 
 - **응답 대기 시간(Latency)**: 다단계 환각 검증(N5~N7) 과정에서 후보 정책마다 세부 주장을 추출하므로 수십 초가 소요될 수 있습니다. (진행률 표시줄 및 캐싱으로 완화 중)
-- **세션 영속성**: `MemorySaver`를 기반으로 대화 문맥을 메모리에 상주시키므로, 서버 프로세스 재시작 시 진행 중이던 되묻기 세션이 초기화됩니다.
+- **세션 영속성**: 로그인 세션·채팅 소유권·`MemorySaver`는 단일 프로세스 메모리에 저장됩니다. 재시작 시 유실되며 여러 worker 간 공유는 지원하지 않습니다. 로그인 TTL은 기본 7일, 채팅 TTL은 없습니다.
+- **서비스 완성도**: React는 개발 중이며 13개 API가 모두 존재해도 계약 전체가 완료된 것은 아닙니다. [남은 계약 차이](backend/README.md#원본-문서와-남은-계약-차이)를 확인하세요. 특히 보류 응답에 정책 카드가 남을 수 있어 카드 존재만으로 검증 완료를 표시하면 안 됩니다.
 
 ---
 
@@ -380,6 +401,9 @@ python scripts/run_dev_validation.py
 | 문서명 | 내용 요약 |
 | :--- | :--- |
 | 📋 [`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md) | 프로젝트 준수 기준, Gate 0~6 단계별 통과 규정 및 법령 데이터 범위 |
+| 🔌 [`backend/README.md`](backend/README.md) | API-01~13, 인증·세션, 구비서류 계약, 원본 문서와의 미결 차이 |
+| 🗃️ [`docs/AUTH_REMOTE_DB.md`](docs/AUTH_REMOTE_DB.md) | SQLite/MySQL·MariaDB 선택, 드라이버 설치, DB 장애 동작 |
+| ⚙️ [`docs/RUNPOD_SETUP_DRAFT.md`](docs/RUNPOD_SETUP_DRAFT.md) | Pod/HF/Serverless 선택과 확인되지 않은 운영 항목 |
 | 📐 [`docs/RAG_DESIGN_PLAN.md`](docs/RAG_DESIGN_PLAN.md) | RAG 청킹, 검색, 노드 인터페이스 통합 아키텍처 설계서 |
 | 🗄️ [`docs/VECTOR_STORE.md`](docs/VECTOR_STORE.md) | ChromaDB 스키마 계약 및 메타데이터 정합성 규격 |
 | 🧪 [`docs/EVALUATION_AUTOMATION.md`](docs/EVALUATION_AUTOMATION.md) | 100건의 평가 데이터셋 기반 자동 정량 평가 가이드 |
