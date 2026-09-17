@@ -88,7 +88,10 @@ export function PolicyDetailView({ policy, onBack, onAskQuestion }: PolicyDetail
         {/* S07-05: 근거 문서 확인 — 관련 법령 + 원문 링크, 외부 링크는 새 탭 */}
         {policy.related_law.length > 0 && (
           <>
-            <div style={{ fontSize: 13, fontWeight: 700, margin: "22px 0 9px" }}>관련 법령</div>
+            <div style={{ fontSize: 13, fontWeight: 700, margin: "22px 0 4px" }}>관련 법령</div>
+            <p className="text-muted" style={{ fontSize: 12, lineHeight: 1.5, margin: "0 0 8px" }}>
+              이 지원 자격의 근거가 되는 법령이에요. 눌러서 원문을 확인할 수 있어요.
+            </p>
             <div>
               {policy.related_law.map((law) =>
                 law.source_url ? (
@@ -125,9 +128,12 @@ export function PolicyDetailView({ policy, onBack, onAskQuestion }: PolicyDetail
 
         {detail.source_url && (
           <div className="card" style={{ padding: "13px 15px", marginTop: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, marginBottom: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>
               📁 근거 문서 확인 (1건)
             </div>
+            <p className="text-muted" style={{ fontSize: 12, lineHeight: 1.5, margin: "0 0 8px" }}>
+              AI 요약에 사용된 원본 자료예요. 눌러서 직접 확인해보세요.
+            </p>
             <a href={detail.source_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, fontWeight: 600 }}>
               {detail.source_name || "근거 문서"}
             </a>

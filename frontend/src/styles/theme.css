@@ -194,14 +194,21 @@ ol {
   }
 }
 
+/* fill-mode를 안 쓴다: "both"/"forwards"로 애니메이션 종료 후에도
+ * transform이 남아있으면 그 요소가 자손 position:fixed(Toast 등)의
+ * containing block이 되어 버려 뷰포트가 아니라 이 요소 기준으로
+ * 고정돼버린다(2026-09-17, 마이페이지 저장 토스트가 뷰포트 상단이
+ * 아니라 스크롤된 페이지 맨 위에 뜨던 버그의 원인). 기본 상태가 이미
+ * "to" 키프레임과 같은 값(opacity:1, transform:none)이라 fill-mode
+ * 없이도 애니메이션 종료 시 시각적으로 끊김 없이 자연스럽게 복귀한다. */
 .route-transition {
-  animation: fade-in-up 0.28s ease-out both;
+  animation: fade-in-up 0.28s ease-out;
 }
 .view-fade {
-  animation: fade-in-up 0.22s ease-out both;
+  animation: fade-in-up 0.22s ease-out;
 }
 .chat-bubble-in {
-  animation: bubble-in 0.22s ease-out both;
+  animation: bubble-in 0.22s ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -688,6 +695,7 @@ ol {
   font-weight: 700;
   white-space: nowrap;
   vertical-align: middle;
+  margin: 0 6px 6px 0;
 }
 .badge .dot {
   width: 7px;
