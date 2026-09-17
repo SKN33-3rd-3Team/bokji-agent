@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface BirthDateSelectProps {
   value: string;
@@ -30,8 +30,16 @@ export function BirthDateSelect({ value, onChange }: BirthDateSelectProps) {
   const [year, setYear] = useState("");
   const [month, setMonth] = useState("");
   const [day, setDay] = useState("");
+  // 연/월 변경 시 우리가 직접 onChange("")를 호출해 value prop이 되돌아오는데,
+  // 그 되돌아온 value로 이 이펙트가 다시 동기화하면 방금 고른 연/월까지
+  // 같이 날아간다 - 그 한 번만 동기화를 건너뛴다.
+  const skipNextSyncRef = useRef(false);
 
   useEffect(() => {
+    if (skipNextSyncRef.current) {
+      skipNextSyncRef.current = false;
+      return;
+    }
     if (!value) {
       setYear("");
       setMonth("");
@@ -66,6 +74,7 @@ export function BirthDateSelect({ value, onChange }: BirthDateSelectProps) {
             setDay("");
             // 일(day)이 리셋되면 더 이상 완전한 날짜가 아니므로, 부모가 예전 값을
             // 그대로 들고 있지 않도록 값을 비운다(2026-09-17 리뷰 반영).
+            skipNextSyncRef.current = true;
             onChange("");
           }}
         >
@@ -86,6 +95,7 @@ export function BirthDateSelect({ value, onChange }: BirthDateSelectProps) {
             const m = e.target.value;
             setMonth(m);
             setDay("");
+            skipNextSyncRef.current = true;
             onChange("");
           }}
         >

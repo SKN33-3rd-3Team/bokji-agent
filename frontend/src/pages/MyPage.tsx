@@ -75,7 +75,7 @@ export function MyPage() {
   }, [profile, editMode]);
 
   const handleCancelEdit = () => {
-    resetFormFromProfile();
+    // 폼 리셋은 editMode가 false로 바뀌면 위 useEffect가 알아서 한다.
     setSaveError(null);
     setEditMode(false);
   };
