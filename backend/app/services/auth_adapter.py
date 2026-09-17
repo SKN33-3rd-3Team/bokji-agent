@@ -120,11 +120,11 @@ def login(email: str, password: str) -> UserProfile:
     return _to_user_profile(user)
 
 
-def get_profile(username: str) -> UserProfile:
+def get_profile(username: str, *, user_id: int) -> UserProfile:
     try:
-        user = auth_service.get_profile(username)
+        user = auth_service.get_profile(username, expected_user_id=user_id)
     except UserNotFoundError as exc:
-        raise ApiError(status.HTTP_404_NOT_FOUND, "USER_NOT_FOUND", str(exc)) from exc
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.") from exc
     except AuthBackendUnavailableError as exc:
         raise ApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE, "AUTH_BACKEND_UNAVAILABLE", str(exc)
@@ -159,16 +159,16 @@ def _normalize_clear_semantics(fields: dict) -> dict:
     return normalized
 
 
-def update_profile(username: str, payload: UpdateProfileRequest) -> UserProfile:
+def update_profile(username: str, payload: UpdateProfileRequest, *, user_id: int) -> UserProfile:
     # exclude_unset=True: "필드를 안 보냄"(미수정)과 "보냄"(수정 대상)을
     # 구분한다. "보냄"으로 판정된 값 중 None(JSON null)은 _normalize_clear_
     # semantics가 "지움" 신호로 다시 변환한다 - update_profile()의 PATCH
     # 의미론과 동일하게 맞추기 위함(위 함수 docstring 참고).
     fields = _normalize_clear_semantics(payload.model_dump(exclude_unset=True))
     try:
-        user = auth_service.update_profile(username, **fields)
+        user = auth_service.update_profile(username, expected_user_id=user_id, **fields)
     except UserNotFoundError as exc:
-        raise ApiError(status.HTTP_404_NOT_FOUND, "USER_NOT_FOUND", str(exc)) from exc
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.") from exc
     except AuthBackendUnavailableError as exc:
         raise ApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE, "AUTH_BACKEND_UNAVAILABLE", str(exc)
@@ -176,9 +176,13 @@ def update_profile(username: str, payload: UpdateProfileRequest) -> UserProfile:
     return _to_user_profile(user)
 
 
-def change_password(username: str, current_password: str, new_password: str) -> None:
+def change_password(
+    username: str, current_password: str, new_password: str, *, user_id: int
+) -> None:
     try:
-        auth_service.change_password(username, current_password, new_password)
+        auth_service.change_password(
+            username, current_password, new_password, expected_user_id=user_id
+        )
     except PasswordPolicyError as exc:
         if exc.violations == [_SAME_AS_CURRENT_VIOLATION]:
             raise ApiError(status.HTTP_400_BAD_REQUEST, "SAME_AS_CURRENT", str(exc)) from exc
@@ -193,20 +197,20 @@ def change_password(username: str, current_password: str, new_password: str) -> 
             status.HTTP_401_UNAUTHORIZED, "INVALID_CURRENT_PASSWORD", str(exc)
         ) from exc
     except UserNotFoundError as exc:
-        raise ApiError(status.HTTP_404_NOT_FOUND, "USER_NOT_FOUND", str(exc)) from exc
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.") from exc
     except AuthBackendUnavailableError as exc:
         raise ApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE, "AUTH_BACKEND_UNAVAILABLE", str(exc)
         ) from exc
 
 
-def delete_account(username: str, password: str) -> None:
+def delete_account(username: str, password: str, *, user_id: int) -> None:
     try:
-        auth_service.delete_account(username, password)
+        auth_service.delete_account(username, password, expected_user_id=user_id)
     except InvalidCredentialsError as exc:
         raise ApiError(status.HTTP_401_UNAUTHORIZED, "INVALID_CREDENTIALS", str(exc)) from exc
     except UserNotFoundError as exc:
-        raise ApiError(status.HTTP_404_NOT_FOUND, "USER_NOT_FOUND", str(exc)) from exc
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.") from exc
     except AuthBackendUnavailableError as exc:
         raise ApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE, "AUTH_BACKEND_UNAVAILABLE", str(exc)
@@ -231,11 +235,11 @@ def _build_chat_defaults(user: AuthUser) -> ChatDefaultsResponse:
     )
 
 
-def get_chat_defaults(username: str) -> ChatDefaultsResponse:
+def get_chat_defaults(username: str, *, user_id: int) -> ChatDefaultsResponse:
     try:
-        user = auth_service.get_profile(username)
+        user = auth_service.get_profile(username, expected_user_id=user_id)
     except UserNotFoundError as exc:
-        raise ApiError(status.HTTP_404_NOT_FOUND, "USER_NOT_FOUND", str(exc)) from exc
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.") from exc
     except AuthBackendUnavailableError as exc:
         raise ApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE, "AUTH_BACKEND_UNAVAILABLE", str(exc)

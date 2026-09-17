@@ -620,7 +620,14 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
         conn.close()
 
 
-def get_profile(username: str, *, db_path=None) -> AuthUser:
+def _check_user_identity(row, expected_user_id: int | None) -> None:
+    """이메일을 재사용해도 기존 세션이 다른 회원 행을 읽거나 변경하지 못하게 한다."""
+
+    if row is None or (expected_user_id is not None and int(row["id"]) != expected_user_id):
+        raise UserNotFoundError("존재하지 않는 사용자입니다.")
+
+
+def get_profile(username: str, *, expected_user_id: int | None = None, db_path=None) -> AuthUser:
     """비밀번호 검증 없이 프로필을 읽어 복호화한다 (호출 전 세션으로 인증 확인)."""
 
     uname = _normalize_username(username)
@@ -629,8 +636,7 @@ def get_profile(username: str, *, db_path=None) -> AuthUser:
         row = backend.get_user_by_username(conn, uname)
     finally:
         conn.close()
-    if row is None:
-        raise UserNotFoundError("존재하지 않는 사용자입니다.")
+    _check_user_identity(row, expected_user_id)
     return _row_to_user(
         row,
         display_name=_safe_decrypt_name(row["display_name_enc"], uname),
@@ -651,6 +657,7 @@ def update_profile(
     veteran_status: str | None = None,
     income_bracket: str | None = None,
     household_types=None,
+    expected_user_id: int | None = None,
     db_path=None,
 ) -> AuthUser:
     """전달한 필드만 수정하고 최신 :class:`AuthUser` 를 돌려준다.
@@ -662,8 +669,7 @@ def update_profile(
     backend, conn = _open(db_path)
     try:
         row = backend.get_user_by_username(conn, uname)
-        if row is None:
-            raise UserNotFoundError("존재하지 않는 사용자입니다.")
+        _check_user_identity(row, expected_user_id)
 
         changes: dict[str, object] = {}
         if display_name is not None:
@@ -694,6 +700,7 @@ def update_profile(
 
         backend.update_profile_fields(conn, int(row["id"]), **changes)
         fresh = backend.get_user_by_username(conn, uname)
+        _check_user_identity(fresh, int(row["id"]))
     finally:
         conn.close()
 
@@ -711,6 +718,7 @@ def change_password(
     current_password: str,
     new_password: str,
     *,
+    expected_user_id: int | None = None,
     db_path=None,
 ) -> None:
     uname = _normalize_username(username)
@@ -718,8 +726,7 @@ def change_password(
     backend, conn = _open(db_path)
     try:
         row = backend.get_user_by_username(conn, uname)
-        if row is None:
-            raise UserNotFoundError("존재하지 않는 사용자입니다.")
+        _check_user_identity(row, expected_user_id)
         if not verify_password(current_password, row["password_hash"]):
             _log.info("password change fail (bad current) username=%s", mask_email(uname))
             raise InvalidCredentialsError("현재 비밀번호가 올바르지 않습니다.")
@@ -737,7 +744,9 @@ def change_password(
     _log.info("password change ok username=%s", mask_email(uname))
 
 
-def delete_account(username: str, password: str, *, db_path=None) -> None:
+def delete_account(
+    username: str, password: str, *, expected_user_id: int | None = None, db_path=None
+) -> None:
     """비밀번호를 확인한 뒤 회원 행과 그 내용을 삭제한다(되돌릴 수 없음).
 
     SQLite 백엔드에서는 ``delete_user`` 가 ``secure_delete`` 로 삭제 페이지를
@@ -751,8 +760,7 @@ def delete_account(username: str, password: str, *, db_path=None) -> None:
     backend, conn = _open(db_path)
     try:
         row = backend.get_user_by_username(conn, uname)
-        if row is None:
-            raise UserNotFoundError("존재하지 않는 사용자입니다.")
+        _check_user_identity(row, expected_user_id)
         if not verify_password(password, row["password_hash"]):
             _log.info("account delete fail (bad password) username=%s", mask_email(uname))
             raise InvalidCredentialsError("비밀번호가 올바르지 않습니다.")
