@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -176,6 +177,51 @@ def test_login_wrong_password_is_401(client):
     )
     assert r.status_code == 401
     assert r.json()["code"] == "INVALID_CREDENTIALS"
+
+
+@pytest.mark.parametrize("deletion_time", ["before_update", "after_commit"])
+def test_login_deleted_during_failed_attempt_is_401(client, isolated_auth_db, monkeypatch, deletion_time):
+    from src.rag_chatbot.auth import service
+    from backend.app.session_store.auth_session import auth_session_store
+
+    signup = _signup(client)
+    assert signup.status_code == 201
+    user_id = signup.json()["user"]["id"]
+    client.cookies.clear()
+    sessions_before = dict(auth_session_store._sessions)
+    record_failed_login = service.repo.record_failed_login
+    outcomes = []
+
+    def delete_account_row():
+        with sqlite3.connect(isolated_auth_db) as other:
+            assert other.execute("DELETE FROM users WHERE id = ?", (user_id,)).rowcount == 1
+
+    def record_after_deletion(conn, current_id, **kwargs):
+        assert current_id == user_id
+
+        def commit_then_delete():
+            conn.commit()
+            assert conn.execute("SELECT failed_login_count FROM users WHERE id = ?", (user_id,)).fetchone()[0] == 1
+            delete_account_row()
+
+        if deletion_time == "before_update":
+            delete_account_row()
+            recording_conn = conn
+        else:
+            recording_conn = SimpleNamespace(execute=conn.execute, commit=commit_then_delete)
+        outcome = record_failed_login(recording_conn, current_id, **kwargs)
+        outcomes.append(outcome)
+        assert not conn.in_transaction
+        return outcome
+
+    monkeypatch.setattr(service.repo, "record_failed_login", record_after_deletion)
+    response = client.post("/api/v1/auth/login", json={
+        "email": _SIGNUP_PAYLOAD["email"], "password": "Wrong123!",
+    })
+    assert (response.status_code, response.json()["code"]) == (401, "INVALID_CREDENTIALS")
+    assert outcomes == [(0, None)]
+    assert "session_id" not in response.cookies
+    assert auth_session_store._sessions == sessions_before
 
 
 def test_me_requires_login(client):

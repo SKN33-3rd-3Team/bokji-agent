@@ -343,6 +343,8 @@ def record_failed_login(
         "SELECT failed_login_count, locked_until FROM users WHERE id = ?",
         (user_id,),
     ).fetchone()
+    if row is None:
+        return 0, None
     return int(row["failed_login_count"]), row["locked_until"]
 
 

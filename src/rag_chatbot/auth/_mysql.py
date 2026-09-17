@@ -277,6 +277,9 @@ class MySQLBackend:
                     "WHERE id = %s FOR UPDATE", (user_id,),
                 )
                 row = cur.fetchone()
+                if row is None:
+                    conn.commit()
+                    return 0, None
                 now_dt = datetime.now(timezone.utc)
                 expired = (
                     row["locked_until"] is not None

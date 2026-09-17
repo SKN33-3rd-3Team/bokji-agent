@@ -243,6 +243,32 @@ class CrudDisconnectTests(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
 class FailedLoginTransactionTests(unittest.TestCase):
+    def test_missing_failed_login_row_ends_transaction_without_update(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        conn = MagicMock()
+        cur = conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value = None
+        result = MySQLBackend({}).record_failed_login(conn, 7, max_attempts=5, lock_seconds=60)
+        self.assertEqual(result, (0, None))
+        conn.begin.assert_called_once_with()
+        conn.commit.assert_called_once_with()
+        conn.rollback.assert_not_called()
+        cur.execute.assert_called_once_with(
+            "SELECT failed_login_count, locked_until FROM users WHERE id = %s FOR UPDATE", (7,),
+        )
+
+    def test_missing_failed_login_row_commit_failure_is_not_swallowed(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+        conn.commit.side_effect = pymysql.err.OperationalError(2013, "Lost connection")
+        with self.assertRaises(AuthBackendUnavailableError):
+            MySQLBackend({}).record_failed_login(conn, 7, max_attempts=5, lock_seconds=60)
+        conn.commit.assert_called_once_with()
+        conn.rollback.assert_called_once_with()
+
     def test_locked_read_and_literal_update_are_independent_of_assignment_mode(self):
         from rag_chatbot.auth._mysql import MySQLBackend
 
