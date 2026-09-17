@@ -1,22 +1,13 @@
-# 회원 DB 를 원격 MySQL/MariaDB 로 (로그인·회원가입 원격화)
+# 회원 DB 설정: SQLite / MySQL·MariaDB
 
 로그인/회원가입은 기본적으로 로컬 **SQLite**(`.runtime/auth.db`)에 회원을
 저장한다. 팀원 여러 명이 같은 회원 계정을 공유하거나 시연용으로 한 곳에
 모으려면, `AUTH_DB_URL` 환경변수 하나로 **원격 MySQL/MariaDB** 로 바꿀 수
-있다. 코드는 이미 그 분기를 지원한다(`src/rag_chatbot/auth/repository.py` 의
-`get_backend`, `src/rag_chatbot/auth/_mysql.py`) — 어떤 호스트에 떠 있는
-MySQL/MariaDB 든 `AUTH_DB_URL` 하나만 맞으면 그대로 붙는다(특정 호스팅
-업체에 종속되지 않음).
+있다. 선택은 [repository.py](../src/rag_chatbot/auth/repository.py)의 `get_backend`, 원격 연결은 [_mysql.py](../src/rag_chatbot/auth/_mysql.py)가 담당한다. 연결에는 드라이버·계정 권한·네트워크 접근·암호화 키 설정이 필요하다.
 
-> **2026-09-16 변경**: 회원 DB 는 RunPod 이 아니라 팀이 자체 운영하는
-> `skn33.iptime.org` 서버의 MariaDB 를 쓴다. 이 서버는 이미 MariaDB 가 떠
-> 있다고 가정하고, 계정만 새로 만들면 된다(아래 1장) — RunPod Pod 를 직접
-> 배포하던 예전 절차(Network Volume, Container Image 선택 등)는 더 이상
-> 필요 없다. `scripts/runpod_mariadb_bootstrap.sh` 는 RunPod Pod 전용이라
-> 이 서버에는 해당하지 않는다(더 이상 쓰지 않음).
+원격 회원 DB의 구성 대상은 팀 서버 `skn33.iptime.org`의 MariaDB다. 아래 절차는 MariaDB 서버가 준비돼 있다는 전제이며 실제 접속 가능 여부는 연결 진단으로 확인한다. 사용자 확인에 따라 이관할 기존 운영 회원 DB는 없으므로 레거시 MySQL 마이그레이션은 이번 범위에 필요하지 않다. 새 DB에는 현재 스키마를 생성한다.
 
-> RunPod 의 LLM Serverless/Pod 연동(N1/N5/N9/N10/N13)은 완전히 별개다. 그건
-> `docs/RUNPOD_SETUP_DRAFT.md` 를 본다. 이 문서는 **회원 DB** 얘기만 다룬다.
+LLM 추론은 [RunPod/HuggingFace 안내](RUNPOD_SETUP_DRAFT.md), HTTP 인증·세션은 [백엔드 안내](../backend/README.md#인증세션-동작)를 따른다. 회원 DB를 원격으로 옮겨도 로그인·채팅 세션은 프로세스 메모리에 남는다.
 
 ---
 
@@ -25,32 +16,25 @@ MySQL/MariaDB 든 `AUTH_DB_URL` 하나만 맞으면 그대로 붙는다(특정 �
 | 항목 | 값 |
 | --- | --- |
 | 환경변수 | `AUTH_DB_URL=mysql://<user>:<password>@<host>:<port>/<dbname>` |
-| 드라이버 | `pymysql` (`pip install pymysql`, 순수 파이썬 — 빌드 도구 불필요) |
+| 드라이버 | 원격 DB 사용 시 `python -m pip install pymysql`. 기본/backend requirements에는 설치 항목으로 활성화돼 있지 않음 |
 | 스킴 | `mysql://` `mariadb://` `mysql+pymysql://` 셋 다 허용 |
 | 테이블 | 첫 실행 시 `users` 를 자동 생성(`init_schema`) — 수동 DDL 불필요 |
 | 암호화 키 | `AUTH_ENC_KEY` 를 **팀이 같은 값으로 공유**. DB 와 분리 보관 |
 | 연결 타임아웃 | `AUTH_DB_CONNECT_TIMEOUT`(초, 기본 10) |
 
-`AUTH_DB_URL` 이 비어 있으면 기존 SQLite 동작 그대로다(기본값 불변). 테스트
-코드처럼 `db_path=` 를 명시적으로 넘기면 `AUTH_DB_URL` 과 무관하게 SQLite 를
-쓴다.
+DB 선택 순서는 명시적 `db_path`의 SQLite → `AUTH_DB_URL`의 MySQL/MariaDB → `AUTH_DB_PATH` 또는 기본 `.runtime/auth.db`의 SQLite다. 원격 연결 실패 후 SQLite로 자동 전환하거나 두 DB를 동기화하지 않는다. SQLite 장애 대체는 승인되지 않은 제안이다.
 
-> **왜 `AUTH_ENC_KEY` 공유가 필수인가**: 표시이름·관심조건은 이 키로 암호화돼
-> DB 에 들어간다. 팀원마다 키가 다르면 서로가 만든 행의 이름/관심조건을
-> 복호화하지 못한다(비밀번호 해시는 키와 무관하므로 로그인 자체는 됨).
+같은 DB에 연결하는 앱은 동일한 `AUTH_ENC_KEY`를 사용해야 표시이름·생년월일·관심조건·장애·보훈·소득·가구유형을 복호화할 수 있다. 비밀번호 해시는 이 키와 별개다. 키는 DB 및 저장소와 분리해 보관한다.
 
 ---
 
 ## 1. 원격 서버(skn33.iptime.org)에서 해야 하는 것
 
-이 서버는 MariaDB 가 이미 떠 있다고 가정한다(RunPod Pod 처럼 이미지를
-새로 배포하거나 Network Volume 을 마운트하는 절차가 필요 없다) — 필요한
-건 앱 전용 계정 하나뿐이다.
+MariaDB 서비스·포트·접근 정책을 확인한 뒤 앱 전용 계정과 스키마를 준비한다.
 
 ### 1-1. 앱 전용 계정 생성
 
-`scripts/setup_sing_up_db.sql` 을 쓴다(레포에 이미 있음 - 비밀번호를 파일에
-평문으로 남기지 않고 실행 시점에 주입하는 방식):
+[setup_sing_up_db.sql](../scripts/setup_sing_up_db.sql)을 사용한다. 아래는 Bash와 `envsubst`·`mysql`이 준비된 환경의 예이며 비밀번호는 실행 시점에 주입한다.
 
 ```bash
 DEV_DB_PASSWORD='<길고 무작위한 비밀번호>' envsubst < scripts/setup_sing_up_db.sql \
@@ -81,10 +65,9 @@ SHOW GRANTS FOR 'dev_account01'@'%';
 
 1. 드라이버 설치:
    ```
-   pip install pymysql
+   python -m pip install pymysql
    ```
-   (또는 `requirements-auth.txt` 의 `pymysql` 줄 주석을 풀고
-   `pip install -r requirements-auth.txt`)
+   [requirements-auth.txt](../requirements-auth.txt)의 `pymysql`은 주석 상태다. `backend/requirements-backend.txt` 설치만으로는 원격 드라이버가 설치되지 않는다.
 
 2. `.env` 에 추가 (`.env.example` 참고):
    ```
@@ -105,16 +88,13 @@ SHOW GRANTS FOR 'dev_account01'@'%';
    ```
    (`AUTH_DB_URL` 을 읽는다. `--url mysql://...` 로 직접 넘겨도 된다.)
 
-4. 스키마 생성 확인 — 아무 회원가입 한 번이면 `users` 테이블이 자동으로
-   만들어진다:
+4. FastAPI에서 회원가입·로그인 확인:
    ```
-   streamlit run app.py
+   python -m uvicorn backend.app.main:app --reload --port 8000
    ```
-   → 로그인 화면 → 회원가입 → 다시 로그인. 성공하면 완료다.
+   `http://localhost:8000/docs`의 API-01로 테스트 계정을 생성하고 API-02/04로 로그인·프로필 조회를 확인한다. 새 DB의 `users` 테이블은 인증 저장소 초기화 시 자동 생성된다. HTTPS 운영 시 `COOKIE_SECURE=true`와 프론트의 명시적 CORS origin 설정도 필요하다. React 화면 통합 검증은 별도다.
 
-   DB 가 꺼져 있거나 주소가 틀리면 화면에 "회원 데이터베이스에 연결할 수
-   없습니다" 안내가 뜬다(앱이 죽지는 않는다 —
-   `AuthBackendUnavailableError`).
+   DB 연결 장애는 `503 AUTH_BACKEND_UNAVAILABLE`로 처리될 수 있다. 보호된 회원·채팅 요청도 매번 인증 DB를 확인하므로 기존 로그인 사용자도 영향을 받는다. 장애만으로 세션 토큰을 지우지는 않는다.
 
 5. (선택) DBeaver / `mysql` CLI 로 확인:
    ```sql
@@ -124,33 +104,20 @@ SHOW GRANTS FOR 'dev_account01'@'%';
 
 ---
 
-## 3. 스키마 (참고 — 코드가 자동 생성한다)
+## 3. 스키마와 프로필
 
-`src/rag_chatbot/auth/_mysql.py` 의 `_SCHEMA`:
+현재 DDL은 [_mysql.py의 `_SCHEMA`](../src/rag_chatbot/auth/_mysql.py)에 있으며 SQLite 대응 스키마는 [repository.py](../src/rag_chatbot/auth/repository.py)에 있다. 복사한 DDL 대신 코드 정의를 기준으로 새 DB를 생성한다.
 
-```sql
-CREATE TABLE IF NOT EXISTS users (
-    id                  BIGINT       NOT NULL AUTO_INCREMENT,
-    username            VARCHAR(254) NOT NULL,          -- 이메일. utf8mb4_unicode_ci → 대소문자 무시
-    password_hash       VARCHAR(255) NOT NULL,          -- bcrypt / pbkdf2 문자열
-    display_name_enc    TEXT         NULL,              -- Fernet 암호문
-    region              VARCHAR(64)  NULL,              -- 시/도 평문
-    interests_enc       TEXT         NULL,              -- 관심조건 JSON, Fernet 암호문
-    marketing_opt_in    TINYINT      NOT NULL DEFAULT 0,
-    created_at          VARCHAR(32)  NOT NULL,          -- ISO8601 문자열(백엔드 독립)
-    updated_at          VARCHAR(32)  NOT NULL,
-    password_changed_at VARCHAR(32)  NULL,
-    failed_login_count  INT          NOT NULL DEFAULT 0,
-    locked_until        VARCHAR(32)  NULL,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_users_username (username)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-```
+| 저장 대상 | 현재 형태 |
+| --- | --- |
+| 이름·생년월일·관심조건·장애·보훈·소득·가구유형 | `display_name_enc`, `birth_date_enc`, `interests_enc`, `disability_status_enc`, `veteran_status_enc`, `income_bracket_enc`, `household_types_enc` |
+| 지역·성별 | `region`, `gender` 평문 |
+| 마케팅 동의 | `marketing_opt_in` 저장·조회. 수정 요구사항은 API-05 계약 공백으로 남음 |
+| 약관·개인정보 동의 | 가입 게이트에서 확인하며 동의 버전/이력을 프로필에 저장하지 않음 |
+| 취업 상태 | 회원 테이블에 없으며 상담에서 수집 |
+| 비밀번호·잠금·시간 | 해시, 실패 횟수·잠금 시각, ISO 형식 시간 문자열 |
 
-SQLite 스키마(`repository.py` 의 `_SCHEMA`)와 컬럼 의미가 1:1 로 같다. 시간
-값을 `DATETIME` 이 아니라 문자열로 저장하는 이유는 `service._parse_ts` 가
-문자열을 그대로 파싱하기 때문 — 백엔드를 바꿔도 시간 처리 코드는 손대지
-않는다.
+MySQL의 `CREATE TABLE IF NOT EXISTS`는 과거 테이블을 자동 보정하는 마이그레이션이 아니다. 이번 범위는 새 DB 초기화이며 SQLite와 MySQL 간 데이터 이전·동기화는 수행하지 않는다.
 
 ---
 
@@ -161,16 +128,11 @@ SQLite 스키마(`repository.py` 의 `_SCHEMA`)와 컬럼 의미가 1:1 로 같�
   mysqldump -h skn33.iptime.org -P <port> -u root -p bokji_auth users > users_backup_$(date +%F).sql
   ```
   서버가 자체 관리 서버라도 실수로 `DROP` 하면 끝이므로 덤프를 따로 남긴다.
-- **가용성**: RunPod Pod 와 달리 상시 운영되는 서버이므로 Start/Stop 과금
-  같은 건 없다. 다만 서버 재부팅/점검 시 DB 가 일시적으로 끊길 수 있으니
-  팀 내에서 점검 일정은 공유한다.
+- **가용성**: 서버 재부팅·점검 시 인증과 보호된 API가 영향을 받는다. 점검 일정을 공유하고 실제 연결 상태를 확인한다.
 - **탈퇴 시 잔재**: SQLite 백엔드는 `secure_delete` PRAGMA 로 삭제 페이지를
   덮지만, MySQL 은 평범한 `DELETE` 다. 저장소 수준 소거는 이 MariaDB 서버의
   운영 정책에 달려 있다.
-- **다른 호스팅으로 다시 옮길 때**: 코드는 `AUTH_DB_URL` 만 보므로, 이후
-  다른 서버/관리형 MySQL(RunPod, Railway, PlanetScale, Aiven 등 무엇이든)로
-  옮기더라도 URL 만 바꾸면 그대로 붙는다 — 이 문서의 1장만 그 호스팅
-  환경에 맞게 다시 쓰면 된다.
+- **연결 대상 변경**: `AUTH_DB_URL` 외에도 새 서버의 인증·권한·네트워크 및 스키마 호환성을 확인한다. URL 변경이 기존 데이터 이전을 수행하지는 않는다.
 
 ---
 
@@ -198,5 +160,4 @@ SQLite 스키마(`repository.py` 의 `_SCHEMA`)와 컬럼 의미가 1:1 로 같�
   ```
   (운영 DB 가 아니라 `bokji_test` 같은 별도 DB 를 쓴다 — 테스트가 행을
   만들었다 지운다.)
-- 기존 `tests/test_auth.py` / `tests/test_streamlit_auth_integration.py` 는
-  SQLite 그대로라 영향 없다.
+- SQLite 인증 검사는 `python -m pytest tests/test_auth.py -q`, HTTP 계약 검사는 `python -m pytest backend/tests/ -q`를 사용한다. 실제 DB 테스트가 skip되면 원격 왕복 검증은 미완료이며, 이 명령 목록 자체는 테스트 통과 기록이 아니다.
