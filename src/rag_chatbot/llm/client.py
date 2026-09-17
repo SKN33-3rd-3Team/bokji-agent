@@ -505,9 +505,16 @@ class RunPodPodClient:
         except requests.RequestException as exc:
             raise LLMCallError(f"RunPod Pod 호출 실패: {exc}") from exc
         try:
-            return response.json()["choices"][0]["message"]["content"]
+            choice = response.json()["choices"][0]
+            content = choice["message"]["content"]
+            finish_reason = choice.get("finish_reason")
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise LLMCallError(f"RunPod Pod 응답을 파싱하지 못함: {exc}") from exc
+        if finish_reason == "length":
+            raise LLMCallError("RunPod Pod 응답이 잘림(finish_reason='length')")
+        if not isinstance(content, str) or not content.strip():
+            raise LLMCallError("RunPod Pod 응답이 비어 있거나 문자열이 아님")
+        return content
 
 
 class FallbackLLMClient:
