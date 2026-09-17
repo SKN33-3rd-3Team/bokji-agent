@@ -288,7 +288,8 @@ class MySQLBackend:
         lock_seconds: int,
     ) -> tuple[int, str | None]:
         """SQLite 백엔드의 ``record_failed_login``과 동일한 계약 -
-        repository.py의 docstring 참고. 방언 차이(``%s`` 자리표시자)만 있다."""
+        repository.py의 docstring 참고. MySQL/MariaDB의 기본 UPDATE는
+        왼쪽부터 대입하므로 잠금 판정은 이미 증가한 실패 횟수를 쓴다."""
 
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat(timespec="seconds")
@@ -303,9 +304,9 @@ class MySQLBackend:
             cur.execute(
                 f"UPDATE users SET "
                 f"failed_login_count = {fails_expr}, "
-                f"locked_until = CASE WHEN ({fails_expr}) >= %s THEN %s ELSE NULL END "
+                f"locked_until = CASE WHEN failed_login_count >= %s THEN %s ELSE NULL END "
                 f"WHERE id = %s",
-                (now_iso, now_iso, max_attempts, new_lock_iso, user_id),
+                (now_iso, max_attempts, new_lock_iso, user_id),
             )
             conn.commit()
             cur.execute(

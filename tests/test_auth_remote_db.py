@@ -288,6 +288,31 @@ class LiveRemoteDbTests(unittest.TestCase):
         with self.assertRaises(Exception):
             authenticate(self._email, "Wrong999$")
 
+    def test_failed_login_locks_exactly_at_threshold_after_expiry_too(self):
+        user = sign_up(self._email, _GOOD_PW, "홍길동")
+        backend = repo.get_backend()
+        conn = backend.connect()
+        try:
+            for limit in (1, 2, 5):
+                for expired_lock in (None, "2000-01-01T00:00:00+00:00"):
+                    with self.subTest(limit=limit, expired_lock=expired_lock):
+                        backend.set_login_security(
+                            conn, user.id,
+                            failed_login_count=limit if expired_lock else 0,
+                            locked_until=expired_lock,
+                        )
+                        for attempt in range(1, limit + 1):
+                            fails, locked_until = backend.record_failed_login(
+                                conn, user.id, max_attempts=limit, lock_seconds=60,
+                            )
+                            self.assertEqual(fails, attempt)
+                            self.assertEqual(locked_until is not None, attempt == limit)
+                            row = backend.get_user_by_username(conn, self._email)
+                            self.assertEqual(row["failed_login_count"], attempt)
+                            self.assertEqual(row["locked_until"], locked_until)
+        finally:
+            conn.close()
+
     def test_update_profile_and_get_profile(self):
         sign_up(self._email, _GOOD_PW, "원래이름", region="부산광역시")
         update_profile(self._email, display_name="바뀐이름",
