@@ -31,8 +31,10 @@ def get_current_user(request: Request) -> AuthSessionRecord:
 
 @contextmanager
 def user_operation(current: AuthSessionRecord):
-    """인증 이후 기다리던 상담도 탈퇴 후 실행되지 않도록 잠금 안에서 재확인한다."""
+    """인증 후 기다린 작업도 탈퇴·세션 폐기 후 실행되지 않게 재확인한다."""
 
     with chat_session_store.locked_user(current.user_id):
+        if not auth_session_store.is_active(current):
+            raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.")
         auth_adapter.get_profile(current.username, user_id=current.user_id)
         yield

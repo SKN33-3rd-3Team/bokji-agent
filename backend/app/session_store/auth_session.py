@@ -20,6 +20,7 @@ class AuthSessionRecord:
     user_id: int
     username: str
     expires_at: datetime
+    revoked: bool = False
 
 
 class AuthSessionStore:
@@ -37,7 +38,7 @@ class AuthSessionStore:
         # ponytail: 분당 최대 한 번 O(n) 순회. 대규모 세션은 TTL 저장소로 전환.
         expired = [token for token, record in self._sessions.items() if record.expires_at < now]
         for token in expired:
-            del self._sessions[token]
+            self._sessions.pop(token).revoked = True
         self._next_cleanup = now + timedelta(minutes=1)
 
     def create(self, token: str, *, user_id: int, username: str) -> None:
@@ -49,6 +50,9 @@ class AuthSessionStore:
         )
         with self._lock:
             self._prune_expired(now)
+            previous = self._sessions.get(token)
+            if previous is not None:
+                previous.revoked = True
             self._sessions[token] = record
 
     def get(self, token: str) -> AuthSessionRecord | None:
@@ -59,21 +63,32 @@ class AuthSessionStore:
             if record is None:
                 return None
             if record.expires_at < now:
-                del self._sessions[token]
+                self._sessions.pop(token).revoked = True
                 return None
             return record
 
+    def is_active(self, record: AuthSessionRecord) -> bool:
+        """잠금을 기다리던 요청이 보유한 레코드에도 폐기/만료를 즉시 반영한다."""
+
+        with self._lock:
+            return not record.revoked and record.expires_at >= datetime.now(timezone.utc)
+
     def delete(self, token: str) -> None:
         with self._lock:
-            self._sessions.pop(token, None)
+            record = self._sessions.pop(token, None)
+            if record is not None:
+                record.revoked = True
 
-    def delete_all_for_user(self, user_id: int) -> None:
-        """탈퇴 등으로 해당 사용자의 세션 토큰을 전부 즉시 폐기한다."""
+    def delete_all_for_user(self, user_id: int, *, except_record: AuthSessionRecord | None = None) -> None:
+        """회원 세션을 폐기한다. 비밀번호 변경은 현재 레코드만 유지한다."""
 
         with self._lock:
-            stale = [token for token, record in self._sessions.items() if record.user_id == user_id]
+            stale = [
+                token for token, record in self._sessions.items()
+                if record.user_id == user_id and record is not except_record
+            ]
             for token in stale:
-                del self._sessions[token]
+                self._sessions.pop(token).revoked = True
 
 
 auth_session_store = AuthSessionStore(ttl_days=settings.auth_session_ttl_days)

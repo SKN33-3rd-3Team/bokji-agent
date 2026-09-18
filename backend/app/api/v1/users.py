@@ -32,7 +32,8 @@ def get_me(
     response: Response, current: AuthSessionRecord = Depends(get_current_user)
 ) -> UserProfile:
     _no_store(response)
-    return auth_adapter.get_profile(current.username, user_id=current.user_id)
+    with user_operation(current):
+        return auth_adapter.get_profile(current.username, user_id=current.user_id)
 
 
 @router.patch("/me", response_model=UserProfile)
@@ -42,16 +43,19 @@ def update_me(
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> UserProfile:
     _no_store(response)
-    return auth_adapter.update_profile(current.username, payload, user_id=current.user_id)
+    with user_operation(current):
+        return auth_adapter.update_profile(current.username, payload, user_id=current.user_id)
 
 
 @router.post("/me/password", response_model=MessageResponse)
 def change_password(
     payload: ChangePasswordRequest, current: AuthSessionRecord = Depends(get_current_user)
 ) -> MessageResponse:
-    auth_adapter.change_password(
-        current.username, payload.current_password, payload.new_password, user_id=current.user_id
-    )
+    with user_operation(current):
+        auth_adapter.change_password(
+            current.username, payload.current_password, payload.new_password, user_id=current.user_id
+        )
+        auth_session_store.delete_all_for_user(current.user_id, except_record=current)
     return MessageResponse(message="비밀번호가 변경되었습니다.")
 
 
@@ -75,4 +79,5 @@ def get_chat_defaults(
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> ChatDefaultsResponse:
     _no_store(response)
-    return auth_adapter.get_chat_defaults(current.username, user_id=current.user_id)
+    with user_operation(current):
+        return auth_adapter.get_chat_defaults(current.username, user_id=current.user_id)
