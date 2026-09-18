@@ -39,6 +39,7 @@ from typing import Iterator, Protocol
 from urllib.parse import urlsplit
 
 from ..timing import TIMER
+from ..deadline import NodeDeadlineExceeded, active_write, check_deadline, remaining_timeout
 
 
 class LLMClient(Protocol):
@@ -85,7 +86,7 @@ def _log_runpod_failures(complete):
     def wrapped(*args, **kwargs):
         try:
             return complete(*args, **kwargs)
-        except LLMCallError as exc:
+        except (LLMCallError, NodeDeadlineExceeded) as exc:
             cause = exc.__cause__ or exc
             response = getattr(cause, "response", None)
             status = getattr(response, "status_code", None)
@@ -350,15 +351,16 @@ class RecordingLLMClient:
     def complete(
         self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
     ) -> str:
-        with self._lock:
+        with self._lock, active_write():
             stats = self._current_stats()
             stats.call_count += 1
         started = time.perf_counter()
         try:
             result = self.inner.complete(prompt, system=system, max_tokens=max_tokens)
+            check_deadline()
         except LLMCallError as exc:
             message = str(exc)
-            with self._lock:
+            with self._lock, active_write():
                 # 같은 원인이 노드마다 반복되므로 중복은 한 번만 남긴다.
                 if message not in stats.failures:
                     stats.failures.append(message)
@@ -367,10 +369,10 @@ class RecordingLLMClient:
             # 실패한 호출도 시간을 잰다. 타임아웃으로 느린 경우가 있어서
             # 성공한 것만 재면 "왜 느린지"를 놓친다.
             elapsed = time.perf_counter() - started
-            with self._lock:
+            with self._lock, active_write():
                 stats.durations.append(elapsed)
-            TIMER.record("llm_call", elapsed)
-        with self._lock:
+                TIMER.record("llm_call", elapsed)
+        with self._lock, active_write():
             stats.success_count += 1
         return result
 
@@ -452,9 +454,11 @@ class RunPodServerlessClient:
         }
 
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
+            response = requests.post(url, json=payload, headers=headers, timeout=remaining_timeout(self.timeout_seconds))
+            check_deadline()
             response.raise_for_status()
         except requests.RequestException as exc:
+            check_deadline()
             raise LLMCallError(f"RunPod 호출 실패: {exc}") from exc
 
         try:
@@ -468,7 +472,9 @@ class RunPodServerlessClient:
             error.provider_error = data.get("error", {})
             raise error
 
-        return self._parse_output(data.get("output"))
+        result = self._parse_output(data.get("output"))
+        check_deadline()
+        return result
 
     @staticmethod
     def _parse_output(output: object) -> str:
@@ -543,9 +549,11 @@ class RunPodPodClient:
         if max_tokens:
             payload["max_tokens"] = max_tokens
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
+            response = requests.post(url, json=payload, headers=headers, timeout=remaining_timeout(self.timeout_seconds))
+            check_deadline()
             response.raise_for_status()
         except requests.RequestException as exc:
+            check_deadline()
             raise LLMCallError(f"RunPod Pod 호출 실패: {exc}") from exc
         try:
             choice = response.json()["choices"][0]
@@ -557,6 +565,7 @@ class RunPodPodClient:
             raise LLMCallError("RunPod Pod 응답이 잘림(finish_reason='length')")
         if not isinstance(content, str) or not content.strip():
             raise LLMCallError("RunPod Pod 응답이 비어 있거나 문자열이 아님")
+        check_deadline()
         return content
 
 
@@ -593,11 +602,17 @@ class FallbackLLMClient:
     def complete(
         self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
     ) -> str:
+        check_deadline()
         try:
-            return self.primary.complete(prompt, system=system, max_tokens=max_tokens)
+            result = self.primary.complete(prompt, system=system, max_tokens=max_tokens)
+            check_deadline()
+            return result
         except LLMCallError as primary_exc:
+            check_deadline()
             try:
-                return self.secondary.complete(prompt, system=system, max_tokens=max_tokens)
+                result = self.secondary.complete(prompt, system=system, max_tokens=max_tokens)
+                check_deadline()
+                return result
             except LLMCallError as secondary_exc:
                 raise LLMCallError(
                     f"{self.primary_name} 실패({primary_exc}) 후 "
@@ -699,11 +714,20 @@ class HuggingFaceInferenceClient:
                 "'pip install huggingface_hub'로 설치하세요."
             ) from exc
 
-        client = InferenceClient(
+        class DeadlineInferenceClient(InferenceClient):
+            def _inner_post(self, *args, **kwargs):
+                # HF provider 검색(model_info)은 inference timeout 밖에 있다.
+                # 늦은 검색 완료 뒤 POST를 시작하지 않도록 이 호출의 인스턴스만 감싼다.
+                self.timeout = remaining_timeout(self.timeout)
+                result = super()._inner_post(*args, **kwargs)
+                check_deadline()
+                return result
+
+        client = DeadlineInferenceClient(
             model=self.base_url or self.model,
             token=self.token,
             provider=self.provider,
-            timeout=self.timeout_seconds,
+            timeout=remaining_timeout(self.timeout_seconds),
         )
 
         messages = []
@@ -718,7 +742,11 @@ class HuggingFaceInferenceClient:
                 extra_body=self.extra_body,
                 **({"model": self.model} if self.base_url else {}),
             )
+            check_deadline()
+        except NodeDeadlineExceeded:
+            raise
         except (HfHubHTTPError, Exception) as exc:
+            check_deadline()
             # 상태코드별로 "무엇을 확인하면 되는지"까지 담아 던진다.
             # HfHubHTTPError를 따로 잡지 않는 이유: provider 라우팅 경로에서는
             # requests의 HTTPError 등 다른 예외가 그대로 올라오는 경우가 있어
@@ -758,6 +786,7 @@ class HuggingFaceInferenceClient:
             raise LLMCallError("Ollama 응답이 비어 있거나 문자열이 아님")
         if not content:
             raise LLMCallError(f"HuggingFace 응답이 비어 있음: {response!r}")
+        check_deadline()
         return content
 
 

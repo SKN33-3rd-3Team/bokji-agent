@@ -38,6 +38,7 @@ from langgraph.types import Command, interrupt
 from rag_design.vector_store import ChromaVectorStore
 
 from ..llm import LLMClient
+from ..deadline import graph_execution
 from .nodes.answer_generation import generate_answer
 from .nodes.benefit_calculator import calculate_benefit_amount
 from .nodes.claim_extractor import LLMClaimExtractor, RuleBasedClaimExtractor
@@ -245,7 +246,7 @@ def build_graph(
     graph: StateGraph = StateGraph(GraphState)
 
     # --- N1~N3: 슬롯 파싱 / 적합성 체크 / 추가 정보 요청 -------------------
-    graph.add_node("slot_parser", timed_node("slot_parser", functools.partial(parse_slots, llm_client=llm_client)))
+    graph.add_node("slot_parser", timed_node("slot_parser", functools.partial(parse_slots, llm_client=llm_client), llm=llm_client is not None))
     graph.add_node("slot_completeness_gate", timed_node("slot_completeness_gate", check_slot_completeness))
     graph.add_node("general_law_reference_search", timed_node("general_law_reference_search", search_general_law_references))
     graph.add_node("request_missing_slots", timed_node("request_missing_slots", _await_missing_slot_input))
@@ -254,6 +255,7 @@ def build_graph(
         timed_node(
             "request_calc_info",
             functools.partial(_await_calc_info_input, llm_client=llm_client),
+            llm=llm_client is not None,
         ),
     )
 
@@ -279,6 +281,7 @@ def build_graph(
                 extractor=extractor,
                 law_resolver=law_resolver,
             ),
+            llm=llm_client is not None,
         ),
     )
     graph.add_node("document_verification", timed_node("document_verification", functools.partial(verify_official_documents, store=store))
@@ -295,9 +298,10 @@ def build_graph(
                 llm_client=llm_client,
                 support_conditions=support_conditions,
             ),
+            llm=llm_client is not None,
         ),
     )
-    graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client),))
+    graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client), llm=llm_client is not None))
     graph.add_node("duplicate_benefit", timed_node("duplicate_benefit", functools.partial(check_duplicate_benefit, store=store)))
     # defer=True: N10(benefit_calculator)이 되묻기 루프(E18a/E18b)로 빠진
     # 라운드에는 N11(duplicate_benefit)만 먼저 이 노드로 라우팅하는데,
@@ -318,7 +322,7 @@ def build_graph(
         timed_node("result_assembly", functools.partial(assemble_result, store=store)),
         defer=True,
     )
-    graph.add_node("answer_generation", timed_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client)))
+    graph.add_node("answer_generation", timed_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client), llm=llm_client is not None))
     graph.add_node("final_verification", timed_node("final_verification", verify_final_answer))
     graph.add_node("abstain_insufficient_evidence", timed_node("abstain_insufficient_evidence", _abstain_insufficient_evidence))
 
@@ -495,7 +499,8 @@ def run_graph(
         "answer_status": None,
     }
     config = {"configurable": {"thread_id": session_id}}
-    return graph.invoke(initial_state, config=config)
+    with graph_execution():
+        return graph.invoke(initial_state, config=config)
 
 
 def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict:
@@ -515,7 +520,8 @@ def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict
             raise CalculationInputError("현재 계산 질문에 대한 답변이 아닙니다.")
         merge_structured_calc_answer(snapshot.values, user_input)
     if any(task.interrupts for task in snapshot.tasks):
-        return graph.invoke(Command(resume=user_input), config=config)
+        with graph_execution():
+            return graph.invoke(Command(resume=user_input), config=config)
     if snapshot.next or not snapshot.values or snapshot.values.get("answer_status") not in (
         "complete", "partial", "abstained",
     ):

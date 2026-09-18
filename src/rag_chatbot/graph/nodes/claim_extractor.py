@@ -36,11 +36,10 @@ import hashlib
 import json
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from typing import Sequence
 
 from ...llm import LLMCallError, LLMClient, loads_json_object
+from ...deadline import BoundedExecutor, NodeDeadlineExceeded, active_write, check_deadline, wait_for
 
 
 _CLAIM_TYPES = ("eligibility", "amount", "duplicate")
@@ -115,6 +114,7 @@ def _prefetch_workers() -> int:
     return max(1, min(value, 16))
 # 캐시 상한. 한 프로세스가 오래 살아도 메모리가 무한정 늘지 않게 한다.
 _CACHE_MAX_ENTRIES = 512
+_prefetch_pool = BoundedExecutor(16, "claim-prefetch")
 
 
 class LLMClaimExtractor:
@@ -171,17 +171,25 @@ class LLMClaimExtractor:
             policy_id, text = item
             try:
                 self.extract(policy_id=policy_id, text=text)
+            except NodeDeadlineExceeded:
+                raise
             except Exception:  # noqa: BLE001 - prefetch 실패는 조용히 넘긴다
                 pass
 
-        with ThreadPoolExecutor(max_workers=_prefetch_workers()) as pool:
-            futures = [
-                pool.submit(copy_context().run, _one, item) for item in pending
-            ]
-            for future in futures:
-                future.result()
+        size = _prefetch_workers()
+        for offset in range(0, len(pending), size):
+            futures = []
+            try:
+                for item in pending[offset:offset + size]:
+                    futures.append(_prefetch_pool.submit(_one, item))
+                for future in futures:
+                    wait_for(future)
+            finally:
+                for future in futures:
+                    future.cancel()
 
     def extract(self, *, policy_id: str, text: str) -> list[dict]:
+        check_deadline()
         if not text.strip():
             return []
 
@@ -193,7 +201,7 @@ class LLMClaimExtractor:
             return [dict(claim) for claim in cached]
 
         result = self._extract_uncached(policy_id=policy_id, text=text)
-        with self._lock:
+        with self._lock, active_write():
             if len(self._cache) < _CACHE_MAX_ENTRIES:
                 self._cache[key] = [dict(claim) for claim in result]
         return result
