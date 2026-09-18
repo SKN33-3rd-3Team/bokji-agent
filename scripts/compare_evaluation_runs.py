@@ -73,6 +73,22 @@ def build_report(before: dict, after: dict, *, before_label: str, after_label: s
             f"after={after.get('question_count')}) - `--max-questions`/`--question-ids`를 "
             "맞췄는지 확인하세요.\n\n"
         )
+    before_ids_sha, after_ids_sha = (
+        before.get("executed_question_ids_sha256"),
+        after.get("executed_question_ids_sha256"),
+    )
+    # 같은 파일(question_set_sha256 일치)에서 --question-ids로 서로 다른
+    # 부분집합을 같은 개수만큼 고르면 파일 해시·질문 수가 둘 다 같아져 위
+    # 두 체크를 통과한다 - 실제로 실행한 question_id 집합의 해시로 그 경우를
+    # 따로 잡는다. 옛 summary.json(이 필드가 없는)과의 비교는 건너뛴다.
+    if before_ids_sha and after_ids_sha and before_ids_sha != after_ids_sha:
+        mismatch += (
+            "> [!WARNING]\n"
+            "> 같은 질문 파일에서 서로 다른 질문 부분집합을 비교하고 있습니다"
+            "(question_set_sha256과 질문 수는 같지만 실행된 question_id 집합이 다릅니다) - "
+            "`--question-ids`를 맞췄는지 확인하세요. 이 리포트의 점수 차이에는 질문 구성의"
+            " 차이가 섞여 있을 수 있습니다.\n\n"
+        )
     invalid_sides = [
         name
         for name, summary in (("Before", before), ("After", after))

@@ -26,6 +26,7 @@ llm_client(선택, 2026-09-16 추가)가 있으면 최종 후보에 관련성 �
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import replace
 from datetime import date
@@ -290,10 +291,27 @@ _RELEVANCE_SNIPPET_CHARS = 800
 # 재보정 없이는 이 값이 조용히 안전 구간을 벗어날 수 있다.
 # CONFIDENT_DISTANCE_THRESHOLD 환경변수로 재보정값을 바로 반영할 수 있게
 # 해서, 코드 배포 없이도 measure_retrieval_distance.py 재실행 결과를
-# 적용할 수 있게 한다.
-_CONFIDENT_DISTANCE_THRESHOLD = float(
-    os.environ.get("CONFIDENT_DISTANCE_THRESHOLD") or 0.118
-)
+# 적용할 수 있게 한다. 이 값을 여기서 바로(모듈 import 시점에) 읽지 않는다 -
+# service.py는 이 모듈을 담은 .graph 패키지를 load_dotenv()보다 먼저
+# import하므로, 여기서 즉시 읽으면 process 시작 전 OS 환경변수에만 반응하고
+# .env 파일 값은 절대 반영되지 않는다(2026-09-19, 재현 확인: .env의
+# CONFIDENT_DISTANCE_THRESHOLD=0.731이 무시되고 0.118로 고정됨). 다른
+# os.environ.get 설정들(EMBEDDING_PROVIDER 등, service.py 참고)처럼 실제
+# 쓰이는 시점에 읽어야 .env가 로드된 뒤의 값을 본다.
+_CONFIDENT_DISTANCE_THRESHOLD = 0.118
+
+
+def _confident_distance_threshold() -> float:
+    raw = (os.environ.get("CONFIDENT_DISTANCE_THRESHOLD") or "").strip()
+    if not raw:
+        return _CONFIDENT_DISTANCE_THRESHOLD
+    try:
+        value = float(raw)
+    except ValueError:
+        return _CONFIDENT_DISTANCE_THRESHOLD
+    if not math.isfinite(value) or not 0 <= value <= 2:
+        return _CONFIDENT_DISTANCE_THRESHOLD
+    return value
 _RELEVANCE_SYSTEM_PROMPT = (
     "당신은 사용자 질문과 검색된 복지정책 후보를 대조해 실제로 관련 있는 "
     "후보만 골라내는 필터입니다. 반드시 JSON 객체 하나만 답하세요."
@@ -385,7 +403,7 @@ def _filter_relevant_candidates(
     top1 = min(candidates, key=lambda c: c.score)
     confirmed: list[RetrievedChunk] = []
     to_judge = candidates
-    if top1.score <= _CONFIDENT_DISTANCE_THRESHOLD:
+    if top1.score <= _confident_distance_threshold():
         confirmed = [top1]
         to_judge = [c for c in candidates if c is not top1]
         if not to_judge:

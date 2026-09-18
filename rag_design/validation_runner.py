@@ -405,10 +405,19 @@ def write_report(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_hash = hashlib.sha256(question_path.read_bytes()).hexdigest()
+    # question_set_sha256은 파일 전체의 해시라, --question-ids/--max-questions로
+    # 같은 파일에서 서로 다른 부분집합을 같은 개수만큼 고르면 파일 해시와
+    # question_count가 둘 다 같아진다 - compare_evaluation_runs.py가 이 둘만
+    # 보고 있어 부분집합이 바뀐 걸 못 잡는다(재현 확인). 실제로 실행한
+    # question_id 집합 자체의 해시를 따로 남겨 그 경우도 잡을 수 있게 한다.
+    executed_ids_sha256 = hashlib.sha256(
+        "\n".join(sorted(str(row["question_id"]) for row in records)).encode("utf-8")
+    ).hexdigest()
     metadata = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "question_set": str(question_path),
         "question_set_sha256": dataset_hash,
+        "executed_question_ids_sha256": executed_ids_sha256,
         "top_k": top_k,
         "workers": workers,
         "max_turns": max_turns,

@@ -646,7 +646,8 @@ def main() -> int:
     llm_client = build_llm_client()
     model_name = args.model_name or getattr(llm_client, "model", None) or "no-llm"
     model_slug = _sanitize_for_filename(model_name)
-    date_str = datetime.now().strftime("%Y%m%d")
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    date_str = run_id[:8]
 
     quality_summary = None
     quality_records: list = []
@@ -688,11 +689,11 @@ def main() -> int:
         )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    report_name = f"report_{model_slug}_{date_str}.md"
-    metrics_svg_name = f"metrics_{model_slug}_{date_str}.svg"
-    quality_svg_name = f"answer_quality_{model_slug}_{date_str}.svg"
-    summary_name = f"summary_{model_slug}_{date_str}.json"
-    results_name = f"results_{model_slug}_{date_str}.jsonl"
+    report_name = f"report_{model_slug}_{run_id}.md"
+    metrics_svg_name = f"metrics_{model_slug}_{run_id}.svg"
+    quality_svg_name = f"answer_quality_{model_slug}_{run_id}.svg"
+    summary_name = f"summary_{model_slug}_{run_id}.json"
+    results_name = f"results_{model_slug}_{run_id}.jsonl"
 
     base_report = (pipeline_dir / "report.md").read_text(encoding="utf-8")
     base_metrics_svg = (pipeline_dir / "metrics.svg").read_text(encoding="utf-8")
@@ -735,6 +736,7 @@ def main() -> int:
     summary_payload = dict(json.loads((pipeline_dir / "summary.json").read_text(encoding="utf-8")))
     summary_payload["model_name"] = model_name
     summary_payload["run_date"] = date_str
+    summary_payload["run_id"] = run_id
     summary_payload["llm_status"] = llm_summary
     if quality_summary is not None:
         summary_payload["answer_quality"] = quality_summary

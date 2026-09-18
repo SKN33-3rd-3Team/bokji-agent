@@ -46,8 +46,42 @@ def _fmt(value, digits: int = 3) -> str:
 
 
 def pool(summaries: list[dict]) -> dict:
-    invalid = [s for s in summaries if not s.get("quality_metrics_valid")]
-    summaries = [s for s in summaries if s.get("quality_metrics_valid")]
+    all_summaries = summaries
+    invalid = [s for s in all_summaries if not s.get("quality_metrics_valid")]
+    summaries = [s for s in all_summaries if s.get("quality_metrics_valid")]
+
+    # 운영 통계(LLM 호출·실패, 오류율/성공률)는 quality_metrics_valid와 무관하게
+    # 시도된 전체(all_summaries)로 계산한다. quality_metrics_valid는 "이 run의
+    # 회수(Recall 등) 지표가 완주한 표본만큼 신뢰할 수 있는가"를 보는 값이지,
+    # "이 run에서 오류·LLM 실패가 있었는가"와는 다른 질문이다 - invalid한
+    # run을 통째로 빼고 성공률을 내면, 정작 오류가 많아서 invalid해진 run이
+    # 통계에서 사라져 남은 run들만의 성공률(예: 100문항 중 50문항이 실패한
+    # run이 빠지면 나머지 run만으로 성공률 100%)이 "전체 운영 성공률"처럼
+    # 보고된다.
+    op_calls = sum(
+        s["llm_status"]["calls"] or 0
+        for s in all_summaries
+        if s.get("llm_status", {}).get("calls") is not None
+    )
+    op_failures = sum(
+        s["llm_status"]["failures"] or 0
+        for s in all_summaries
+        if s.get("llm_status", {}).get("failures") is not None
+    )
+    # llm_status와 같은 이유로 방어적으로 읽는다: all_summaries는 이제
+    # quality_metrics_valid=False나 옛 포맷(operations/question_count가 없는)
+    # 파일도 포함하므로, 이 필드들을 무조건 인덱싱하면 그런 입력에서
+    # KeyError로 죽는다 - 예전에는 quality_metrics_valid=True인 파일만
+    # 여기 도달해서 문제가 안 됐다.
+    op_samples = sum((s.get("operations") or {}).get("sample_count") or 0 for s in all_summaries)
+    op_err_weighted = sum(
+        ((s.get("operations") or {}).get("error_rate") or 0)
+        * ((s.get("operations") or {}).get("sample_count") or 0)
+        for s in all_summaries
+    )
+    op_error_rate = op_err_weighted / op_samples if op_samples else 0.0
+    op_total_questions = sum(s.get("question_count") or 0 for s in all_summaries)
+
     if not summaries:
         return {
             "total_questions": 0,
@@ -55,6 +89,11 @@ def pool(summaries: list[dict]) -> dict:
             "sets_excluded_invalid": len(invalid),
             "sets_with_quality": 0,
             "quality_metrics_valid": False,
+            "op_total_questions": op_total_questions,
+            "op_sets_attempted": len(all_summaries),
+            "llm_calls": op_calls,
+            "llm_failures": op_failures,
+            "success_rate": 1 - op_error_rate,
         }
 
     total_n = sum(s["question_count"] for s in summaries)
@@ -84,17 +123,6 @@ def pool(summaries: list[dict]) -> dict:
     abstention_precision = tp / pp if pp else 0.0
     abstention_recall = tp / ap if ap else 0.0
 
-    calls = sum(s["llm_status"]["calls"] or 0 for s in summaries if s["llm_status"].get("calls") is not None)
-    failures = sum(
-        s["llm_status"]["failures"] or 0 for s in summaries if s["llm_status"].get("failures") is not None
-    )
-
-    samples = sum(s["operations"]["sample_count"] for s in summaries)
-    err_weighted = sum(
-        s["operations"]["error_rate"] * s["operations"]["sample_count"] for s in summaries
-    )
-    error_rate = err_weighted / samples if samples else 0.0
-
     quality_sets = [s for s in summaries if s.get("answer_quality")]
     faith = None
     relevancy = None
@@ -121,6 +149,8 @@ def pool(summaries: list[dict]) -> dict:
         "sets_excluded_invalid": len(invalid),
         "sets_with_quality": len(quality_sets),
         "quality_metrics_valid": True,
+        "op_total_questions": op_total_questions,
+        "op_sets_attempted": len(all_summaries),
         "recall_at_k": recall,
         "mrr_at_k": mrr,
         "citation_precision": precision,
@@ -136,9 +166,9 @@ def pool(summaries: list[dict]) -> dict:
         "faithfulness_judged": faith_judged,
         "relevancy": relevancy,
         "relevancy_judged": relevancy_judged,
-        "llm_calls": calls,
-        "llm_failures": failures,
-        "success_rate": 1 - error_rate,
+        "llm_calls": op_calls,
+        "llm_failures": op_failures,
+        "success_rate": 1 - op_error_rate,
     }
 
 
@@ -147,7 +177,9 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
     lines = [
         f"# {label}",
         "",
-        f"- 합산 대상: {p['sets_included']}개 세트, 총 {p['total_questions']}문항",
+        f"- 합산 대상(Recall 등 품질 지표): {p['sets_included']}개 세트, 총 {p['total_questions']}문항",
+        f"- 운영 통계(LLM 호출·Success Rate) 기준: 시도 전체 {p['op_sets_attempted']}개 세트, "
+        f"총 {p['op_total_questions']}문항 - quality_metrics_valid=False로 제외된 세트도 포함합니다.",
         "- 계산 방식: 단순 평균이 아니라 분자·분모를 합쳐서 다시 나누는 count 가중 결합",
         "",
         "| 세트 | 문항 수 | 경로 | 상태 |",
@@ -167,13 +199,27 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
             " 기준으로) 게시 불가인 표본입니다. 신뢰할 수 없는 부분 점수를 정상 run과 섞지"
             " 않기 위해 아예 뺐습니다."
         )
+    # 운영 통계(LLM 호출 실패율·Success Rate)는 quality_metrics_valid 여부와
+    # 무관하게 시도된 전체(op_sets_attempted개 세트, op_total_questions문항)
+    # 기준이다 - Recall 등 나머지 지표와 분모가 다르므로 표 밑에 분모를 함께
+    # 적어 헷갈리지 않게 한다.
+    op_lines = [
+        f"| LLM 호출 실패율 | {_fmt(p['llm_failures']/p['llm_calls']*100 if p['llm_calls'] else None, 2)}% | {p['llm_failures']}/{p['llm_calls']} (시도 전체 {p['op_sets_attempted']}세트 {p['op_total_questions']}문항 기준) |",
+        f"| Success Rate | {_fmt(p['success_rate'])} | 시도 전체 {p['op_sets_attempted']}세트 {p['op_total_questions']}문항 기준 |",
+    ]
     if not p.get("quality_metrics_valid", True):
         lines.append("")
-        lines.append(
-            "## 합산 결과\n\n"
-            "합산 가능한(quality_metrics_valid=True) 세트가 하나도 없어 지표를 게시할 수"
-            " 없습니다."
-        )
+        lines += [
+            "## 합산 결과",
+            "",
+            "합산 가능한(quality_metrics_valid=True) 세트가 하나도 없어 Recall 등 품질 지표는"
+            " 게시할 수 없습니다. 운영 통계(LLM 호출·오류)는 시도된 세트 전체를 기준으로 계속"
+            " 표시합니다 - 이건 quality_metrics_valid의 영향을 받지 않는 별도 집계입니다.",
+            "",
+            "| 지표 | 값 | 근거(분자/분모) |",
+            "| --- | ---: | --- |",
+            *op_lines,
+        ]
         return "\n".join(lines)
     lines += [
         "",
@@ -189,8 +235,7 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
         f"| Abstention Recall | {_fmt(p['abstention_recall'])} | tp={p['abstention_tp']} / ap={p['abstention_ap']} |",
         f"| Faithfulness | {_fmt(p['faithfulness']) if p['faithfulness'] is not None else 'N/A'} | 판정 {p['faithfulness_judged']}건 ({p['sets_with_quality']}/{p['sets_included']}개 세트에 답변 품질 데이터 있음) |",
         f"| Answer Relevancy | {_fmt(p['relevancy']) if p['relevancy'] is not None else 'N/A'} | 판정 {p['relevancy_judged']}건 |",
-        f"| LLM 호출 실패율 | {_fmt(p['llm_failures']/p['llm_calls']*100 if p['llm_calls'] else None, 2)}% | {p['llm_failures']}/{p['llm_calls']} |",
-        f"| Success Rate | {_fmt(p['success_rate'])} | - |",
+        *op_lines,
         "",
     ]
     if p["sets_with_quality"] < p["sets_included"]:
