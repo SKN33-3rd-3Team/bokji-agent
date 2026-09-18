@@ -45,12 +45,24 @@ Two different "N questions" knobs, easy to mix up:
 
 They compose: ``--max-questions 5`` alone already implies at most 5 questions
 reach the judge stage too.
+
+A third knob, ``--question-ids``, picks questions by id or id prefix regardless
+of their position in the file — ``--question-ids dev-form-`` runs only the
+form-variation set appended in 2026-09-15, which ``--max-questions`` (which
+counts from the top) can never reach.
+
+Concurrency: the runner sizes ``LLM_PREFETCH_WORKERS`` from
+``--provider-concurrency`` (default 10) so that ``--workers x (1 + prefetch)``
+stays inside what the provider allows. Exceeding it produces 429s, and a 429'd
+call silently falls back to the rule-based path — the run gets slower *and* the
+quality numbers drop.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import threading
@@ -452,6 +464,22 @@ def main() -> int:
         "필요하므로, 1로 두면 대형 질문 세트에서 매우 오래 걸립니다.",
     )
     parser.add_argument(
+        "--question-ids",
+        type=str,
+        default=None,
+        help="쉼표로 구분한 question_id 또는 그 접두사만 실행합니다. "
+        "--max-questions가 '파일 앞에서부터'인 것과 달리 위치와 무관하게 고릅니다 "
+        "(예: --question-ids dev-form- 은 나중에 덧붙인 형식 다양화 50건만).",
+    )
+    parser.add_argument(
+        "--provider-concurrency",
+        type=int,
+        default=10,
+        help="LLM provider가 허용하는 동시 요청 수(기본 10 - featherless-ai 사용자당 한도). "
+        "이 예산에 맞춰 LLM_PREFETCH_WORKERS를 자동으로 정합니다. 0을 주면 자동 조정을 "
+        "끄고 환경변수를 그대로 씁니다.",
+    )
+    parser.add_argument(
         "--model-name",
         type=str,
         default=None,
@@ -471,6 +499,33 @@ def main() -> int:
         parser.error("--judge-max-questions must be at least 1")
     if not 1 <= args.judge_workers <= 32:
         parser.error("--judge-workers must be between 1 and 32")
+    if args.provider_concurrency < 0:
+        parser.error("--provider-concurrency must be 0 or more")
+
+    # 동시 요청 예산 배분.
+    #
+    # 한 질문 worker는 자기 LLM 호출 1개 + claim_extractor의 prefetch
+    # (LLM_PREFETCH_WORKERS개)를 동시에 띄울 수 있다. 그래서 실제 최대 동시
+    # 요청 수는 workers * (1 + prefetch)다. 이게 provider 한도를 넘으면 429가
+    # 나고, 429가 난 호출은 조용히 규칙 기반으로 폴백한다 - 느려지는 데 그치지
+    # 않고 품질 지표가 함께 내려간다(2026-09-15 실측: .env의 PREFETCH=5와
+    # --workers 4 조합은 최대 24 동시 요청으로 한도 10의 두 배를 넘겼다).
+    #
+    # 예산을 다 쓰되 넘지는 않도록 prefetch를 여기서 정한다. 질문 수준 병렬이
+    # 예산을 이미 다 먹으면 prefetch는 1(= prefetch 없음)로 내려간다.
+    if args.provider_concurrency:
+        prefetch = max(1, args.provider_concurrency // max(1, args.workers) - 1)
+        os.environ["LLM_PREFETCH_WORKERS"] = str(prefetch)
+        peak = args.workers * (1 + prefetch)
+        note = "" if peak <= args.provider_concurrency else (
+            f" - 경고: --workers {args.workers}만으로 예산을 넘습니다. "
+            f"--workers를 {max(1, args.provider_concurrency // 2)} 이하로 낮추세요."
+        )
+        print(
+            f"동시 요청 예산 {args.provider_concurrency}: --workers {args.workers} x "
+            f"(1 + prefetch {prefetch}) = 최대 {peak}건 동시{note}",
+            flush=True,
+        )
 
     try:
         from src.rag_chatbot.service import answer_followup, ask, build_llm_client, get_graph
@@ -482,6 +537,27 @@ def main() -> int:
         )
 
     questions = load_questions(args.questions)
+    if args.question_ids:
+        wanted = [part.strip() for part in args.question_ids.split(",") if part.strip()]
+        if not wanted:
+            parser.error("--question-ids must contain at least one id or prefix")
+        selected = [
+            item
+            for item in questions
+            if any(item["question_id"].startswith(prefix) for prefix in wanted)
+        ]
+        if not selected:
+            parser.error(
+                f"--question-ids {args.question_ids}: 해당하는 질문이 없습니다 "
+                f"({args.questions} {len(questions)}건 중 0건)"
+            )
+        print(
+            f"--question-ids {args.question_ids}: {len(questions)}건 중 {len(selected)}건만 "
+            "실행합니다(파이프라인 지표도 이 부분집합 기준입니다 - 다른 실행과 비교할 땐 "
+            "같은 필터로 맞추세요).",
+            flush=True,
+        )
+        questions = selected
     if args.max_questions is not None and args.max_questions < len(questions):
         print(
             f"--max-questions {args.max_questions}: {len(questions)}건 중 앞 "
