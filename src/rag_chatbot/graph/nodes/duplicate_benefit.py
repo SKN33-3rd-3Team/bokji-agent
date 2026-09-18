@@ -10,14 +10,14 @@ N9/N10과 동일하게, 판정 전 그 정책 문서를 vectorDB에서 한 번 �
 - 정책 metadata에 상호배타 관계(mutually_exclusive_with)를 직접 표현하는
   필드는 아직 없다 (xlsx 결정사항 시트: "미정, Gate1 계약 확장 필요"). 그
   전까지는 재검색한 chunk의 metadata에 그 필드가 실제로 존재하고, 사용자가
-  이미 충족 판정을 받은 다른 정책과 겹칠 때만 "불가"로 판정한다.
+  이미 충족 판정을 받은 다른 정책과 겹치면 "조건부"로 판정한다.
 - 명시적 조항(metadata)이 없으면 기본값은 "미확인"이다 - "가능"을 임의로
   단정하지 않는다 (원래 stub 설계 결정 유지).
 - status 값: "가능" / "불가" / "조건부" / "미확인".
 
 판정 경로는 두 가지다 (2026-08-31 확장).
 
-1. **metadata 경로 -> "불가"**: chunk metadata의 ``mutually_exclusive_with``에
+1. **metadata 경로 -> "조건부"**: chunk metadata의 ``mutually_exclusive_with``에
    이미 충족 판정을 받은 다른 정책 id가 실제로 들어 있을 때만. 가장 강한 근거
    이지만, 정부24 원천 데이터에 이 필드가 없어서 현실에서는 거의 안 걸린다.
 2. **원문 조항 경로 -> "조건부"**: 재검색한 chunk 본문에 중복수급 제한
@@ -29,11 +29,10 @@ N9/N10과 동일하게, 판정 전 그 정책 문서를 vectorDB에서 한 번 �
 아이돌봄서비스 등과 중복지원 불가". metadata 필드가 없다는 이유로 이걸 전부
 버리고 "판정 불가"만 돌려주는 건 있는 근거를 안 쓰는 것이었다.
 
-**"조건부"까지만 하고 "불가"로 올리지 않는 이유**: 조항 문장은 대부분
-특정 제도명을 명시하지 않거나("중복수급에 해당되는 경우"), 명시해도 그
-제도의 policy_id를 알 수 없다. 그래서 "이 사용자의 다른 정책과 실제로
-충돌하는가"는 판정할 수 없다. 할 수 있는 말은 "이 제도에는 중복 제한
-조항이 있으니 확인이 필요하다"까지이고, 그 이상은 추측이다.
+**"조건부"까지만 하고 "불가"로 올리지 않는 이유**: 추천 목록의 다른 정책과
+상호배타 관계가 확인돼도 사용자가 실제로 수급 중이라는 뜻은 아니다.
+원문이 상대 제도를 특정하지 못하는 경우도 있으므로, 제한 근거를 보존하고
+실제 수급 여부와 적용 조건을 확인하도록 안내한다.
 
 조항이 **없을 때도 "가능"이라고 하지 않는다.** 조항이 안 적혀 있는 것과
 중복이 허용되는 것은 다르다(원천 데이터의 99%에는 애초에 언급이 없다).
@@ -281,12 +280,15 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
             verdicts.append(
                 {
                     "policy_id": policy_id,
-                    "status": "불가",
+                    "status": "조건부",
                     "conflicts_with": sorted(conflicts),
                     "clause_kind": CLAUSE_KIND_OTHER,
                     "restriction_clauses": [],
                     "household_clauses": [],
-                    "condition_note": "재검색한 문서의 상호배타 metadata에 명시된 정책과 충돌",
+                    "condition_note": (
+                        "재검색한 문서의 상호배타 metadata에 명시된 정책이 함께 추천되었습니다. "
+                        "실제 수급 여부와 중복 제한 적용 조건을 신청 기관에 확인하세요."
+                    ),
                 }
             )
             continue
@@ -309,13 +311,14 @@ def check_duplicate_benefit(state: GraphState, store: ChromaVectorStore) -> dict
             verdicts.append(
                 {
                     "policy_id": policy_id,
-                    "status": "불가",
+                    "status": "조건부",
                     "conflicts_with": sorted(named),
                     "clause_kind": CLAUSE_KIND_OTHER,
                     "restriction_clauses": sorted(set(named.values())),
                     "household_clauses": household_clauses,
                     "condition_note": (
-                        f"{names}와(과) 중복수급이 불가합니다 - 원문: "
+                        f"{names}와(과) 중복수급 제한 조항이 있습니다. "
+                        "실제 수급 여부와 적용 조건을 신청 기관에 확인하세요 - 원문: "
                         + " / ".join(sorted(set(named.values())))
                     ),
                 }

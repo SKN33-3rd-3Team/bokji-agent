@@ -171,9 +171,20 @@ def test_conflict_names_the_other_policy_in_the_same_answer() -> None:
     result = check_duplicate_benefit(_state(full, ["p-a", "p-b"]), _ExplodingStore())
 
     by_policy = {v["policy_id"]: v for v in result["duplicate_verdicts"]}
-    assert by_policy["p-a"]["status"] == "불가"
+    assert by_policy["p-a"]["status"] == "조건부"
     assert by_policy["p-a"]["conflicts_with"] == ["p-b"]
     assert "영유아보육료 지원" in by_policy["p-a"]["condition_note"]
+    assert "실제 수급 여부" in by_policy["p-a"]["condition_note"]
+    assert by_policy["p-a"]["restriction_clauses"] == [
+        "중복불가서비스 : 영유아보육료 지원"
+    ]
+    from src.rag_chatbot.graph.nodes.answer_generation import generate_answer
+
+    answer = generate_answer({
+        "assembled_result": {"policies": {"p-a": {"duplicate": by_policy["p-a"]}}}
+    })["draft_answer"]
+    assert "중복수급: 조건부" in answer
+    assert "중복수급: 불가" not in answer
     # 상대 쪽 문서에는 조항이 없으므로 단정하지 않는다.
     assert by_policy["p-b"]["status"] == "미확인"
 
