@@ -24,6 +24,12 @@ Recall/Citation Precision/Abstention/Faithfulness를 보고 싶을 때 쓴다.
 경우) Faithfulness/Relevancy는 그 파일을 계산에서 빼고 "일부 세트만
 반영"이라고 표시한다 - 없는 값을 0으로 넣지 않는다.
 
+`quality_metrics_valid`가 False인 요약(문항 중 하나라도 실행이 실패해
+validation_runner 자신도 "비교 가능한 Baseline으로 게시할 수 없다"고
+표시한 run)은 합산에서 제외한다. 그 run의 headline 지표는 애초에
+신뢰할 수 없는 부분 표본인데, 여기서 그대로 합치면 정상 run의 숫자와
+섞여 "게시 불가"였던 값이 게시 가능한 것처럼 둔갑한다.
+
 실행:
     python scripts/pool_evaluation_runs.py a.json b.json c.json --output pooled.md
 """
@@ -40,6 +46,17 @@ def _fmt(value, digits: int = 3) -> str:
 
 
 def pool(summaries: list[dict]) -> dict:
+    invalid = [s for s in summaries if not s.get("quality_metrics_valid")]
+    summaries = [s for s in summaries if s.get("quality_metrics_valid")]
+    if not summaries:
+        return {
+            "total_questions": 0,
+            "sets_included": 0,
+            "sets_excluded_invalid": len(invalid),
+            "sets_with_quality": 0,
+            "quality_metrics_valid": False,
+        }
+
     total_n = sum(s["question_count"] for s in summaries)
 
     r_n = sum(s["retrieval"]["evaluated_queries"] for s in summaries)
@@ -101,7 +118,9 @@ def pool(summaries: list[dict]) -> dict:
     return {
         "total_questions": total_n,
         "sets_included": len(summaries),
+        "sets_excluded_invalid": len(invalid),
         "sets_with_quality": len(quality_sets),
+        "quality_metrics_valid": True,
         "recall_at_k": recall,
         "mrr_at_k": mrr,
         "citation_precision": precision,
@@ -131,11 +150,31 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
         f"- 합산 대상: {p['sets_included']}개 세트, 총 {p['total_questions']}문항",
         "- 계산 방식: 단순 평균이 아니라 분자·분모를 합쳐서 다시 나누는 count 가중 결합",
         "",
-        "| 세트 | 문항 수 | 경로 |",
-        "| --- | ---: | --- |",
+        "| 세트 | 문항 수 | 경로 | 상태 |",
+        "| --- | ---: | --- | --- |",
     ]
     for s, p_path in zip(summaries, paths):
-        lines.append(f"| {s.get('model_name', '?')} / {s['question_set']} | {s['question_count']} | `{p_path}` |")
+        status = "포함" if s.get("quality_metrics_valid") else "제외(quality_metrics_valid=False)"
+        lines.append(
+            f"| {s.get('model_name', '?')} / {s['question_set']} | {s['question_count']} | `{p_path}` | {status} |"
+        )
+    if p["sets_excluded_invalid"]:
+        lines.append("")
+        lines.append(
+            "> [!WARNING]\n"
+            f"> {p['sets_excluded_invalid']}개 세트가 quality_metrics_valid=False라 합산에서"
+            " 제외됐습니다 - 문항 중 하나라도 실행이 실패해 그 run 자체가 (validation_runner"
+            " 기준으로) 게시 불가인 표본입니다. 신뢰할 수 없는 부분 점수를 정상 run과 섞지"
+            " 않기 위해 아예 뺐습니다."
+        )
+    if not p.get("quality_metrics_valid", True):
+        lines.append("")
+        lines.append(
+            "## 합산 결과\n\n"
+            "합산 가능한(quality_metrics_valid=True) 세트가 하나도 없어 지표를 게시할 수"
+            " 없습니다."
+        )
+        return "\n".join(lines)
     lines += [
         "",
         "## 합산 결과",

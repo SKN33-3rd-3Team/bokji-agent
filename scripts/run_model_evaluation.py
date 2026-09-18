@@ -97,7 +97,19 @@ def _sanitize_for_filename(name: str) -> str:
 
 def _policy_evidence_text(policy: Mapping) -> str:
     """Compact grounding text for one cited PolicyView - title + detail fields
-    a faithfulness judge can check claims against."""
+    a faithfulness judge can check claims against.
+
+    ``amount_label`` is deliberately left out: it is not source text, it is a
+    value ``service._format_amount_label`` *computed* from the pipeline's own
+    benefit_calculator output, and that same computed value is what ends up
+    in ``final_answer``. Feeding it back in as "evidence" would let a wrong
+    calculation confirm itself (the judge just compares the answer's number
+    to this text, and they are the same number by construction) - it is not
+    independent grounding. ``support_details``(지원내용) below is real
+    document text and often already states the amount as written in the
+    source, so amount claims are still checkable when the source actually
+    documents them.
+    """
 
     detail = policy.get("detail") or {}
     parts = [f"정책명: {policy.get('title') or policy.get('policy_id')}"]
@@ -111,9 +123,6 @@ def _policy_evidence_text(policy: Mapping) -> str:
         value = detail.get(key)
         if value:
             parts.append(f"{label}: {value}")
-    amount_label = policy.get("amount_label")
-    if amount_label:
-        parts.append(f"지원금액: {amount_label}")
     return "\n".join(parts)
 
 

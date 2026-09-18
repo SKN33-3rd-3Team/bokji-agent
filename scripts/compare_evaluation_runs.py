@@ -73,6 +73,19 @@ def build_report(before: dict, after: dict, *, before_label: str, after_label: s
             f"after={after.get('question_count')}) - `--max-questions`/`--question-ids`를 "
             "맞췄는지 확인하세요.\n\n"
         )
+    invalid_sides = [
+        name
+        for name, summary in (("Before", before), ("After", after))
+        if not summary.get("quality_metrics_valid")
+    ]
+    if invalid_sides:
+        mismatch += (
+            "> [!WARNING]\n"
+            f"> {', '.join(invalid_sides)} 실행이 quality_metrics_valid=False입니다 - 문항 중"
+            " 하나라도 실행이 실패해 validation_runner 자신도 이 run의 headline 지표를 게시"
+            " 불가로 표시한 상태입니다. 아래 숫자·Delta는 그 신뢰할 수 없는 부분 표본을"
+            " 그대로 포함한 값이니 정상 실행과 비교한 것처럼 취급하지 마세요.\n\n"
+        )
 
     r_before, r_after = before.get("retrieval", {}), after.get("retrieval", {})
     c_before, c_after = before.get("citation", {}), after.get("citation", {})

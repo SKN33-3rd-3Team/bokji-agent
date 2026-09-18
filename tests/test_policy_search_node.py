@@ -598,6 +598,26 @@ class ConfigurableTopKTests(unittest.TestCase):
         result = search_policies(self._state(), store)
         self.assertEqual(len(result["subsidy_chunks"]), 1)
 
+    def test_relevance_gate_prompt_does_not_leak_pii(self) -> None:
+        """관련성 게이트로 가는 질문도 검색 질의(_build_query)와 동일하게
+        PII가 지워져야 한다 - 그러지 않으면 원문의 이메일·전화번호가 그대로
+        LLM 판정 prompt에 실려 provider로 나간다."""
+
+        store = self._Store((self._candidate("service-1", 20),))
+        state = self._state()
+        state["initial_user_input"] = (
+            "제 이메일은 test@example.com이고 전화번호는 010-1234-5678입니다. "
+            "정부가 매달 300만원 준다는 정책 알려줘"
+        )
+        llm = FakeLLMClient('{"relevant_policy_ids": ["service-1"]}')
+
+        search_policies(state, store, llm_client=llm)
+
+        self.assertGreater(len(llm.calls), 0)
+        for call in llm.calls:
+            self.assertNotIn("test@example.com", call["prompt"])
+            self.assertNotIn("010-1234-5678", call["prompt"])
+
     def test_self_international_age_is_connected_to_search_filter(self) -> None:
         store = self._Store()
         state = self._state()

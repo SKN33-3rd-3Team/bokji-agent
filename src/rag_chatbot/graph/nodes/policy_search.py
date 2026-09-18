@@ -478,9 +478,13 @@ def search_policies(
         results, support_conditions, filter_plan, user_types=user_types
     )
     selected = _select_top_policies(filtered, resolved_top_k)
-    selected = _filter_relevant_candidates(
-        llm_client, state.get("initial_user_input"), selected
-    )
+    # _build_query의 검색 질의는 redact_sensitive_text를 거치지만, 관련성
+    # 게이트로 가는 질문은 그 정제를 타지 않았다 - 이메일·전화번호·주민번호가
+    # 섞인 원문이 그대로 LLM 판정 prompt에 실려 provider로 나갈 수 있었다.
+    # 검색 로그·임베딩 provider로 PII가 나가면 안 된다는 원칙(_build_query
+    # 주석 참고)은 이 경로에도 똑같이 적용돼야 한다.
+    redacted_question = redact_sensitive_text(state.get("initial_user_input") or "")
+    selected = _filter_relevant_candidates(llm_client, redacted_question, selected)
     return {
         "subsidy_chunks": selected,
         "subsidy_legal_basis_chunks": _load_legal_basis_chunks(store, selected),
