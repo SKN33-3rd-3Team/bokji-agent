@@ -1,0 +1,55 @@
+{
+  "prepared_at": "2026-09-15T14:23:30.256085+00:00",
+  "as_of": "2026-09-15",
+  "note": "질문 이해(N1)와 답변 표현(N13)을 따로 비교합니다. 검색, 자격·금액·중복수급 판정, N14 검증을 실행하는 전체 파이프라인 평가는 아닙니다. N13 상태는 현재 자료에 맞춰 평가 전 고정한 안내용 상태이며 실제 검색결과나 시스템 판정이 아닙니다. N1 출력은 N13에 연결하지 않습니다. 팀 예상 라벨은 입력 자료가 달라 정답으로 쓰지 않습니다. N3 되묻기는 규칙 문구여서 모델별 문체 점수에서 제외합니다. 원래 질문을 N13 프롬프트에 덧붙이지 않으며 제품 프롬프트를 바꾸지 않습니다. N13 숫자 검사를 통과해도 모든 사실이 맞다는 뜻은 아니므로 원시 출력과 최종문을 함께 읽어 확인해야 합니다. 모델은 공통 runner의 실제 식별자를 따릅니다. rubric.json에 AI 검토용 슬롯·표현 각각의 1~5점 기준을 평가 전 고정합니다. 실제 사람 평가가 아닙니다. 질문 6의 가중치는 2, 나머지는 1이며 질문 2는 표현 평균에서 제외합니다. 미채점은 0점으로 계산하지 않습니다. 실행 전 32토큰 워밍업은 채점에서 제외하며, 단독 11435 서버에서 실행 전후 모델을 해제합니다.",
+  "models": {
+    "qwen": "qwen3.5:9b",
+    "ax": "hf.co/Ghiwook/A.X-4.0-Light-Q4_K_M-GGUF:Q4_K_M",
+    "bllossom": "hf.co/Bllossom/llama-3.2-Korean-Bllossom-3B-gguf-Q4_K_M:Q4_K_M"
+  },
+  "generation": {
+    "num_ctx": 8192,
+    "num_predict": 1024,
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "repeat_penalty": 1,
+    "presence_penalty": 0,
+    "frequency_penalty": 0,
+    "seed": 42,
+    "num_batch": 128
+  },
+  "disable_thinking": true,
+  "timeout_seconds": 600,
+  "python": "3.11.4",
+  "case_count": 8,
+  "allowed_policy_ids": [
+    "000000465790",
+    "105100000001",
+    "116010000001",
+    "119200000001",
+    "119200000076",
+    "119200000085",
+    "119200000118",
+    "119200000166"
+  ],
+  "git_commit": "f4661da0220fa538c9a38d38c7aa20bef9987cca",
+  "source_sha256": {
+    "experiments/model_evaluation/local_20260915/team_source.json": "002de74bc42ad19fa398a4f785507bf74c958d95637413fab6df452bf4ecea13",
+    "data/evaluation/light_followup_policies.json": "171f207dd4c29597c7a217c1f3d0fdbc38e0ae2f64a4346faa26a9413b8d1746",
+    "scripts/eval_team_ollama.py": "d2870c25a9827cff3b6044932c6f7206264db33651ed9dbcbcda2ad974c92de7",
+    "scripts/eval_local_ollama.py": "5f1d96625a0da9410cc171e4a77fbfc2ab87780f5731c45c2e09fc4baa2861f7",
+    "src/rag_chatbot/graph/llm_gateway.py": "c7a4ca1a8f701d004c294cff2fb5e9eabd373b7ffc47b8b0fa019ea7ec958355",
+    "src/rag_chatbot/graph/slot_schema.py": "9fbfd111abbfe0b65b1ef9a7c0d9b317c3dfd670238dc050cca077baa2d3edb0",
+    "src/rag_chatbot/graph/nodes/slot_parser.py": "43d03e0b126384cd0bfe8d0524b1f090e62697f6db653c8e6aa9e655bacee4ab",
+    "src/rag_chatbot/graph/nodes/slot_completeness_gate.py": "a54e4689272ae7fdb0a1c76adde0ceae437a667311aae258636f43b4823dc053",
+    "src/rag_chatbot/graph/nodes/answer_generation.py": "77cb72ad40990249898646f22cb1a123c2c6bfd12b8441b3d560f9a6349eb47f",
+    "src/rag_chatbot/llm/ollama.py": "82379aced48a96baf4cf525b40f51bcc4f2182837b9812c25c62aa5079a8154b"
+  },
+  "frozen_sha256": {
+    "cases.json": "50516e8bed8ee83c2bb7d3d2a2cf88d902dd3fc0f2f6e922977e7a9a537fcd95",
+    "source.json": "3fad76a4074910f30b2c3ceb3f5259598f2acfc1eee9d221a443cf396125ac91",
+    "rubric.json": "b2406c85ba79f68f6a563dc1415e6a8717bb4a26aaba9035bc32015ae25f066e",
+    "PREPARE_NOTE.md": "5ea52f6d4b6635b74a87c1eca6887868d1bd70fc3717a93bc02eba4f231a2dd3"
+  }
+}

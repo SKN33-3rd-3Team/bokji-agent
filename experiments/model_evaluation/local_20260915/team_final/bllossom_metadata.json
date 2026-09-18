@@ -1,0 +1,123 @@
+{
+  "model": "hf.co/Bllossom/llama-3.2-Korean-Bllossom-3B-gguf-Q4_K_M:Q4_K_M",
+  "base_url": "http://127.0.0.1:11435",
+  "digest": "cfa6bef7d8affc5519825fc138c1b64de35f957024ed69582e0efb94e0779455",
+  "options": {
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "repeat_penalty": 1,
+    "seed": 42,
+    "presence_penalty": 0,
+    "frequency_penalty": 0,
+    "num_batch": 128,
+    "num_ctx": 8192,
+    "num_predict": 1024
+  },
+  "disable_thinking": true,
+  "capabilities": [
+    "completion",
+    "tools"
+  ],
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "llama",
+    "families": [
+      "llama"
+    ],
+    "parameter_size": "3.21B",
+    "quantization_level": "Q4_K_M"
+  },
+  "model_info": {
+    "general.architecture": "llama",
+    "general.base_model.0.name": "Meta Llama 3.2 3B",
+    "general.base_model.0.organization": "Meta Llama",
+    "general.base_model.0.repo_url": "https://huggingface.co/meta-llama/Meta-Llama-3.2-3B",
+    "general.base_model.count": 1,
+    "general.basename": "llama-3.2-Korean-Bllossom",
+    "general.file_type": 15,
+    "general.languages": null,
+    "general.license": "llama3.2",
+    "general.parameter_count": 3212749888,
+    "general.quantization_version": 2,
+    "general.size_label": "3B",
+    "general.type": "model",
+    "llama.attention.head_count": 24,
+    "llama.attention.head_count_kv": 8,
+    "llama.attention.key_length": 128,
+    "llama.attention.layer_norm_rms_epsilon": 1e-05,
+    "llama.attention.value_length": 128,
+    "llama.block_count": 28,
+    "llama.context_length": 131072,
+    "llama.embedding_length": 3072,
+    "llama.feed_forward_length": 8192,
+    "llama.rope.dimension_count": 128,
+    "llama.rope.freq_base": 500000,
+    "llama.vocab_size": 128256,
+    "tokenizer.ggml.bos_token_id": 128000,
+    "tokenizer.ggml.eos_token_id": 128009,
+    "tokenizer.ggml.merges": null,
+    "tokenizer.ggml.model": "gpt2",
+    "tokenizer.ggml.pre": "llama-bpe",
+    "tokenizer.ggml.token_type": null,
+    "tokenizer.ggml.tokens": null
+  },
+  "ollama": {
+    "version": "0.34.0"
+  },
+  "python": "3.11.4",
+  "started_at": "2026-09-15T14:35:38.570341+00:00",
+  "manifest_sha256": "14ea3bcd0794d978f1464ea571ecf7d80017068fd0feda57aaa863a3eba2f5a1",
+  "cases_sha256": "50516e8bed8ee83c2bb7d3d2a2cf88d902dd3fc0f2f6e922977e7a9a537fcd95",
+  "running_models_before_unload": [],
+  "running_models_after_initial_unload": [],
+  "warmup": {
+    "scored": false,
+    "max_tokens": 32,
+    "calls": [
+      {
+        "prompt_sha256": "85ec91ecc45e77efd110dfdca576ff7aebd57e13feeee865f62ce6dead65e013",
+        "system_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "raw": "{\"ready\": true}",
+        "parsed": {
+          "ready": true
+        },
+        "strict_json": true,
+        "done": true,
+        "done_reason": "stop",
+        "total_duration": 4519996400,
+        "load_duration": 4427227600,
+        "prompt_eval_count": 23,
+        "prompt_eval_duration": 41776000,
+        "eval_count": 6,
+        "eval_duration": 48179000,
+        "thinking_present": false,
+        "prompt_eval_cached_count": 0,
+        "elapsed_s": 4.5656
+      }
+    ]
+  },
+  "running_models_after_warmup": [
+    {
+      "name": "hf.co/Bllossom/llama-3.2-Korean-Bllossom-3B-gguf-Q4_K_M:Q4_K_M",
+      "model": "hf.co/Bllossom/llama-3.2-Korean-Bllossom-3B-gguf-Q4_K_M:Q4_K_M",
+      "size": 3060111769,
+      "digest": "cfa6bef7d8affc5519825fc138c1b64de35f957024ed69582e0efb94e0779455",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "llama",
+        "families": [
+          "llama"
+        ],
+        "parameter_size": "3.21B",
+        "quantization_level": "unknown"
+      },
+      "expires_at": "2026-09-15T23:40:43.1648268+09:00",
+      "size_vram": 3060111769,
+      "context_length": 8192
+    }
+  ],
+  "running_models_after_final_unload": []
+}
