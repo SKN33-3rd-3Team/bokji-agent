@@ -164,6 +164,20 @@ def test_generate_answer_keeps_summary_that_reuses_the_source_law_name() -> None
     assert result["draft_answer"].startswith("국민기초생활 보장법에 근거한 지원 제도입니다")
 
 
+def test_generate_answer_keeps_summary_using_a_non_law_method_word() -> None:
+    """"계산법"/"산정법"처럼 "OO법" 형태지만 법령명이 아닌 흔한 단어까지
+    법령명으로 오인해 정상 summary를 버리면 안 된다."""
+
+    llm = FakeLLMClient(
+        response='{"policies": [{"policy_id": "policy-a", '
+        '"summary": "소득 산정법에 따라 계산됩니다"}]}'
+    )
+
+    result = generate_answer(_state(), llm_client=llm)
+
+    assert result["draft_answer"].startswith("소득 산정법에 따라 계산됩니다")
+
+
 def test_generate_answer_ignores_summary_for_unknown_policy_id() -> None:
     llm = FakeLLMClient(
         response='{"policies": [{"policy_id": "policy-does-not-exist", '
@@ -281,6 +295,28 @@ def test_generate_answer_cites_only_the_rule_chunk_for_amount() -> None:
     # amount claim이 지목한 policy-a-chunk-1은 금액 근거로 인용되지 않는다
     # (eligibility 근거로는 여전히 인용된다 - 그 줄의 실제 근거이므로).
     assert [c["chunk_id"] for c in amount_citations] == ["policy-a-chunk-amount"]
+
+
+def test_generate_answer_cites_amount_even_when_same_chunk_as_eligibility() -> None:
+    """자격과 금액이 같은 chunk에 함께 서술된 정책(예: "지원대상: 중위소득
+    50% 이하, 월 10만원 지급")에서는 그 chunk가 eligibility citation으로
+    먼저 추가되더라도 amount citation으로도 별도 라벨을 달고 나와야 한다.
+    chunk_id만으로 중복 제거하면 뒤에 추가되는 amount citation이 조용히
+    빠지고, 화면의 "지원금액" 줄에는 근거 citation이 하나도 안 달린다."""
+
+    state = _state()
+    state["assembled_result"]["policies"]["policy-a"]["benefit_amount"] = {
+        "policy_id": "policy-a",
+        "amount": 100000.0,
+        # eligibility claim의 evidence_chunk_ids와 동일한 chunk_id.
+        "rule_chunk_id": "policy-a-chunk-1",
+    }
+
+    result = generate_answer(state)
+
+    labels_by_chunk = {(c["chunk_id"], c["label"]) for c in result["citations"]}
+    assert ("policy-a-chunk-1", "지원자격 근거") in labels_by_chunk
+    assert ("policy-a-chunk-1", "지원금액 근거") in labels_by_chunk
 
 
 def test_generate_answer_omits_amount_citation_without_rule_chunk_id() -> None:

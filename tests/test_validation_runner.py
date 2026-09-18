@@ -463,7 +463,7 @@ def test_dev_questions_have_explicit_per_slot_fixtures():
         "employment_status",
     }
 
-    assert len(questions) == 100
+    assert len(questions) == 150
     assert all(set(question["slot_answers"]) == required_slots for question in questions)
     by_id = {question["question_id"]: question for question in questions}
     child = by_id["dev-child-education-001"]["slot_answers"]
@@ -479,6 +479,49 @@ def test_dev_questions_have_explicit_per_slot_fixtures():
     assert all(
         "household_size" not in question["slot_answers"] for question in questions
     )
+
+
+def test_quasi_holdout_questions_have_explicit_per_slot_fixtures():
+    """dev_questions.jsonl과 같은 완전성 보증을 준-Holdout 세트에도 건다.
+
+    run_questions는 slot_answers에 없는 슬롯을 조용히 "모름"으로 진행하므로
+    (실행 자체가 실수로 빠뜨린 프로필 슬롯을 막아주지 않는다), 새 fixture가
+    필수 슬롯 하나를 빠뜨려도 여기서 못 잡으면 headline 지표에 말없이
+    섞여 들어간다. dev_questions.jsonl 전용이던 이 검증을 다른 평가 세트에도
+    동일하게 적용해 정적으로 잡는다.
+    """
+
+    path = Path(__file__).resolve().parents[1] / "data/evaluation/quasi_holdout_questions.jsonl"
+    questions = load_questions(path)
+    required_slots = {
+        "region",
+        "birth_date",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status",
+    }
+
+    assert len(questions) == 100
+    assert all(set(question["slot_answers"]) == required_slots for question in questions)
+
+
+def test_policy_eval_questions_have_explicit_per_slot_fixtures():
+    """policy_eval_questions.jsonl에도 같은 완전성 보증을 건다(위 준-Holdout 테스트와 동일 이유)."""
+
+    path = Path(__file__).resolve().parents[1] / "data/evaluation/policy_eval_questions.jsonl"
+    questions = load_questions(path)
+    required_slots = {
+        "region",
+        "birth_date",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status",
+    }
+
+    assert len(questions) == 100
+    assert all(set(question["slot_answers"]) == required_slots for question in questions)
 
 
 def test_runner_rejects_invalid_worker_turn_and_nonce_values():

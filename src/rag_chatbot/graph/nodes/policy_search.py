@@ -26,6 +26,7 @@ llm_client(선택, 2026-09-16 추가)가 있으면 최종 후보에 관련성 �
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from datetime import date
 
@@ -283,7 +284,16 @@ _RELEVANCE_SNIPPET_CHARS = 800
 # 기존 LLM 판정(+재확인)을 거친다 - 1등을 잘못 거를 위험(Recall 손실의
 # 원인이었다)은 그대로 없애면서, 2등 이하의 무관한 후보가 공짜로
 # 통과하던 경로만 막는다.
-_CONFIDENT_DISTANCE_THRESHOLD = 0.118
+#
+# 이 값은 measure_retrieval_distance.py로 실측한 한 dev셋의 분포에서
+# 나왔다 - 임베딩 모델이나 코퍼스가 바뀌면 실제 분포도 따라 바뀌므로,
+# 재보정 없이는 이 값이 조용히 안전 구간을 벗어날 수 있다.
+# CONFIDENT_DISTANCE_THRESHOLD 환경변수로 재보정값을 바로 반영할 수 있게
+# 해서, 코드 배포 없이도 measure_retrieval_distance.py 재실행 결과를
+# 적용할 수 있게 한다.
+_CONFIDENT_DISTANCE_THRESHOLD = float(
+    os.environ.get("CONFIDENT_DISTANCE_THRESHOLD") or 0.118
+)
 _RELEVANCE_SYSTEM_PROMPT = (
     "당신은 사용자 질문과 검색된 복지정책 후보를 대조해 실제로 관련 있는 "
     "후보만 골라내는 필터입니다. 반드시 JSON 객체 하나만 답하세요."

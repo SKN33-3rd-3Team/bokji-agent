@@ -269,6 +269,22 @@ class StripProfileFromQueryTests(unittest.TestCase):
         )
         self.assertIn("부산", raw)
 
+    def test_gender_as_a_sole_question_topic_is_kept(self) -> None:
+        """자기소개 없이 성별 자체가 질문의 유일한 주제어면 지우면 안 된다."""
+
+        query = _build_query(
+            {"interests": []}, "여성 1인 가구 주거지원 정책 알려주세요"
+        )
+        self.assertIn("여성", query)
+
+    def test_income_bracket_as_a_sole_question_topic_is_kept(self) -> None:
+        """자기소개 없이 소득구간 자체가 질문의 유일한 주제어면 지우면 안 된다."""
+
+        query = _build_query(
+            {"interests": []}, "중위소득 60% 이하 가구가 받을 수 있는 지원이 뭔가요?"
+        )
+        self.assertIn("중위소득 60% 이하", query)
+
 
 class _SequencedLLMClient:
     """호출마다 순서대로 다른 응답을 돌려주는 가짜 클라이언트.

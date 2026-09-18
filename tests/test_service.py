@@ -644,6 +644,21 @@ def test_to_chat_response_needs_input_shape():
     assert "| 상태 | 추가 질문 | 부족한 정보 |" in response["output_markdown"]
 
 
+def test_to_chat_response_needs_input_combines_calc_slots_and_choices():
+    class _Interrupt:
+        def __init__(self, value):
+            self.value = value
+
+    result = {
+        "__interrupt__": (_Interrupt("추가 정보를 알려주세요"),),
+        "calc_missing_slots": ["household_size"],
+        "calc_missing_choices": [{"policy_id": "policy-a", "labels": ["정규직", "자영업"]}],
+    }
+    response = _to_chat_response(result, session_id="s1", store=FakeDetailStore({}))
+
+    assert response["missing_slots"] == ["household_size", "choice:policy-a"]
+
+
 def test_to_chat_response_answered_shape_with_no_policies():
     result = {
         "answer_status": "abstained",

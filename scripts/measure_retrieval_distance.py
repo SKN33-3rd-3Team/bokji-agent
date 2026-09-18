@@ -42,18 +42,16 @@ from rag_design.contracts import SourceType  # noqa: E402
 from rag_design.validation_runner import load_questions  # noqa: E402
 from rag_design.vector_store import VectorSearchFilter  # noqa: E402
 from src.rag_chatbot.graph.nodes.policy_search import _build_query  # noqa: E402
+from src.rag_chatbot.graph.nodes.slot_parser import (  # noqa: E402
+    _SIDO_ALIASES as _SLOT_PARSER_SIDO_ALIASES,
+)
 from src.rag_chatbot.graph.slot_schema import resolve_filter_slots  # noqa: E402
 from src.rag_chatbot.service import connect_store  # noqa: E402
 
-# diagnose_gold_policy_retrieval.py와 같은 표(정식 시도명만 필터가 받는다).
-_SIDO_ALIASES: tuple[tuple[str, str], ...] = (
-    ("서울", "서울특별시"), ("부산", "부산광역시"), ("대구", "대구광역시"),
-    ("인천", "인천광역시"), ("대전", "대전광역시"), ("울산", "울산광역시"),
-    ("세종", "세종특별자치시"), ("경기", "경기도"), ("강원", "강원특별자치도"),
-    ("충북", "충청북도"), ("충남", "충청남도"), ("전북", "전북특별자치도"),
-    ("광주", "전남광주통합특별시"), ("전남", "전남광주통합특별시"),
-    ("경북", "경상북도"), ("경남", "경상남도"), ("제주", "제주특별자치도"),
-)
+# slot_parser.py의 정식 표를 그대로 쓴다(diagnose_gold_policy_retrieval.py도
+# 동일) - 별도 사본을 두면 정식 표가 바뀔 때 진단 스크립트만 옛 별칭으로
+# 조용히 남는다.
+_SIDO_ALIASES: tuple[tuple[str, str], ...] = tuple(_SLOT_PARSER_SIDO_ALIASES.items())
 
 
 def _region(item: dict) -> list[str]:

@@ -1088,17 +1088,18 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         # 100문항 전체의 headline 지표가 게시 불가가 됐다).
         #
         # 선택지는 benefit_calculator/request_calc_info가 ask_counts에 쓰는 것과
-        # 같은 ``choice:<policy_id>`` 규약으로 이름을 만든다.
-        missing_slots = result.get("missing_slots") or result.get(
-            "calc_missing_slots"
-        )
+        # 같은 ``choice:<policy_id>`` 규약으로 이름을 만든다. calc_missing_slots와
+        # calc_missing_choices는 N10a 한 경로에서 동시에 채워질 수 있으므로(예:
+        # 계산용 슬롯과 정책별 선택지가 같은 턴에 함께 부족한 경우) 서로
+        # 배타적으로 취급하지 않고 둘 다 합쳐야 한다.
+        missing_slots = result.get("missing_slots")
         if not missing_slots:
-            missing_slots = [
+            missing_slots = list(result.get("calc_missing_slots") or [])
+            missing_slots += [
                 f"choice:{choice.get('policy_id', '')}"
                 for choice in (result.get("calc_missing_choices") or [])
                 if isinstance(choice, Mapping)
             ]
-        missing_slots = missing_slots or []
         return {
             "status": "needs_input",
             "question": question,

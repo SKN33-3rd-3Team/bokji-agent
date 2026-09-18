@@ -76,12 +76,22 @@ _STRUCTURED_SYSTEM_PROMPT = (
 _NUMBER_PATTERN = re.compile(r"\d[\d,]*")
 # 법령명 환각 탐지용(2026-09-17, 150문항 실측: "관련된 법령은 조세특례제한법
 # 입니다"처럼 원문에 없는 법령명을 지어내는 사례를 확인). "법률/시행령/
-# 시행규칙/조례"는 일반 단어에 잘 안 섞여 안전하고, "법"은 "방법"(그 자체가
-# 흔한 일반 단어)과 겹치므로 "방법"으로 끝나는 매칭만 제외한다("신청방법",
-# "산정방법" 등이 법령명으로 오인되지 않게).
+# 시행규칙/조례"는 일반 단어에 잘 안 섞여 안전하다. "법"은 "~하는 법"류
+# 일반 단어("방법", "계산법", "산정법" 등)와 겹치므로 정규식만으로는 못
+# 거르고, 흔히 쓰이는 비법령 "OO법" 단어를 아래 목록으로 따로 제외한다.
 _LAW_NAME_PATTERN = re.compile(
     r"[가-힣]{2,20}(?:법률|시행령|시행규칙|조례)(?:\s*제\d+조(?:의\d+)?)?"
-    r"|[가-힣]{2,20}(?<!방)법(?:\s*제\d+조(?:의\d+)?)?"
+    r"|[가-힣]{2,20}법(?:\s*제\d+조(?:의\d+)?)?"
+)
+# "OO법"이지만 법령명이 아닌 흔한 일반 단어("방법"으로 계산하는 방식 등을
+# 가리키는 말). 완전한 목록일 수 없으므로 실측으로 새 오탐이 나오면 추가한다.
+_NON_LAW_METHOD_WORDS = frozenset(
+    {
+        "방법", "계산법", "산정법", "해결법", "치료법", "사용법", "이용법",
+        "신청법", "처리법", "대처법", "요리법", "작성법", "활용법", "운영법",
+        "적용법", "판단법", "분류법", "선택법", "표현법", "서술법", "관리법",
+        "접근법",
+    }
 )
 
 
@@ -164,15 +174,20 @@ def _collect_citations(
 
     claims_by_type = _claims_by_type(policy_id, state)
     citations: list[CitationEntry] = []
-    seen: set[str] = set()
+    # (chunk_id, claim_type) 단위로 중복을 없앤다. chunk_id만으로 걸러내면
+    # 같은 chunk가 자격과 금액을 동시에 뒷받침하는 흔한 경우(예: "지원대상:
+    # 중위소득 50% 이하, 월 10만원 지급")에 먼저 추가된 claim_type의 citation이
+    # 나중 claim_type의 citation을 가려버린다 - 화면에는 "지원금액: ..." 줄이
+    # 나오는데 그 근거 citation은 하나도 안 달리는 결과가 된다.
+    seen: set[tuple[str, str]] = set()
 
     def _add(chunk_id: str | None, claim_type: str) -> None:
-        if not chunk_id or chunk_id in seen:
+        if not chunk_id or (chunk_id, claim_type) in seen:
             return
         citation = _cite(chunk_id, claim_type)
         if citation is None:
             return
-        seen.add(chunk_id)
+        seen.add((chunk_id, claim_type))
         citations.append(citation)
 
     # 지원자격 줄은 항상 렌더링되므로 항상 시도한다.
@@ -259,15 +274,28 @@ def _numbers_in(text: str) -> set[str]:
     return {match.replace(",", "") for match in _NUMBER_PATTERN.findall(text)}
 
 
+_ARTICLE_SUFFIX_PATTERN = re.compile(r"제\d+조(?:의\d+)?$")
+
+
 def _law_names_in(text: str) -> set[str]:
     """텍스트에 등장하는 법령명(조문 표기 포함)을 뽑는다.
 
     공백을 지워 비교한다 - "제24조"와 "제 24 조"처럼 원문과 summary의 띄어쓰기가
     달라도 같은 것으로 본다(숫자·법령명 자체가 다른 실제 환각만 잡고 싶지,
     같은 이름을 다르게 띄어 썼다는 이유로 정상 summary를 버리지 않기 위함).
+
+    "OO법" 형태지만 법령명이 아닌 흔한 일반 단어(_NON_LAW_METHOD_WORDS)는
+    조문 표기를 뗀 나머지 부분으로 걸러서 제외한다.
     """
 
-    return {match.replace(" ", "") for match in _LAW_NAME_PATTERN.findall(text)}
+    names = set()
+    for match in _LAW_NAME_PATTERN.findall(text):
+        normalized = match.replace(" ", "")
+        base = _ARTICLE_SUFFIX_PATTERN.sub("", normalized)
+        if base in _NON_LAW_METHOD_WORDS:
+            continue
+        names.add(normalized)
+    return names
 
 
 def _build_structured_prompt(sections_by_id: dict[str, str]) -> str:

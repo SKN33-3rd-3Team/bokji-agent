@@ -52,7 +52,14 @@ from rag_design.contracts import SourceType, validate_region_metadata  # noqa: E
 from rag_design.index_policy import subsidy_regions_match  # noqa: E402
 from rag_design.validation_runner import load_questions  # noqa: E402
 from rag_design.vector_store import VectorSearchFilter  # noqa: E402
+from src.rag_chatbot.graph.llm_gateway import (  # noqa: E402
+    _bracket_for_percent,
+    _INCOME_PERCENT_PATTERN,
+)
 from src.rag_chatbot.graph.nodes.policy_search import _build_query  # noqa: E402
+from src.rag_chatbot.graph.nodes.slot_parser import (  # noqa: E402
+    _SIDO_ALIASES as _SLOT_PARSER_SIDO_ALIASES,
+)
 from src.rag_chatbot.graph.policy_conditions import (  # noqa: E402
     _is_individual_applicable,
     evaluate_conditions,
@@ -82,45 +89,27 @@ def _chunks_for_policy(store, policy_id: str, limit: int):
 # 질문 본문의 짧은 지역명 -> contracts.CANONICAL_SIDO_NAMES의 정식 시도명.
 # VectorSearchFilter가 validate_region_name()으로 정식명만 받는다("서울"은
 # ValueError). 광주·전남은 이 프로젝트 기준으로 '전남광주통합특별시' 하나다.
-_SIDO_ALIASES: tuple[tuple[str, str], ...] = (
-    ("서울", "서울특별시"),
-    ("부산", "부산광역시"),
-    ("대구", "대구광역시"),
-    ("인천", "인천광역시"),
-    ("대전", "대전광역시"),
-    ("울산", "울산광역시"),
-    ("세종", "세종특별자치시"),
-    ("경기", "경기도"),
-    ("강원", "강원특별자치도"),
-    ("충북", "충청북도"),
-    ("충남", "충청남도"),
-    ("전북", "전북특별자치도"),
-    ("광주", "전남광주통합특별시"),
-    ("전남", "전남광주통합특별시"),
-    ("경북", "경상북도"),
-    ("경남", "경상남도"),
-    ("제주", "제주특별자치도"),
-)
+# slot_parser.py의 정식 표를 그대로 쓴다(measure_retrieval_distance.py도
+# 동일) - 별도 사본을 두면 정식 표가 바뀔 때 진단 스크립트만 옛 별칭으로
+# 조용히 남는다.
+_SIDO_ALIASES: tuple[tuple[str, str], ...] = tuple(_SLOT_PARSER_SIDO_ALIASES.items())
 
 
 def _income_bracket(text: str) -> str | None:
-    """'기준중위소득 50%' -> IncomeBracket 값."""
+    """'기준중위소득 50%' -> IncomeBracket 값.
 
-    match = re.search(r"중위소득\s*(\d+)\s*%", text)
-    if not match:
+    llm_gateway._extract_income_bracket과 같은 정규식·경계값·방향("초과"/
+    "이상") 판정을 그대로 쓴다 - 여기서 경계값을 따로 하드코딩해 재구현하면
+    실제 서비스 쪽 구간 경계가 바뀔 때 이 진단 스크립트만 옛 기준으로 남아
+    회귀 진단 결과가 실제 동작과 어긋난다.
+    """
+
+    match = _INCOME_PERCENT_PATTERN.search(text)
+    if match is None:
         return None
-    pct = int(match.group(1))
-    if pct < 30:
-        return "under_30"
-    if pct < 50:
-        return "pct_30_50"
-    if pct < 75:
-        return "pct_50_75"
-    if pct < 100:
-        return "pct_75_100"
-    if pct < 150:
-        return "pct_100_150"
-    return "over_150"
+    return _bracket_for_percent(
+        int(match.group(1)), text[match.end() : match.end() + 6]
+    )
 
 
 def _slots_from_question(item: dict) -> dict:
