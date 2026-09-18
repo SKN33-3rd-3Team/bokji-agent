@@ -80,8 +80,8 @@ _NUMBER_PATTERN = re.compile(r"\d[\d,]*")
 # 일반 단어("방법", "계산법", "산정법" 등)와 겹치므로 정규식만으로는 못
 # 거르고, 흔히 쓰이는 비법령 "OO법" 단어를 아래 목록으로 따로 제외한다.
 _LAW_NAME_PATTERN = re.compile(
-    r"[가-힣]{2,20}(?:법률|시행령|시행규칙|조례)(?:\s*제\d+조(?:의\d+)?)?"
-    r"|[가-힣]{2,20}법(?:\s*제\d+조(?:의\d+)?)?"
+    r"[가-힣][가-힣ㆍ·\s]*?(?:법률|시행령|시행규칙|조례|법)(?!률|령|규칙)"
+    r"(?:\s*제\s*\d+\s*조(?:\s*의\s*\d+)?)?"
 )
 # "OO법"이지만 법령명이 아닌 흔한 일반 단어("방법"으로 계산하는 방식 등을
 # 가리키는 말). 완전한 목록일 수 없으므로 실측으로 새 오탐이 나오면 추가한다.
@@ -288,11 +288,15 @@ def _law_names_in(text: str) -> set[str]:
     조문 표기를 뗀 나머지 부분으로 걸러서 제외한다.
     """
 
+    # 명칭 앞의 안내 문구만 분리한다. 명칭 내부 공백을 먼저 삭제하면
+    # 문장까지 합쳐지고, 끝 단어만 추출하면 서로 다른 법령이 같아진다.
+    text = re.sub(r"(?:관련(?:된)?\s*법령|지원\s*근거)(?:은|는|:)?\s*", ":", text)
     names = set()
     for match in _LAW_NAME_PATTERN.findall(text):
-        normalized = match.replace(" ", "")
+        normalized = re.sub(r"\s+", "", match)
         base = _ARTICLE_SUFFIX_PATTERN.sub("", normalized)
-        if base in _NON_LAW_METHOD_WORDS:
+        last_word = re.sub(r"\s*제\s*\d+\s*조(?:\s*의\s*\d+)?$", "", match).split()[-1]
+        if base in _NON_LAW_METHOD_WORDS or last_word in _NON_LAW_METHOD_WORDS:
             continue
         names.add(normalized)
     return names

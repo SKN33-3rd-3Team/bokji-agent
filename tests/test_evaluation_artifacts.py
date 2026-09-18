@@ -4,12 +4,28 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from scripts.run_model_evaluation import _create_run_directory
+from scripts.run_model_evaluation import _create_run_directory, _build_answer_quality_cases
 from scripts.pool_evaluation_runs import pool, build_report
 from scripts.compare_evaluation_runs import build_report as compare_report
 
 
 class EvaluationArtifactsTests(unittest.TestCase):
+    def test_judge_evidence_contains_cited_legal_metadata_only(self):
+        policy = {"policy_id": "p", "title": "상담 지원", "detail": {
+            "support_details": "상담 서비스", "legal_basis": "노인복지법"},
+            "related_law": [{"law_name": "사회보장기본법"}]}
+        cases = _build_answer_quality_cases(
+            [{"question_id": "q", "question": "지원 근거는?"}],
+            [{"question_id": "q", "session_id": "s", "terminal_status": "answered",
+              "cited_policy_ids": ["p"]}],
+            {"s": {"final_answer": "관련 법령: 노인복지법, 사회보장기본법",
+                   "policies": [policy, {"policy_id": "other", "detail": {"legal_basis": "미인용법"}}]}}
+        )
+        self.assertIn("노인복지법", cases[0].evidence_text)
+        self.assertIn("사회보장기본법", cases[0].evidence_text)
+        self.assertIn("조문 본문이 아님", cases[0].evidence_text)
+        self.assertNotIn("미인용법", cases[0].evidence_text)
+
     def test_comparison_does_not_invent_success_for_missing_measurements(self):
         for operations in (None, {}, {"sample_count": 10},
                            {"sample_count": 10, "error_rate": None},

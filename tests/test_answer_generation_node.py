@@ -13,6 +13,27 @@ from src.rag_chatbot.graph.nodes import generate_answer
 from src.rag_chatbot.llm import FailingLLMClient, FakeLLMClient
 
 
+def test_law_validation_preserves_full_spaced_names_and_articles():
+    from src.rag_chatbot.graph.nodes.answer_generation import _validate_structured_summaries
+
+    cases = [
+        ("노인 복지법", "장애인 복지법", False),
+        ("노인\n복지법", "장애인\n복지법", False),
+        ("노인복지법", "장애인복지법상 지원 대상입니다", False),
+        ("상담 지원", "사회보장급여의 이용 및 제공에 관한 법률", False),
+        ("국민기초생활 보장법", "국민기초생활보장법", True),
+        ("국민기초생활보장법 제24조", "국민기초생활 보장법 제 24 조", True),
+        ("국민기초생활보장법 제24조", "국민기초생활보장법 제25조", False),
+        ("노인복지법", "노인복지법 및 장애인복지법", False),
+        ("상담 지원", "사회보장급여의 이용ㆍ제공 및 수급권자 발굴에 관한 법률", False),
+    ]
+    for source, summary, accepted in cases:
+        result = _validate_structured_summaries(
+            {"policies": [{"policy_id": "p", "summary": summary}]}, {"p": source}
+        )
+        assert ("p" in result) == accepted, (source, summary, result)
+
+
 def _chunk(chunk_id: str, doc_id: str, text: str, source_url: str | None) -> Chunk:
     return Chunk(
         schema_version=SCHEMA_VERSION,

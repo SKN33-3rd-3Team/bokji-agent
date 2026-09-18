@@ -151,10 +151,25 @@ def _policy_evidence_text(policy: Mapping) -> str:
         ("지원내용", "support_details"),
         ("신청방법", "application_method"),
         ("신청기한", "application_period"),
+        ("근거법령(명칭·목록 정보이며 조문 본문이 아님)", "legal_basis"),
     ):
         value = detail.get(key)
         if value:
             parts.append(f"{label}: {value}")
+    # related_law는 answer_generation.py가 금액을 못 구했을 때 답변에
+    # "관련 법령: <법령명> (<url>)" 줄로 그대로 옮겨 쓴다(N12가 원문에서 찾은
+    # 법령명 - amount_label과 달리 파이프라인이 계산한 값이 아니라 원문
+    # 발췌라 순환 검증 문제가 없다). 이걸 evidence_text에서 빼먹으면 답변에
+    # 법령명이 있어도 judge에게는 근거가 하나도 없는 것처럼 보여, 실제로
+    # 원문에 있는 법령명까지 "근거없음"으로 오판정될 수 있다.
+    related_law = policy.get("related_law") or []
+    law_names = [
+        entry.get("law_name")
+        for entry in related_law
+        if isinstance(entry, Mapping) and entry.get("law_name")
+    ]
+    if law_names:
+        parts.append("관련 법령(명칭·목록 정보이며 조문 본문이 아님): " + ", ".join(law_names))
     return "\n".join(parts)
 
 
