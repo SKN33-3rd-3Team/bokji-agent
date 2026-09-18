@@ -1,0 +1,18 @@
+{
+  "checks": {
+    "zip_crc_and_all_member_sha256": true,
+    "frozen_source_files": 80,
+    "same_selected_questions": 60,
+    "runner_and_collector_imports_and_cli_help": true,
+    "offline_slot_parsing": true,
+    "evaluation_imports_service_dotenv_loader": false,
+    "linux_shell_script_uses_lf": true,
+    "prior_469_files_unchanged": true
+  },
+  "not_run": [
+    "fresh Linux dependency installation",
+    "new GPU inference",
+    "new answer grading"
+  ],
+  "changes": "New reproduction guide and portable source/input package only; existing service, runner, .env, and earlier results unchanged."
+}

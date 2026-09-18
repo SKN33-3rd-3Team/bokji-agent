@@ -14,7 +14,10 @@ from .client import (
     loads_json_object,
 )
 
+from .ollama import OllamaClient
+
 __all__ = [
+    "OllamaClient",
     "LLMClient",
     "LLMCallError",
     "RunPodServerlessClient",

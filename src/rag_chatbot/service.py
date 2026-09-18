@@ -198,6 +198,7 @@ from .graph.policy_conditions import load_policy_user_types, load_support_condit
 from .graph.slot_schema import UNKNOWN
 from .llm import (
     FallbackLLMClient,
+    OllamaClient,
     HuggingFaceInferenceClient,
     RecordingLLMClient,
     RunPodPodClient,
@@ -309,19 +310,21 @@ def _build_hf_client(token: str) -> HuggingFaceInferenceClient:
 
 
 def build_llm_client() -> RecordingLLMClient | None:
-    """``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
-    만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
-    기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
-    성질은 그대로 유지한다.
+    """Pod 우선, 미설정 시 명시한 백엔드(기본 HF)의 클라이언트를 만든다.
+    클라이언트가 없으면 기존 규칙/템플릿 경로를 유지한다. Ollama는 명시적으로
+    선택할 때만 사용하며, 다른 제공자의 실패 시 로컬로 자동 전환하지 않는다.
 
     백엔드 선택 우선순위:
     - ``RUNPOD_POD_ID``가 있으면(영구 GPU Pod, ``PROJECT_STRUCTURE.md`` 2.4절)
       **``LLM_BACKEND`` 값과 무관하게 최우선**으로 RunPod Pod를 쓴다
       (2026-09-16 팀 결정: RunPod 1순위, HuggingFace 2순위). 이때 ``HF_TOKEN``도
       있으면 ``FallbackLLMClient``로 감싸, RunPod Pod 호출이 실패(연결 장애
-      등)할 때마다 같은 요청 안에서 즉시 HuggingFace로 자동 전환한다. HF
+      등)할 때 같은 노드 실행의 남은 시간 안에서 HuggingFace로 전환한다. HF
       토큰이 없으면 RunPod Pod 단독으로 동작한다(폴백 불가).
     - ``RUNPOD_POD_ID``가 없으면 기존 ``LLM_BACKEND`` 환경변수로 분기한다:
+      - ``ollama``: 명시적인 ``LLM_MODEL_NAME`` 필수, HF 토큰 불필요.
+        ``OLLAMA_BASE_URL``은 loopback만 허용한다. ``LLM_DISABLE_THINKING=1``은
+        /api/show capabilities에 thinking이 있을 때만 think=False를 보낸다.
       - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
         ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
       - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
@@ -346,6 +349,16 @@ def build_llm_client() -> RecordingLLMClient | None:
 
     backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
 
+    if backend == "ollama":
+        return RecordingLLMClient(OllamaClient(
+            model=os.environ.get("LLM_MODEL_NAME") or "",
+            base_url=os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434",
+            timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+            num_predict=int(os.environ.get("LLM_MAX_NEW_TOKENS") or 1024),
+            num_ctx=int(os.environ.get("OLLAMA_NUM_CTX") or 4096),
+            disable_thinking=os.environ.get("LLM_DISABLE_THINKING") == "1",
+        ))
+
     if backend == "runpod":
         if not (os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY")):
             return None
@@ -355,7 +368,7 @@ def build_llm_client() -> RecordingLLMClient | None:
             )
         )
     if backend not in {"hf", "huggingface"}:
-        raise ValueError("LLM_BACKEND must be hf, huggingface, or runpod")
+        raise ValueError("LLM_BACKEND must be hf, huggingface, runpod, or ollama")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:

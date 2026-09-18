@@ -1,0 +1,11 @@
+{
+  "checked_at": "2026-09-15T19:04:27.213571+00:00",
+  "evaluation_date": "2026-09-16",
+  "claim": "전라남도와 광주광역시는 2026-07-01 전남광주통합특별시로 통합 출범했다.",
+  "verdict": "공식 자료 확인",
+  "source_url": "https://community.lawmaking.go.kr/gcom/sgLmPp/349503?blockStartPage=1&pageIndex=6",
+  "source_date": "2026-09-11",
+  "secondary_url": "https://120.gwangju.go.kr/cop/bbs/selectBoardArticle.do?bbsId=BNOTICE&nttId=4412",
+  "scope": "N1 지역명 변환의 정확성 확인에만 사용. 정책 답변의 고정 원문은 변경하지 않음.",
+  "application": "해당 명칭 변환 자체를 감점하지 않는다. 원래 점수를 보존하고 검토 수정 기록을 별도 적용한다."
+}

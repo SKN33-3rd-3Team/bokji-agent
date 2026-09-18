@@ -1,4 +1,4 @@
-# LLM 실행 설정: RunPod Pod / HuggingFace / Serverless
+# LLM 실행 설정: RunPod Pod / HuggingFace / Serverless / 명시적 Ollama
 
 이 문서는 현재 [service.py의 `build_llm_client()`](../src/rag_chatbot/service.py)와 [LLM 클라이언트](../src/rag_chatbot/llm/client.py)의 선택 규칙을 설명한다. 원본 `PROJECT_STRUCTURE.md` 2.4절과 사용자 결정에 따라 RunPod Pod 우선 및 호출 실패 시 HuggingFace로 전환하는 방향이 승인됐다. 실제 Pod 서버 종류·주소·응답 호환성·종료 정책은 배포 환경에서 확인해야 하며 이 문서는 실서비스 연결 완료 기록이 아니다.
 
@@ -11,11 +11,14 @@
 | `RUNPOD_POD_ID` 있음 | `LLM_BACKEND`와 무관하게 `RunPodPodClient` 우선 |
 | Pod ID + `HF_TOKEN` 또는 `HUGGINGFACE_TOKEN` 있음 | Pod 호출의 `LLMCallError` 발생 시 남은 노드 시간 안에서 HF로 재시도 |
 | Pod ID만 있음 | Pod 단독 사용. HF 폴백 없음 |
+| Pod ID 없음, `LLM_BACKEND=ollama` | 명시한 로컬 Ollama 모델 사용. HF 토큰 불필요, 자동 제공자 폴백 없음 |
 | Pod ID 없음, `LLM_BACKEND=runpod` | `RUNPOD_ENDPOINT_ID`와 `RUNPOD_API_KEY`가 있으면 Serverless, 없으면 LLM 클라이언트 없음 |
 | Pod ID 없음, `LLM_BACKEND=hf` 또는 `huggingface` | HF 토큰이 있으면 HF. 미설정 backend의 기본값은 `hf` |
 | Pod ID 없음, 그 밖의 `LLM_BACKEND` | 설정 오류 (`ValueError`) |
 
 “로컬(기존 경로)”은 앱에서 HF Inference API를 호출한다는 의미이며 로컬 모델 추론을 뜻하지 않는다. 클라이언트를 구성하지 못해 `None`인 경우 코어의 규칙·템플릿 경로를 사용하고 정책 문의는 안내 응답으로 제한될 수 있다. 임베딩·벡터 데이터 준비는 별도로 필요하다.
+
+PR65의 개발용 로컬 추론은 Pod ID가 없을 때 **`LLM_BACKEND=ollama`로 명시적으로 선택**한다. `LLM_MODEL_NAME`은 필수이고 `OLLAMA_BASE_URL`은 loopback HTTP(S) 주소만 허용한다(기본 `http://localhost:11434`, 프록시·redirect 미사용). 기본 `OLLAMA_NUM_CTX=4096`, `LLM_MAX_NEW_TOKENS=1024`, `LLM_TIMEOUT_SECONDS=120`이며 `LLM_DISABLE_THINKING=1`은 `/api/show`에 thinking capability가 있을 때만 적용한다. Pod와 Ollama를 함께 설정해도 Pod가 우선이고, Pod 실패 시 설정된 HF로만 전환한다. 기본 production 경로를 Ollama로 바꾸거나 자동 로컬 폴백을 추가하지 않는다.
 
 ## Pod 설정과 현재 폴백 범위
 
@@ -38,6 +41,8 @@ Pod와 HF가 모두 실패하면 오류를 호출 코어로 전달한다. 일반
 ## 노드 총 실행 한도
 
 [deadline.py](../src/rag_chatbot/deadline.py)와 [그래프 배선](../src/rag_chatbot/graph/builder.py)은 LLM이 구성된 **N1/N5/N9/N10/N10a/N13의 노드 1회 실행 전체를 90초**로 제한한다. 하나의 절대 마감 시간을 RunPod·HF·모든 재시도·여러 호출·병렬 자식 호출이 공유한다. 다음 노드/다음 실행은 새 한도이며 상담 전체가 90초라는 뜻은 아니다. HF 단독 노드에도 적용한다. 비LLM 노드와 API-12 직접 호출에는 새 노드 한도를 적용하지 않는다.
+
+명시적으로 선택한 [Ollama](../src/rag_chatbot/llm/ollama.py)도 같은 노드 한도를 사용한다. `/api/show`와 `/api/chat`, 여러 호출이 남은 예산을 공유하며 만료 후 capability·응답 통계 쓰기를 차단한다. 일반 전송 오류와 노드 만료를 구분하고, API-14의 실제 제공자 실패를 정상 0건으로 바꾸지 않는다. urllib 전송 역시 실행 중인 스레드의 강제 종료를 보장하지 않는다. 그래프 밖의 직접 평가 호출과 API-12는 기존 전송 timeout을 사용한다.
 
 호출·실행 슬롯 대기부터 같은 예산을 사용한다. 제공자 timeout은 남은 시간으로 줄이며 공유 클라이언트 설정을 요청마다 수정하지 않는다. HF의 기본 전송 timeout은 60초이고 Pod/Serverless의 서비스 기본값은 120초지만, 그래프 노드 안에서는 모두 남은 총 예산의 제한을 받는다. `LLM_TIMEOUT_SECONDS`를 늘려 노드 90초를 재설정할 수 없으며 별도 노드 한도 환경변수도 없다.
 
@@ -64,7 +69,7 @@ Pod ID가 없고 `LLM_BACKEND=runpod`이면 [RunPodServerlessClient](../src/rag_
 프로젝트 의존성이 준비된 환경에서 저장소 루트 기준으로 실행한다.
 
 ```bash
-python -m pytest tests/test_llm_pod.py tests/test_node_deadline.py backend/tests/test_node_deadline.py -q
+python -m pytest tests/test_llm_pod.py tests/test_ollama_client.py tests/test_node_deadline.py backend/tests/test_node_deadline.py -q
 ```
 
-이 검사는 응답 처리·폴백·축소 시간의 노드 한도 및 HTTP 어댑터의 회귀 확인용이다. 실제 Pod/HF 호출 성공, 모델 출력 품질, 전체 벡터 검색·React 통합을 증명하지 않는다. 배포 환경의 연결·응답 형식 확인과 Gate 5 통합 검증은 별도로 기록한다.
+이 검사는 선택 순서·응답 처리·폴백·축소 시간의 노드 한도 및 HTTP 어댑터의 회귀 확인용이다. 실제 Pod/HF/Ollama 호출 성공, 모델 출력 품질, 전체 벡터 검색·React 통합을 증명하지 않는다. 배포 환경의 연결·응답 형식 확인과 Gate 5 통합 검증은 별도로 기록한다.

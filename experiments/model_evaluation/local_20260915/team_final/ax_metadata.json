@@ -1,0 +1,121 @@
+{
+  "model": "hf.co/Ghiwook/A.X-4.0-Light-Q4_K_M-GGUF:Q4_K_M",
+  "base_url": "http://127.0.0.1:11435",
+  "digest": "ce2f5111e5d580b2052e135849b2860d323bb0b2900ff472b741ad7ab35eb148",
+  "options": {
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "repeat_penalty": 1,
+    "seed": 42,
+    "presence_penalty": 0,
+    "frequency_penalty": 0,
+    "num_batch": 128,
+    "num_ctx": 8192,
+    "num_predict": 1024
+  },
+  "disable_thinking": true,
+  "capabilities": [
+    "tools",
+    "completion"
+  ],
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "qwen2",
+    "families": [
+      "qwen2"
+    ],
+    "parameter_size": "7.26B",
+    "quantization_level": "Q4_K_M"
+  },
+  "model_info": {
+    "general.architecture": "qwen2",
+    "general.file_type": 15,
+    "general.languages": null,
+    "general.license": "apache-2.0",
+    "general.license.link": "https://huggingface.co/skt/A.X-4.0-Light/blob/main/LICENSE",
+    "general.parameter_count": 7259624960,
+    "general.quantization_version": 2,
+    "general.size_label": "7.3B",
+    "general.tags": null,
+    "general.type": "model",
+    "qwen2.attention.head_count": 28,
+    "qwen2.attention.head_count_kv": 4,
+    "qwen2.attention.layer_norm_rms_epsilon": 1e-05,
+    "qwen2.block_count": 28,
+    "qwen2.context_length": 16384,
+    "qwen2.embedding_length": 3584,
+    "qwen2.feed_forward_length": 18944,
+    "qwen2.rope.freq_base": 1000000,
+    "tokenizer.ggml.add_bos_token": false,
+    "tokenizer.ggml.bos_token_id": 0,
+    "tokenizer.ggml.eos_token_id": 27,
+    "tokenizer.ggml.mask_token_id": 4,
+    "tokenizer.ggml.merges": null,
+    "tokenizer.ggml.model": "gpt2",
+    "tokenizer.ggml.padding_token_id": 1,
+    "tokenizer.ggml.pre": "a.x-4.0",
+    "tokenizer.ggml.seperator_token_id": 3,
+    "tokenizer.ggml.token_type": null,
+    "tokenizer.ggml.tokens": null,
+    "tokenizer.ggml.unknown_token_id": 2
+  },
+  "ollama": {
+    "version": "0.34.0"
+  },
+  "python": "3.11.4",
+  "started_at": "2026-09-15T14:36:57.826019+00:00",
+  "manifest_sha256": "14ea3bcd0794d978f1464ea571ecf7d80017068fd0feda57aaa863a3eba2f5a1",
+  "cases_sha256": "50516e8bed8ee83c2bb7d3d2a2cf88d902dd3fc0f2f6e922977e7a9a537fcd95",
+  "running_models_before_unload": [],
+  "running_models_after_initial_unload": [],
+  "warmup": {
+    "scored": false,
+    "max_tokens": 32,
+    "calls": [
+      {
+        "prompt_sha256": "85ec91ecc45e77efd110dfdca576ff7aebd57e13feeee865f62ce6dead65e013",
+        "system_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "raw": "{\"ready\": true}",
+        "parsed": {
+          "ready": true
+        },
+        "strict_json": true,
+        "done": true,
+        "done_reason": "stop",
+        "total_duration": 6879922900,
+        "load_duration": 6704620800,
+        "prompt_eval_count": 17,
+        "prompt_eval_duration": 82036000,
+        "eval_count": 6,
+        "eval_duration": 88928000,
+        "thinking_present": false,
+        "prompt_eval_cached_count": 0,
+        "elapsed_s": 6.8924
+      }
+    ]
+  },
+  "running_models_after_warmup": [
+    {
+      "name": "hf.co/Ghiwook/A.X-4.0-Light-Q4_K_M-GGUF:Q4_K_M",
+      "model": "hf.co/Ghiwook/A.X-4.0-Light-Q4_K_M-GGUF:Q4_K_M",
+      "size": 4820136099,
+      "digest": "ce2f5111e5d580b2052e135849b2860d323bb0b2900ff472b741ad7ab35eb148",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen2",
+        "families": [
+          "qwen2"
+        ],
+        "parameter_size": "7.26B",
+        "quantization_level": "unknown"
+      },
+      "expires_at": "2026-09-15T23:42:04.7360745+09:00",
+      "size_vram": 4820136099,
+      "context_length": 8192
+    }
+  ],
+  "running_models_after_final_unload": []
+}

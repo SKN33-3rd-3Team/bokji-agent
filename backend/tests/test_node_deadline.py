@@ -4,6 +4,7 @@ from threading import Barrier, Event, Timer
 from time import monotonic
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -18,7 +19,8 @@ from backend.app.core.errors import ApiError
 from backend.app.schemas.chat import ChatRequest
 
 
-def test_http_deadline_cleans_checkpoint_without_waiting_for_late_provider(client, monkeypatch):
+@pytest.mark.parametrize("provider", ["fake", "ollama"])
+def test_http_deadline_cleans_checkpoint_without_waiting_for_late_provider(client, monkeypatch, provider):
     entered, release, finished = Event(), Event(), Event()
 
     class SlowProvider:
@@ -28,8 +30,19 @@ def test_http_deadline_cleans_checkpoint_without_waiting_for_late_provider(clien
             finished.set()
             return "{}"
 
+    llm_client = SlowProvider()
+    if provider == "ollama":
+        monkeypatch.delenv("RUNPOD_POD_ID", raising=False)
+        monkeypatch.setenv("LLM_BACKEND", "ollama")
+        monkeypatch.setenv("LLM_MODEL_NAME", "local-fixture")
+        llm_client = service.build_llm_client()
+        def open_response(*args, **kwargs):
+            return BytesIO(('{"done":true,"message":{"content":' +
+                            '"' + SlowProvider().complete() + '"}}').encode())
+        monkeypatch.setattr(llm_client.inner._opener, "open", open_response)
+
     store = SimpleNamespace(search=lambda *args, **kwargs: [])
-    graph = build_graph(store, llm_client=SlowProvider())
+    graph = build_graph(store, llm_client=llm_client)
     monkeypatch.setattr(timing, "LLM_NODE_TIMEOUT_SECONDS", 0.08, raising=False)
     monkeypatch.setattr(service, "_runtime_cache", {"graph": graph, "store": store, "llm_client": None})
     monkeypatch.setattr(chat_adapter.uuid, "uuid4", lambda: "deadline-session")
