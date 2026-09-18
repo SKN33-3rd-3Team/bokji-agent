@@ -20,7 +20,7 @@
 
 </div>
 
-최종 서비스 구성은 **React + FastAPI**입니다. 이 브랜치에는 FastAPI 백엔드가 있으며 React 화면은 별도 브랜치에서 개발 중입니다. Streamlit은 향후 제거할 레거시 데모입니다. 기준 자료와 확정 결정은 [프로젝트 준수 기준](docs/PROJECT_COMPLIANCE.md#서비스-전환-기준), 현재 API 동작·미결 계약은 [백엔드 안내](backend/README.md)에 정리합니다.
+최종 서비스 구성은 **React + FastAPI**입니다. 이 브랜치에는 FastAPI 백엔드가 있으며 React 화면은 별도 브랜치에서 개발 중입니다. Streamlit은 향후 제거할 레거시 데모입니다. 기준 자료와 확정 결정은 [프로젝트 준수 기준](docs/PROJECT_COMPLIANCE.md#서비스-전환-기준), 현재 승인 계약·구현·검증·담당은 [백엔드 계약 추적표](backend/README.md#원본-문서와-남은-계약-차이)에 정리합니다. 로그인 후 서버 저장 프로필로 질문 없이 추천하는 [API-14와 공용 계산 입력 명세](docs/AUTO_RECOMMENDATION_API.md)도 제공합니다.
 
 ---
 
@@ -66,11 +66,11 @@
 1. **환각 억제를 위한 다단계 검증**
    - 정책 문서에서 주장(Claim)을 추출하고 원문과의 교차 대조(N6) 및 Evidence Gate(N7)를 통과해야만 답변 생성에 반영됩니다.
 2. **동적 슬롯 파싱 & 하드 게이팅 (Interrupt & Resume)**
-   - 지역 등 필수 조건이 누락된 경우 즉각 질문을 중단하고 필요한 항목만 자연스럽게 되물어 정확한 대상 정책을 필터링합니다.
+   - 일반 상담은 지역 등 필수 조건이 누락되면 추가 질문을 합니다. 자동 추천(API-14)은 질문 없이 저장 프로필만 사용하며 지역이 없으면 확인된 전국 대상만 검색합니다.
 3. **자격 · 지원금 · 중복수급 삼각 판정**
    - 단순히 정책을 요약하는 것을 넘어, 사용자의 슬롯 조건을 기반으로 **충족/미충족/미확인**, **계산 가능한 지원금액**, **타 복지와의 중복수급 제한**을 구조화하여 산출합니다.
 4. **규칙 기반 안전 폴백(Graceful Fallback)**
-   - 설정에 따라 RunPod Pod 실패 시 HuggingFace로 전환하고, LLM을 사용할 수 없으면 코어의 규칙·템플릿 또는 보류 안내 경로를 사용합니다. 재시도 지연과 기능 제한이 있어 정상 LLM 응답과 같은 결과를 보장하지 않습니다.
+   - 설정에 따라 RunPod Pod 실패 시 남은 노드 실행 시간 안에서 HuggingFace로 전환합니다. 일반 상담의 비시간초과 오류에는 기존 규칙·템플릿/안내 경로가 있지만, 노드 총 90초 소진과 자동 추천의 최종 제공자 실패는 오류로 반환합니다. [한도와 실행 스레드의 제약](docs/RUNPOD_SETUP_DRAFT.md#노드-총-실행-한도)을 참고하세요.
 
 ---
 
@@ -92,7 +92,7 @@
 
 복지 에이전트는 사용자의 질문을 단순 생성하지 않고, **14개의 LangGraph 상태 노드**를 통해 팩트체크 및 자격 검증을 거친 후 안전하게 답변합니다.
 
-> 💡 GitHub 웹에서 펼치면 인터랙티브 다이어그램으로 렌더링되어 확대 및 노드 탐색이 가능합니다.
+> 아래는 일반 상담의 기본 흐름입니다. API-14는 초기·계산 질문을 생략하고 최종 카드에 자동 추천 필터를 적용합니다. 완료된 상담은 같은 세션의 새 턴으로 이어갈 수 있으며, 계산 중에는 구조화 입력을 사용합니다. [현재 HTTP 계약](backend/README.md#상담-턴과-계산-입력)을 따릅니다.
 
 ```mermaid
 flowchart TD
@@ -144,7 +144,7 @@ flowchart TD
         subgraph S3_mid [" "]
             direction LR
             n10["🧮 N10. 지원금 처리<br/><small>지원내용 재검색 · 단일 금액 추출 · 근거가 있을 때 제한적 총액 계산</small>"]:::c_node
-            n11["🔗 N11. 중복수급 판정<br/><small>불가 · 조건부 · 미확인 · 가능 자동 판정 없음</small>"]:::c_node
+            n11["🔗 N11. 중복수급 판정<br/><small>조건부 · 미확인 · 가능/불가 자동 격상 없음</small>"]:::c_node
         end
 
         n12["📦 N12. 결과 조립<br/><small>정책별 결합 · 금액 계산 불가 시 관련 법령 링크 조회</small>"]:::c_node
@@ -227,7 +227,7 @@ flowchart TD
 | **LLM & Inference** | HuggingFace API, RunPod Pod / Serverless | Pod 우선, HF 자격 증명이 있으면 호출 실패 시 HF 폴백. 모델은 환경설정으로 지정 |
 | **Embedding & Vector DB** | `ChromaDB`, `intfloat/multilingual-e5-base` | 768차원 다국어 고밀도 벡터 임베딩 및 메타데이터 필터링 |
 | **Frontend UI** | React (목표), `Streamlit 1.62.0` (레거시) | React는 별도 브랜치에서 개발 중. 기존 데모는 Streamlit으로 실행 |
-| **HTTP API** | FastAPI, Pydantic, Uvicorn | 회원·옵션·상담 API-01~13, 서버 세션 및 소유권 검증 |
+| **HTTP API** | FastAPI, Pydantic, Uvicorn | 회원·옵션·상담·자동 추천 API-01~14, 서버 세션 및 소유권 검증 |
 | **Data & Scraping** | `Python 3.11`, `Requests`, `xmltodict` | 공공데이터포털(공공서비스) 및 국가법령정보센터 대규모 수집 |
 | **Security & Storage** | SQLite / MySQL·MariaDB, `bcrypt`, `cryptography (Fernet)` | 회원 저장소 선택, 민감 프로필 암호화. 원격 DB 드라이버는 별도 설치 |
 | **Quality & Testing** | `pytest`, `pytest-subtests`, FastAPI TestClient, Streamlit AppTest | 코어·HTTP 계약 및 레거시 UI 검사. 실제 서비스 통합은 별도 검증 |
@@ -392,7 +392,7 @@ python scripts/run_dev_validation.py
 
 - **응답 대기 시간(Latency)**: 다단계 환각 검증(N5~N7) 과정에서 후보 정책마다 세부 주장을 추출하므로 수십 초가 소요될 수 있습니다. (진행률 표시줄 및 캐싱으로 완화 중)
 - **세션 영속성**: 로그인 세션·채팅 소유권·`MemorySaver`는 단일 프로세스 메모리에 저장됩니다. 재시작 시 유실되며 여러 worker 간 공유는 지원하지 않습니다. 로그인 TTL은 기본 7일, 채팅 TTL은 없습니다.
-- **서비스 완성도**: React는 개발 중이며 13개 API가 모두 존재해도 계약 전체가 완료된 것은 아닙니다. [남은 계약 차이](backend/README.md#원본-문서와-남은-계약-차이)를 확인하세요. 특히 보류 응답에 정책 카드가 남을 수 있어 카드 존재만으로 검증 완료를 표시하면 안 됩니다.
+- **서비스 완성도**: React 개발·실환경 통합은 미완료입니다. [계약 추적표](backend/README.md#원본-문서와-남은-계약-차이)의 구현·검증 범위와 PM 미결 D9/D10을 확인하세요. 일반 상담은 보류 카드를 유지하고 React에서 `자격 미확인`으로 표시해야 하며, API-14는 전역 보류 시 모든 카드를 제외합니다. 카드 존재나 일부 조건의 충족이 모든 조건의 검증 완료를 뜻하지 않습니다.
 
 ---
 
@@ -401,7 +401,8 @@ python scripts/run_dev_validation.py
 | 문서명 | 내용 요약 |
 | :--- | :--- |
 | 📋 [`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md) | 프로젝트 준수 기준, Gate 0~6 단계별 통과 규정 및 법령 데이터 범위 |
-| 🔌 [`backend/README.md`](backend/README.md) | API-01~13, 인증·세션, 구비서류 계약, 원본 문서와의 미결 차이 |
+| 🔌 [`backend/README.md`](backend/README.md) | API-01~14, 인증·세션·계산 입력·구비서류, 원본 대비 승인 결정·구현·검증·담당 |
+| [`docs/AUTO_RECOMMENDATION_API.md`](docs/AUTO_RECOMMENDATION_API.md) | API-14 v1.0 및 공용 D5/API-11 필드·예시·React 인계 |
 | 🗃️ [`docs/AUTH_REMOTE_DB.md`](docs/AUTH_REMOTE_DB.md) | SQLite/MySQL·MariaDB 선택, 드라이버 설치, DB 장애 동작 |
 | ⚙️ [`docs/RUNPOD_SETUP_DRAFT.md`](docs/RUNPOD_SETUP_DRAFT.md) | Pod/HF/Serverless 선택과 확인되지 않은 운영 항목 |
 | 📐 [`docs/RAG_DESIGN_PLAN.md`](docs/RAG_DESIGN_PLAN.md) | RAG 청킹, 검색, 노드 인터페이스 통합 아키텍처 설계서 |
