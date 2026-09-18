@@ -361,3 +361,20 @@ def test_policy_question_requires_known_policy_in_session(client, monkeypatch):
     )
     assert r.status_code == 200
     assert r.json()["kind"] == "answer"
+
+
+@pytest.mark.parametrize("authenticated", [False, True])
+def test_policy_question_checks_session_owner_before_provider(client, monkeypatch, authenticated):
+    if authenticated:
+        assert _signup(client, "policy-other@example.com").status_code == 201
+    chat_adapter.chat_session_store.create("someone-elses-session", user_id=999)
+    provider = Mock(side_effect=AssertionError("provider must not run"))
+    monkeypatch.setattr(followup_adapter, "respond_to_policy_question", provider)
+    response = client.post(
+        "/api/v1/chat/sessions/someone-elses-session/policies/P1/questions",
+        json={"question": "신청 방법은?"},
+    )
+    assert (response.status_code, response.json()["code"]) == (
+        (404, "SESSION_NOT_FOUND") if authenticated else (401, "UNAUTHORIZED")
+    )
+    provider.assert_not_called()
