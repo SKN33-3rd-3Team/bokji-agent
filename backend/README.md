@@ -170,7 +170,9 @@ S07-06/S10-01과 API-10/11 원본의 보류 사항은 사용자 옵션 ② 결�
 ## 테스트
 
 ```bash
-python -m pytest backend/tests/
+python scripts/run_api_tests.py
 ```
+
+설치·Windows PowerShell 실행·API-01~14 검사 범위·JUnit 보고서·CI 안내는 [API 테스트 설명서](../docs/API_TESTING.md)를 따른다. 이 실행기는 실제 자격증명과 dotenv를 배제하고 임시 SQLite 및 네트워크 차단을 적용한다.
 
 이 명령은 HTTP 계약 중심 검사다. 실제 MariaDB 왕복, 벡터 데이터·LLM 연결, React 브라우저 통합은 별도 환경에서 확인해야 한다. 테스트 결과에는 실행한 명령·리비전·통과/실패/skip을 기록하고 이전 실행의 통과 수를 현재 검증 결과로 사용하지 않는다.
