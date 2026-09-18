@@ -241,7 +241,9 @@ def test_run_graph_preseeded_region_slot_satisfies_the_hard_gate() -> None:
     assert result.get("slots", {}).get("region_scope") == "regional"
     assert result.get("slots", {}).get("region_names") == ["서울특별시"]
     # N2a(지역 부족 시에만 도는 일반 법령 참고 검색)도 돌지 않아야 한다.
-    assert "region_fallback_applied" not in result
+    # 새 턴에서 이전 fallback 상태를 제거하기 위해 기본값을 명시한다.
+    assert result["region_fallback_applied"] is False
+    assert result["general_law_references"] == []
 
 
 def test_run_graph_preseeded_gender_and_birth_date_satisfy_the_hard_gate() -> None:

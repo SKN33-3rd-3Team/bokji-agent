@@ -13,11 +13,9 @@ N1~N3(슬롯 파싱 / 적합성 체크·하드 게이트 / 추가 정보 요청)
 없이 매 요청마다 새 state를 버린다"는 설계는 더 이상 맞지 않아 이 문단으로
 교체한다. 체크포인터의 키는 ``thread_id=session_id``이므로, 서로 다른
 session_id는 서로 다른 저장 슬롯을 쓰고, 한 세션 안에서만 인터럽트가
-재개된다 - 여러 세션의 대화 상태가 서로 섞일 여지가 없다. 다만 이건
-"슬롯 재입력 한 턴을 잠깐 기다리기" 용도이지 여러 턴에 걸친 일반 대화
-기억이 아니다(멀티턴 대화 자체는 여전히 Gate 2 범위 밖 -
-docs/PROJECT_COMPLIANCE.md "하이브리드 검색, Re-ranking, ... 대화 이력 ...
-Baseline이 안정적으로 동작한 뒤 검토"). 또한 ``MemorySaver``는 프로세스
+재개된다. 완료된 세션의 새 질문은 알려진 프로필만 이어받아 새 턴으로 실행한다.
+이 체크포인트는 메시지 이력이 아니며 이전 문답을 새 질문의 대화 문맥으로
+전달하지 않는다. 또한 ``MemorySaver``는 프로세스
 메모리에만 저장되고 디스크에 남지 않는다 - 서버가 재시작되면 재개 대기
 중이던 세션은 사라진다(알려진 한계, 후속 작업에서 영속 체크포인터로 교체
 검토 필요).
@@ -419,7 +417,7 @@ def run_graph(
     as_of=None,
     safety_blocked: bool = False,
 ) -> dict:
-    """session_id별 새 대화를 시작한다(첫 턴, Edge E1).
+    """session_id별 새 턴을 시작한다(Edge E1). 이전 턴의 계산/검색 상태는 지운다.
 
     user_input: 이번 턴 사용자 발화. N1(slot_parser)이 여기서 슬롯을 뽑는다.
     session_id: 사용자별 요청 격리 키. GraphState["query_id"]로 흘려보내
@@ -451,33 +449,74 @@ def run_graph(
     if as_of is not None and type(as_of) is not _date:
         raise ValueError("as_of must be a date")
 
+    # LangGraph는 같은 thread의 부분 입력을 병합하므로 모든 턴 상태를 초기화한다.
     initial_state: GraphState = {
         "query_id": session_id,
         "policy_top_k": top_k,
         "as_of": as_of if as_of is not None else korea_today(),
         "user_input": user_input,
+        "initial_user_input": user_input.strip(),
         "slots": dict(slots) if slots else {},
+        "slot_conflicts": None,
+        "missing_slots": [],
         "slot_ask_counts": {},
+        "region_fallback_applied": False,
+        "general_law_references": [],
+        "needs_input": False,
+        "followup_question": None,
+        "subsidy_chunks": [],
+        "subsidy_legal_basis_chunks": [],
+        "subsidy_full_chunks": [],
+        "law_chunks": [],
+        "claim_plan": [],
+        "eligibility_verdicts": [],
+        "benefit_amounts": [],
+        "calc_missing_slots": [],
+        "calc_missing_choices": [],
+        "calc_choice_answers": {},
+        "duplicate_verdicts": [],
+        "assembled_result": {},
         "node_trace": [],
         "safety_blocked": safety_blocked,
+        "evidence_gate_verdict": None,
+        "abstention_decision": None,
+        "missing_document_claim_ids": [],
+        "missing_law_claim_ids": [],
+        "doc_retry_count": 0,
+        "law_retry_count": 0,
+        "draft_answer": "",
+        "citations": [],
+        "final_answer": "",
+        "final_citations": [],
+        "answer_status": None,
     }
     config = {"configurable": {"thread_id": session_id}}
     return graph.invoke(initial_state, config=config)
 
 
 def resume_graph(graph: Any, *, session_id: str, user_input: str) -> dict:
-    """N3(request_missing_slots)에서 멈춘 세션을 재개한다(Edge E6).
+    """실제 interrupt는 재개하고, 완료된 상담에는 같은 ID로 새 턴을 시작한다.
 
-    ``run_graph()`` (또는 이전 ``resume_graph()``) 결과에
-    ``"__interrupt__"``가 있었던 session_id에 대해서만 호출할 수 있다 -
-    체크포인터가 해당 ``thread_id``로 저장해 둔 이전 진행 상태가 없으면
-    LangGraph가 에러를 낸다. 재개 시 그래프는 멈췄던 ``request_missing_slots``
-    노드부터 이어서 실행되고(``_await_missing_slot_input``의
-    ``interrupt()`` 호출이 이 ``user_input``을 그대로 돌려받는다), 이후
-    Edge E6을 따라 N1(slot_parser)로 이동해 새 발화를 기존 슬롯에 병합한다.
+    실패/미완료 체크포인트를 완료된 답변으로 취급하거나 무조건 재실행하지 않는다.
+    프로필은 유지하되 이전 질문의 관심사/연령 대상과 파생 나이는 재사용하지 않는다.
     """
     config = {"configurable": {"thread_id": session_id}}
-    return graph.invoke(Command(resume=user_input), config=config)
+    snapshot = graph.get_state(config)
+    if any(task.error for task in snapshot.tasks):
+        raise ValueError("The previous graph execution failed; start a new session")
+    if any(task.interrupts for task in snapshot.tasks):
+        return graph.invoke(Command(resume=user_input), config=config)
+    if snapshot.next or not snapshot.values or snapshot.values.get("answer_status") not in (
+        "complete", "partial", "abstained",
+    ):
+        raise ValueError("No completed or interrupted chat checkpoint")
+    slots = dict(snapshot.values.get("slots") or {})
+    for field in ("interests", "age_subject", "age_self_reported", "age", "age_year_based", "age_ref_date"):
+        slots.pop(field, None)
+    return run_graph(
+        graph, session_id=session_id, user_input=user_input, slots=slots,
+        top_k=snapshot.values.get("policy_top_k", DEFAULT_TOP_K),
+    )
 
 
 __all__ = ["build_graph", "run_graph", "resume_graph"]

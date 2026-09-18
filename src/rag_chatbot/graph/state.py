@@ -264,8 +264,8 @@ class GraphState(TypedDict, total=False):
     assembled_result: dict[str, Any]
     node_trace: list[str]
     safety_blocked: bool
-    evidence_gate_verdict: EvidenceGateVerdict
-    abstention_decision: AbstentionDecision
+    evidence_gate_verdict: EvidenceGateVerdict | None
+    abstention_decision: AbstentionDecision | None
     missing_document_claim_ids: list[str]
     missing_law_claim_ids: list[str]
     doc_retry_count: int
@@ -276,4 +276,4 @@ class GraphState(TypedDict, total=False):
     # --- N14 (최종 Claim-Citation 검증) ---
     final_answer: str
     final_citations: list[CitationEntry]
-    answer_status: AnswerStatus
+    answer_status: AnswerStatus | None

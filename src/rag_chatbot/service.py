@@ -1300,10 +1300,11 @@ def ask(
 
 
 def answer_followup(session_id: str, user_input: str) -> ChatResponse:
-    """직전 ``ask()``(또는 ``answer_followup()``)가 ``status="needs_input"``을
-    돌려준 세션을, 사용자의 답변으로 재개한다(N3 interrupt 재개). ``ask()``와
-    같은 ``session_id``로만 호출할 수 있다 - 체크포인터에 해당 세션의 이전
-    진행 상태가 없으면 LangGraph가 에러를 낸다."""
+    """되묻기에는 답을 전달하고, 완료된 상담에는 같은 세션으로 새 질문을 실행한다.
+
+    새 질문은 알려진 프로필을 이어받지만 이전 문답을 메시지 이력으로 전달하지
+    않는다. 존재하지 않거나 실패한 체크포인트는 재개할 수 없다.
+    """
 
     TIMER.reset()
     with ExitStack() as request_timer:
