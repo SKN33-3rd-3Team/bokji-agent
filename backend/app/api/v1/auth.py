@@ -21,12 +21,14 @@ from ...session_store.chat_session import chat_session_store
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
-def _issue_session(user: UserProfile, password: str, response: Response) -> UserProfile:
+def _issue_session(
+    user: UserProfile, response: Response, *, password: str | None = None
+) -> UserProfile:
     # 첫 인증과 토큰 발급 사이의 비밀번호 변경/탈퇴도 같은 회원 잠금으로 조율한다.
     # ponytail: 성공 로그인은 해시를 두 번 확인한다. DB 버전/별도 잠금 맵 없이
     # 현재 비밀번호를 잠금 안에서 검증하며, 공유 auth/Streamlit 계약은 유지한다.
     with chat_session_store.locked_user(user.id):
-        fresh = auth_adapter.login(user.email, password)
+        fresh = auth_adapter.login(user.email, password) if password is not None else user
         if fresh.id != user.id:
             raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.")
         token = generate_session_token()
@@ -38,13 +40,13 @@ def _issue_session(user: UserProfile, password: str, response: Response) -> User
 @router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest, response: Response) -> SignupResponse:
     user = auth_adapter.signup(payload)
-    return SignupResponse(user=_issue_session(user, payload.password, response))
+    return SignupResponse(user=_issue_session(user, response))
 
 
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, response: Response) -> LoginResponse:
     user = auth_adapter.login(payload.email, payload.password)
-    return LoginResponse(user=_issue_session(user, payload.password, response))
+    return LoginResponse(user=_issue_session(user, response, password=payload.password))
 
 
 @router.post("/logout", response_model=MessageResponse)

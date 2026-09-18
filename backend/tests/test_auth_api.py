@@ -32,6 +32,21 @@ def test_signup_sets_session_cookie_and_returns_user(client):
     assert "marketing_opt_in" not in body
 
 
+def test_signup_does_not_call_login(client, monkeypatch):
+    from backend.app.services import auth_adapter
+
+    def fail_login(*_args, **_kwargs):
+        raise AssertionError("signup must not call auth_adapter.login")
+
+    monkeypatch.setattr(auth_adapter, "login", fail_login)
+    r = _signup(client)
+    assert r.status_code == 201
+    assert "session_id" in r.cookies
+    body = r.json()["user"]
+    assert body["email"] == _SIGNUP_PAYLOAD["email"]
+    assert body["display_name"] == "Tester"
+
+
 def test_signup_duplicate_email_is_409(client):
     _signup(client)
     r = _signup(client)
