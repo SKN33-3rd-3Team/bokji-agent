@@ -28,7 +28,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import wraps
 import json
+import logging
 import os
 import re
 import threading
@@ -69,6 +71,43 @@ class LLMCallError(Exception):
     한다 - 잡아서 "LLM 단계를 못 거쳤다"는 사실을 정직하게 남기고, 절대
     추측한 값으로 대체하지 않는다.
     """
+
+
+def _error_identifier(value: object) -> str | None:
+    """로그에는 짧은 기계 식별자만 남긴다. 오류 메시지/본문은 기록하지 않는다."""
+    if isinstance(value, (str, int)) and re.fullmatch(r"[\w.-]{1,64}", str(value), re.ASCII):
+        return str(value)
+    return None
+
+
+def _log_runpod_failures(complete):
+    @wraps(complete)
+    def wrapped(*args, **kwargs):
+        try:
+            return complete(*args, **kwargs)
+        except LLMCallError as exc:
+            cause = exc.__cause__ or exc
+            response = getattr(cause, "response", None)
+            status = getattr(response, "status_code", None)
+            if not isinstance(status, int):
+                status = None
+            error = getattr(exc, "provider_error", {})
+            if response is not None:
+                try:
+                    body = response.json()
+                    error = body.get("error", {}) if isinstance(body, dict) else {}
+                except (ValueError, TypeError):
+                    error = {}
+            if not isinstance(error, dict):
+                error = {}
+            logging.getLogger(__name__).warning(
+                "RunPod %s status=%s code=%s type=%s",
+                "auth_failure" if status in (401, 403) else "server_failure",
+                status, _error_identifier(error.get("code")),
+                _error_identifier(error.get("type")) or type(cause).__name__,
+            )
+            raise
+    return wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +430,7 @@ class RunPodServerlessClient:
                 "생성자 인자로 직접 전달하세요)."
             )
 
+    @_log_runpod_failures
     def complete(
         self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
     ) -> str:
@@ -424,7 +464,9 @@ class RunPodServerlessClient:
 
         status = data.get("status")
         if status not in (None, "COMPLETED"):
-            raise LLMCallError(f"RunPod job 상태가 COMPLETED가 아님: {status!r} (raw={data!r})")
+            error = LLMCallError(f"RunPod job 상태가 COMPLETED가 아님: {status!r} (raw={data!r})")
+            error.provider_error = data.get("error", {})
+            raise error
 
         return self._parse_output(data.get("output"))
 
@@ -483,6 +525,7 @@ class RunPodPodClient:
         if not self.pod_id:
             raise ValueError("RunPodPodClient에는 pod_id가 필요합니다 (RUNPOD_POD_ID).")
 
+    @_log_runpod_failures
     def complete(
         self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
     ) -> str:
