@@ -27,7 +27,7 @@ python -m uvicorn backend.app.main:app --reload --port 8000
 | `CORS_ORIGINS` | 기본 `http://localhost:5173`. 쉼표로 허용 origin을 지정하며 브라우저 요청에 credentials를 포함한다 |
 | `COOKIE_SECURE` | 개발 기본값 `false`. HTTPS 운영에서는 반드시 `true` |
 | `AUTH_SESSION_TTL_DAYS` | 로그인 세션 유효기간, 기본 7일 |
-| `AUTH_DB_URL` / `AUTH_ENC_KEY` | [회원 DB 설정](../docs/AUTH_REMOTE_DB.md). 원격 MySQL/MariaDB는 `pymysql` 별도 설치 필요 |
+| `AUTH_DB_URL` / `AUTH_ENC_KEY` | [회원 DB 설정](../docs/AUTH_REMOTE_DB.md). 원격 MySQL/MariaDB용 `pymysql`은 백엔드 의존성에 포함 |
 | `RUNPOD_POD_ID` / `HF_TOKEN` 등 | [LLM 선택 및 폴백](../docs/RUNPOD_SETUP_DRAFT.md) |
 
 `/healthz`는 프로세스 응답 확인용이고 DB·LLM 준비 완료를 보장하지 않는다. 실제 벡터 데이터·임베딩 설정이 없으면 그래프 워밍업 실패 후에도 서버는 뜨지만, 그래프가 필요한 요청에서 `503 VECTOR_STORE_UNAVAILABLE`이 발생할 수 있다. 회원·옵션 API는 벡터 DB에 의존하지 않는다.

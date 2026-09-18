@@ -16,7 +16,7 @@ LLM 추론은 [RunPod/HuggingFace 안내](RUNPOD_SETUP_DRAFT.md), HTTP 인증·�
 | 항목 | 값 |
 | --- | --- |
 | 환경변수 | `AUTH_DB_URL=mysql://<user>:<password>@<host>:<port>/<dbname>` |
-| 드라이버 | 원격 DB 사용 시 `python -m pip install pymysql`. 기본/backend requirements에는 설치 항목으로 활성화돼 있지 않음 |
+| 드라이버 | `pymysql>=1.1`. `backend/requirements-backend.txt`가 `requirements-auth.txt`를 포함하므로 백엔드 설치 시 함께 설치 |
 | 스킴 | `mysql://` `mariadb://` `mysql+pymysql://` 셋 다 허용 |
 | 테이블 | 첫 실행 시 `users` 를 자동 생성(`init_schema`) — 수동 DDL 불필요 |
 | 암호화 키 | `AUTH_ENC_KEY` 를 **팀이 같은 값으로 공유**. DB 와 분리 보관 |
@@ -63,11 +63,11 @@ SHOW GRANTS FOR 'dev_account01'@'%';
 
 ## 2. 로컬(개발/시연 PC) 설정
 
-1. 드라이버 설치:
+1. 백엔드 의존성 설치:
    ```
-   python -m pip install pymysql
+   python -m pip install -r backend/requirements-backend.txt
    ```
-   [requirements-auth.txt](../requirements-auth.txt)의 `pymysql`은 주석 상태다. `backend/requirements-backend.txt` 설치만으로는 원격 드라이버가 설치되지 않는다.
+   [requirements-auth.txt](../requirements-auth.txt)의 `pymysql>=1.1`도 함께 설치된다.
 
 2. `.env` 에 추가 (`.env.example` 참고):
    ```
@@ -149,7 +149,7 @@ MySQL의 `CREATE TABLE IF NOT EXISTS`는 과거 테이블을 자동 보정하는
 | 화면에 "회원 데이터베이스에 연결할 수 없습니다" | 서버가 꺼져 있거나 `AUTH_DB_URL` 호스트/포트 오타, 또는 방화벽/포트포워딩이 막혀 있음. `python scripts/check_auth_db.py`로 단계별 확인 |
 | 화면에 "회원 DB 설정(AUTH_DB_URL)이 올바르지 않습니다" | URL 형식 오류(스킴/포트/`/dbname` 누락). `mysql://user:pass@host:port/dbname` 형태인지 확인 |
 | 화면에 "회원 테이블(users)을 준비하지 못했습니다 … CREATE 권한" | 앱 계정에 `bokji_auth.*` 의 `CREATE` 권한이 없음(1-1 참고). 또는 root 로 테이블을 미리 만든다 |
-| "AUTH_DB_URL 이 설정됐지만 pymysql 이 없습니다" | `pip install pymysql` |
+| "AUTH_DB_URL 이 설정됐지만 pymysql 이 없습니다" | `python -m pip install -r backend/requirements-backend.txt`로 백엔드 의존성을 다시 설치 |
 | 로그인은 되는데 이름/관심조건이 빈칸 | `AUTH_ENC_KEY` 가 가입 때와 다른 값. 팀이 같은 키를 공유해야 함 |
 | `Access denied for user` | 계정/비밀번호 오타 또는 `dev_account01` 권한 미부여(1-1 참고) |
 | 한글 이름이 깨져 저장됨 | DB/테이블이 `utf8mb4` 인지 확인(`init_schema` 가 만들면 자동으로 맞음) |
