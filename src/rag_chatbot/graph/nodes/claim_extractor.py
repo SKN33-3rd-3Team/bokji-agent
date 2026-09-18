@@ -39,6 +39,7 @@ import threading
 from typing import Sequence
 
 from ...llm import LLMCallError, LLMClient, loads_json_object
+from ...llm.client import GraphProviderError
 from ...deadline import BoundedExecutor, NodeDeadlineExceeded, active_write, check_deadline, wait_for
 
 
@@ -171,7 +172,7 @@ class LLMClaimExtractor:
             policy_id, text = item
             try:
                 self.extract(policy_id=policy_id, text=text)
-            except NodeDeadlineExceeded:
+            except (NodeDeadlineExceeded, GraphProviderError):
                 raise
             except Exception:  # noqa: BLE001 - prefetch 실패는 조용히 넘긴다
                 pass

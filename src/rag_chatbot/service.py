@@ -1006,7 +1006,7 @@ def _markdown_cell(value: object) -> str:
     )
 
 
-def _build_output_markdown(policies: list[PolicyView]) -> str:
+def _build_output_markdown(policies: list[PolicyView], *, automatic: bool = False) -> str:
     """최종 정책 목록을 렌더링 가능한 Markdown 표로 만든다."""
 
     counts = _build_summary(policies)
@@ -1036,7 +1036,7 @@ def _build_output_markdown(policies: list[PolicyView]) -> str:
                     policy.get("rank"),
                     policy.get("title"),
                     policy.get("eligibility_status"),
-                    policy.get("amount_label"),
+                    (policy.get("amount_label") or "") if automatic else policy.get("amount_label"),
                     policy.get("duplicate_status"),
                     source,
                 )
@@ -1047,7 +1047,7 @@ def _build_output_markdown(policies: list[PolicyView]) -> str:
 
 
 def _build_output_text(
-    policies: list[PolicyView], final_answer: str | None = None
+    policies: list[PolicyView], final_answer: str | None = None, *, automatic: bool = False
 ) -> str:
     """최종 답변과 정책 비교 결과를 일반 문자열로 만든다."""
 
@@ -1060,13 +1060,18 @@ def _build_output_text(
         for policy in policies:
             detail = policy.get("detail") or {}
             source_url = detail.get("source_url") or "출처 없음"
+            amount_text = f" | 지원금: {policy.get('amount_label', '지원금액 확인 필요')}"
+            if automatic and policy.get("amount_label") is None:
+                amount_text = ""
             lines.append(
                 f"[{policy.get('rank', '-')}] {policy.get('title') or policy.get('policy_id')}"
                 f" | 자격: {policy.get('eligibility_status', '미확인')}"
-                f" | 지원금: {policy.get('amount_label', '지원금액 확인 필요')}"
+                f"{amount_text}"
                 f" | 중복수급: {policy.get('duplicate_status', '미확인')}"
                 f" | 출처: {source_url}"
             )
+            if automatic and policy.get("verification_note"):
+                lines.append(policy["verification_note"])
         sections.append("\n".join(lines))
     elif not sections:
         sections.append("확인된 정책이 없습니다.")
@@ -1074,8 +1079,28 @@ def _build_output_text(
     return "\n\n".join(sections)
 
 
+def _auto_amount(view: PolicyView) -> None:
+    """금액 0/범위/단가/총액을 보존하고, 산정되지 않은 표시만 제거한다."""
+    numeric = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool)
+    has_range = lambda low, high: numeric(low) and numeric(high) and low <= high
+    if numeric(view.get("amount")) or has_range(view.get("amount_min"), view.get("amount_max")):
+        return
+    if numeric(view.get("amount_total")):
+        view["amount_label"] = f"총 {_won(view['amount_total'])}"
+        return
+    if has_range(view.get("total_amount_min"), view.get("total_amount_max")):
+        view["amount_label"] = f"총 {_won(view['total_amount_min'])}~{_won(view['total_amount_max'])}"
+        return
+    for field in ("amount", "amount_label", "amount_period", "amount_is_maximum", "amount_per_unit",
+                  "amount_total", "amount_min", "amount_max", "total_amount_min", "total_amount_max"):
+        view[field] = None
+
+
 def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatResponse:
+    automatic = bool(result.get("automatic_recommendation"))
     if "__interrupt__" in result:
+        if automatic:
+            raise RuntimeError("Automatic recommendation must not interrupt")
         interrupt_payload = result["__interrupt__"]
         # graph.invoke()는 리스트, graph.stream()은 튜플로 준다 - 둘 다 첫
         # 원소의 .value가 질문 문자열이다.
@@ -1114,6 +1139,10 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         }
 
     policies_raw = (result.get("assembled_result") or {}).get("policies", {})
+    if automatic:
+        policies_raw = {pid: entry for pid, entry in policies_raw.items()
+                        if result.get("answer_status") != "abstained"
+                        and (entry.get("eligibility") or {}).get("verdict") == "충족"}
     query_id = result.get("query_id", session_id)
     ranked = _rank_policies(policies_raw)
     policy_views = [
@@ -1122,9 +1151,19 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         )
         for i, (policy_id, entry) in enumerate(ranked)
     ]
+    if automatic:
+        for view in policy_views:
+            _auto_amount(view)
+            view["duplicate_conflicts"] = [item for item in view["duplicate_conflicts"]
+                                           if item["policy_id"] in policies_raw]
     _attach_duplicate_conflicts(policy_views)
 
     citations = result.get("final_citations", [])
+    final_answer = result.get("final_answer")
+    if automatic:
+        citations = [item for item in citations if item.get("policy_id") in policies_raw]
+        final_answer = (_build_output_text(policy_views, automatic=True) if policy_views
+                        else "현재 정보로 추천할 정책이 없습니다")
     # 화면(첨부 이미지)에 보이는 항목을 그대로 담는다:
     #   summary  -> 상단 요약 카드 3개(확인한 제도 / 자격 충족 / 미충족·미확인)
     #   profile  -> 사이드바 "파악한 정보"
@@ -1134,14 +1173,13 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "status": "answered",
         "session_id": session_id,
         "answer_status": result.get("answer_status"),
-        "final_answer": result.get("final_answer"),
+        "final_answer": final_answer,
         "summary": _build_summary(policy_views),
         "profile": _build_profile(result.get("slots")),
         "evidence_count": len(citations),
         "final_citations": citations,
         "policies": policy_views,
     }
-    final_answer = result.get("final_answer")
 
     return {
         "status": "answered",
@@ -1151,8 +1189,9 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "final_citations": citations,
         "policies": policy_views,
         "output_json": output_json,
-        "output_text": _build_output_text(policy_views, final_answer),
-        "output_markdown": _build_output_markdown(policy_views),
+        "output_text": final_answer if automatic else _build_output_text(policy_views, final_answer),
+        "output_markdown": (final_answer if automatic and not policy_views
+                            else _build_output_markdown(policy_views, automatic=automatic)),
         "llm_status": _llm_status(),
         "timing": _timing_report(),
     }
@@ -1174,6 +1213,7 @@ def ask(
     known_income_bracket: str | None = None,
     known_household_types: list[str] | None = None,
     known_veteran_status: str | None = None,
+    automatic_recommendation: bool = False,
     _on_graph_ready: Callable[[Any], None] | None = None,
 ) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
@@ -1295,6 +1335,8 @@ def ask(
                 if _VETERAN_INTEREST_KEYWORD not in interests:
                     interests.append(_VETERAN_INTEREST_KEYWORD)
                 initial_slots["interests"] = interests
+            if automatic_recommendation and known_veteran_status and is_valid_slot_value("veteran_status", known_veteran_status):
+                initial_slots["veteran_status"] = known_veteran_status
             result = run_graph(
                 graph,
                 user_input=user_input,
@@ -1302,6 +1344,7 @@ def ask(
                 top_k=top_k,
                 slots=initial_slots or None,
                 as_of=reference_date,
+                **({"automatic_recommendation": True} if automatic_recommendation else {}),
             )
             # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
             request_timer.close()

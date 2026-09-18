@@ -191,6 +191,7 @@ abstained: 검증된 근거가 아예 없어 답변 자체를 노출하지 않�
 
 
 class GraphState(TypedDict, total=False):
+    automatic_recommendation: bool
     query_id: str
     # N4가 반환할 정책 후보 수. 프론트엔드의 "정책 후보 수" 설정을 첫 요청에
     # 받아 체크포인터에 보존한다. 값 검증은 run_graph/search_policies가 맡는다.

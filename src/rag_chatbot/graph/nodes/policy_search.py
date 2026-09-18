@@ -243,9 +243,11 @@ def search_policies(
     query = _build_query(slots, state.get("initial_user_input"))
     region_condition = filter_plan["hard"].get("region")
     region_names = tuple(region_condition.get("any_of", ())) if region_condition else ()
+    nationwide_only = state.get("automatic_recommendation") and not region_names
     age_condition = filter_plan["hard"].get("birth_date")
     age = age_condition.get("age") if age_condition else None
     search_filter = VectorSearchFilter(
+        metadata_equals={"region_scope": "national"} if nationwide_only else {},
         region_names=region_names,
         as_of=as_of,
         age=age if isinstance(age, int) else None,
@@ -260,6 +262,10 @@ def search_policies(
         top_k=SEMANTIC_CANDIDATE_LIMIT,
         search_filter=search_filter,
     )
+    if nationwide_only:
+        # 검색 단계에서 scope를 제한하고, 후보 수를 자르기 전 대상 메타데이터도 확인한다.
+        results = [item for item in results if item.chunk.metadata.get("region_scope") == "national"
+                   and item.chunk.metadata.get("region_names") == ["전국"]]
     filtered = filter_candidates(
         results, support_conditions, filter_plan, user_types=user_types
     )

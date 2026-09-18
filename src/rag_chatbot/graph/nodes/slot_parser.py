@@ -129,6 +129,13 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
         raise ValueError("state['as_of'] must be a date")
     reference_date = reference_date or korea_today()
 
+    if state.get("automatic_recommendation"):
+        # 자동 추천은 서버 프로필만 사용한다. 질문도 파서의 추정값도 없다.
+        merged = dict(existing_slots)
+        _apply_age_subject(merged, {})
+        _apply_birth_date(merged, None, reference_date=reference_date)
+        return {"slots": merged, "slot_conflicts": None}
+
     extracted = extract_slots(
         user_input,
         existing_slots,

@@ -74,6 +74,37 @@ class LLMCallError(Exception):
     """
 
 
+class GraphProviderError(RuntimeError):
+    """자동 추천의 실제 provider 실패: 노드의 일반 규칙 폴백으로 흡수하지 않는다."""
+
+
+_strict_llm = ContextVar("strict_graph_llm", default=False)
+
+
+@contextmanager
+def strict_llm_scope(enabled: bool):
+    token = _strict_llm.set(enabled)
+    try:
+        yield
+    finally:
+        _strict_llm.reset(token)
+
+
+@dataclass
+class GraphLLMClient:
+    inner: LLMClient
+
+    def complete(self, prompt: str, *, system: str | None = None, max_tokens: int | None = None) -> str:
+        try:
+            return self.inner.complete(prompt, system=system, max_tokens=max_tokens)
+        except NodeDeadlineExceeded:
+            raise
+        except Exception as exc:
+            if _strict_llm.get():
+                raise GraphProviderError("Automatic recommendation provider failed") from exc
+            raise
+
+
 def _error_identifier(value: object) -> str | None:
     """로그에는 짧은 기계 식별자만 남긴다. 오류 메시지/본문은 기록하지 않는다."""
     if isinstance(value, (str, int)) and re.fullmatch(r"[\w.-]{1,64}", str(value), re.ASCII):

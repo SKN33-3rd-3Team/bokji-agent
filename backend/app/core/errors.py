@@ -56,20 +56,26 @@ class ApiError(Exception):
         return payload
 
 
-def _json_error(status_code: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"code": code, "message": message})
+def _error_headers(request: Request) -> dict[str, str]:
+    return {"Cache-Control": "no-store"} if request.url.path == "/api/v1/chat/recommendations" else {}
+
+
+def _json_error(request: Request, status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={"code": code, "message": message},
+                        headers=_error_headers(request))
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content=exc.body())
+        return JSONResponse(status_code=exc.status_code, content=exc.body(), headers=_error_headers(request))
 
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         return _json_error(
+            request,
             status.HTTP_400_BAD_REQUEST, "VALIDATION_ERROR", "요청 형식이 올바르지 않습니다."
         )
 
@@ -78,12 +84,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         # 어댑터가 세분화해서 잡지 못한 나머지(주로 sign_up/update_profile의
         # enum/형식 검증 실패가 bare AuthError로 올라온다) - service.py가 던지는
         # 원문 메시지를 그대로 노출한다(별도 attribute가 없는 케이스라 str(exc)뿐).
-        return _json_error(status.HTTP_400_BAD_REQUEST, "VALIDATION_ERROR", str(exc))
+        return _json_error(request, status.HTTP_400_BAD_REQUEST, "VALIDATION_ERROR", str(exc))
 
     @app.exception_handler(VectorStoreError)
     async def _handle_vector_store_error(request: Request, exc: VectorStoreError) -> JSONResponse:
         _log.warning("vector store unavailable: %s", exc)
         return _json_error(
+            request,
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "VECTOR_STORE_UNAVAILABLE",
             "검색 서비스에 일시적으로 연결할 수 없습니다.",
@@ -95,6 +102,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         _log.warning("embedding provider unavailable: %s", exc)
         return _json_error(
+            request,
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "VECTOR_STORE_UNAVAILABLE",
             "검색 서비스에 일시적으로 연결할 수 없습니다.",
@@ -107,6 +115,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         # 그 외 전 구간(라우팅/스키마 버그 등)을 위한 최종 안전망이다.
         _log.exception("unhandled error on %s", request.url.path)
         response = _json_error(
+            request,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "INTERNAL_ERROR",
             "일시적인 오류가 발생했습니다. 다시 시도해주세요.",

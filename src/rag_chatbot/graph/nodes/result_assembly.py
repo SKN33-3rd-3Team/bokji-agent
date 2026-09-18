@@ -136,6 +136,8 @@ def assemble_result(state: GraphState, store: ChromaVectorStore) -> dict:
 
     policies: dict[str, dict] = {}
     for policy_id, eligibility in eligibility_by_policy.items():
+        if state.get("automatic_recommendation") and eligibility.get("verdict") != "충족":
+            continue
         entry: dict = {"eligibility": eligibility}
 
         if eligibility.get("verdict") == "충족":
@@ -181,6 +183,21 @@ def assemble_result(state: GraphState, store: ChromaVectorStore) -> dict:
             entry["duplicate"] = duplicate
 
         policies[policy_id] = entry
+
+    if state.get("automatic_recommendation"):
+        for entry in policies.values():
+            if entry.get("duplicate"):
+                duplicate = dict(entry["duplicate"])
+                conflicts = [pid for pid in duplicate.get("conflicts_with", []) if pid in policies]
+                if conflicts != duplicate.get("conflicts_with", []):
+                    duplicate["condition_note"] = (
+                        "문서에 다른 제도와의 중복 제한 근거가 있습니다. "
+                        "실제 수급 여부와 적용 조건을 신청 기관에 확인하세요."
+                    )
+                    if duplicate.get("restriction_clauses"):
+                        duplicate["condition_note"] += " 원문: " + " / ".join(duplicate["restriction_clauses"])
+                duplicate["conflicts_with"] = conflicts
+                entry["duplicate"] = duplicate
 
     assembled_result = {"policies": policies}
 

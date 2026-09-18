@@ -36,5 +36,5 @@ def user_operation(current: AuthSessionRecord):
     with chat_session_store.locked_user(current.user_id):
         if not auth_session_store.is_active(current):
             raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.")
-        auth_adapter.get_profile(current.username, user_id=current.user_id)
-        yield
+        profile = auth_adapter.get_profile(current.username, user_id=current.user_id)
+        yield profile

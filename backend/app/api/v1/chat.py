@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
+
+from ...core.errors import ApiError
 
 from ...schemas.auth import MessageResponse
 from ...schemas.chat import (
@@ -17,6 +19,22 @@ from ...session_store.auth_session import AuthSessionRecord
 from ..deps import get_current_user, user_operation
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
+
+
+async def _no_recommendation_input(request: Request) -> None:
+    if request.query_params or await request.body():
+        raise ApiError(400, "VALIDATION_ERROR", "요청 형식이 올바르지 않습니다.")
+
+
+@router.post("/recommendations", response_model=ChatResponse)
+def recommend(
+    response: Response,
+    current: AuthSessionRecord = Depends(get_current_user),
+    _input: None = Depends(_no_recommendation_input),
+) -> ChatResponse:
+    response.headers["Cache-Control"] = "no-store"
+    with user_operation(current) as profile:
+        return chat_adapter.start_recommendations(profile, user_id=current.user_id)
 
 
 @router.post("/messages", response_model=ChatResponse)

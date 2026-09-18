@@ -39,6 +39,7 @@ from rag_design.vector_store import ChromaVectorStore
 
 from ..llm import LLMClient
 from ..deadline import graph_execution
+from ..llm.client import GraphLLMClient, strict_llm_scope
 from .nodes.answer_generation import generate_answer
 from .nodes.benefit_calculator import calculate_benefit_amount
 from .nodes.claim_extractor import LLMClaimExtractor, RuleBasedClaimExtractor
@@ -172,7 +173,7 @@ def route_after_benefit_calculator(state: GraphState) -> _BenefitCalcRoute:
     않는다.
     """
 
-    if state.get("calc_missing_slots") or state.get("calc_missing_choices"):
+    if not state.get("automatic_recommendation") and (state.get("calc_missing_slots") or state.get("calc_missing_choices")):
         return "request_calc_info"  # E18a: 계산에 필요한 소프트 슬롯/선택 옵션 재질문
     return "result_assembly"  # E18: 계산 완료(또는 더 물을 수 없어 확정)
 
@@ -236,6 +237,8 @@ def build_graph(
     부르면 이전 인터럽트 상태를 잃는다.
     """
 
+    if llm_client is not None:
+        llm_client = GraphLLMClient(llm_client)
     extractor = (
         LLMClaimExtractor(llm_client)
         if llm_client is not None
@@ -424,6 +427,7 @@ def run_graph(
     top_k: int = DEFAULT_TOP_K,
     as_of=None,
     safety_blocked: bool = False,
+    automatic_recommendation: bool = False,
 ) -> dict:
     """session_id별 새 턴을 시작한다(Edge E1). 이전 턴의 계산/검색 상태는 지운다.
 
@@ -459,6 +463,7 @@ def run_graph(
 
     # LangGraph는 같은 thread의 부분 입력을 병합하므로 모든 턴 상태를 초기화한다.
     initial_state: GraphState = {
+        "automatic_recommendation": automatic_recommendation,
         "query_id": session_id,
         "policy_top_k": top_k,
         "as_of": as_of if as_of is not None else korea_today(),
@@ -499,7 +504,7 @@ def run_graph(
         "answer_status": None,
     }
     config = {"configurable": {"thread_id": session_id}}
-    with graph_execution():
+    with graph_execution(), strict_llm_scope(automatic_recommendation):
         return graph.invoke(initial_state, config=config)
 
 

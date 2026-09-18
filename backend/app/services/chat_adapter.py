@@ -20,6 +20,7 @@ from src.rag_chatbot.graph.nodes.request_calc_info import CalculationInputError
 from ..core.document_parsing import split_document_items
 from ..core.errors import ApiError
 from ..schemas.chat import ChatRequest, ChatResponse
+from ..schemas.auth import UserProfile
 from ..session_store.chat_session import chat_session_store
 
 _log = logging.getLogger(__name__)
@@ -87,6 +88,30 @@ def _cache_last_response(session_id: str, raw: dict) -> None:
 
 
 def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
+    return _start_chat(
+        payload.message, user_id=user_id,
+        top_k=payload.top_k if payload.top_k is not None else 5,
+        extra_interests=payload.extra_interests or None,
+        known_household_types=payload.known_household_types or None,
+        **{field: getattr(payload, field) for field in (
+            "known_region", "known_gender", "known_birth_date", "known_disability_status",
+            "known_income_bracket", "known_veteran_status",
+        )},
+    )
+
+
+def start_recommendations(profile: UserProfile, *, user_id: int) -> ChatResponse:
+    return _start_chat(
+        "", user_id=user_id, automatic_recommendation=True,
+        extra_interests=profile.interests or None,
+        **{f"known_{field}": getattr(profile, field) for field in (
+            "region", "gender", "birth_date", "disability_status", "income_bracket",
+            "household_types", "veteran_status",
+        )},
+    )
+
+
+def _start_chat(message: str, *, user_id: int, **kwargs) -> ChatResponse:
     session_id = str(uuid.uuid4())
     graph = None
 
@@ -97,17 +122,9 @@ def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
     try:
         raw = _run(
             ask,
-            payload.message,
+            message,
             session_id,
-            top_k=payload.top_k if payload.top_k is not None else 5,
-            extra_interests=payload.extra_interests or None,
-            known_region=payload.known_region,
-            known_gender=payload.known_gender,
-            known_birth_date=payload.known_birth_date,
-            known_disability_status=payload.known_disability_status,
-            known_income_bracket=payload.known_income_bracket,
-            known_household_types=payload.known_household_types or None,
-            known_veteran_status=payload.known_veteran_status,
+            **kwargs,
             _on_graph_ready=capture_graph,
         )
         raw = _augment_required_documents(raw)
