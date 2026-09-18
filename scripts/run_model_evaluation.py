@@ -71,6 +71,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Sequence
 
+
+_EVAL_EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_EVAL_PHONE_PATTERN = re.compile(r"01[0-9]-?\d{3,4}-?\d{4}")
+_EVAL_RESIDENT_ID_PATTERN = re.compile(r"\d{6}-?[1-4]\d{6}")
+_EVAL_BIRTH_DATE_PATTERN = re.compile(
+    r"(?<!\d)(?:19|20)\d{2}\s*[-./년]\s*\d{1,2}\s*[-./월]\s*\d{1,2}\s*일?(?!\d)"
+)
+
+
+def _redact_evaluation_text(text: str) -> str:
+    """Remove direct identifiers before sending or persisting evaluation text."""
+
+    redacted = _EVAL_EMAIL_PATTERN.sub("[이메일]", str(text))
+    redacted = _EVAL_PHONE_PATTERN.sub("[전화번호]", redacted)
+    redacted = _EVAL_RESIDENT_ID_PATTERN.sub("[주민번호]", redacted)
+    return _EVAL_BIRTH_DATE_PATTERN.sub("[생년월일]", redacted)
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -158,7 +175,11 @@ def _build_answer_quality_cases(
             for policy in policies
             if isinstance(policy, Mapping) and str(policy.get("policy_id")) in cited_ids
         )
-        question_text = str(questions_by_id.get(record["question_id"], {}).get("question", ""))
+        question_text = _redact_evaluation_text(
+            str(questions_by_id.get(record["question_id"], {}).get("question", ""))
+        )
+        final_answer = _redact_evaluation_text(final_answer)
+        evidence_text = _redact_evaluation_text(evidence_text)
         cases.append(
             AnswerQualityCase(
                 question_id=str(record["question_id"]),
@@ -396,7 +417,7 @@ def _answer_quality_section_md(
         worst_lines.append(
             f"- `{record.question_id}` (판정: {record.faithfulness.verdict}, "
             f"점수: {record.faithfulness.score:.1f}): {question_text!r} — "
-            f"{record.faithfulness.reason or '설명 없음'}"
+            f"{_redact_evaluation_text(record.faithfulness.reason) or '설명 없음'}"
         )
     worst_section = "\n".join(worst_lines) if worst_lines else "- 없음 (표본 내 근거 미흡 답변 없음)"
 
@@ -737,15 +758,15 @@ def main() -> int:
                     "judged": record.faithfulness.judged,
                     "score": record.faithfulness.score,
                     "verdict": record.faithfulness.verdict,
-                    "reason": record.faithfulness.reason,
-                    "error": record.faithfulness.error,
+                    "reason": _redact_evaluation_text(record.faithfulness.reason),
+                    "error": _redact_evaluation_text(record.faithfulness.error or "") or None,
                 },
                 "relevancy": {
                     "judged": record.relevancy.judged,
                     "score": record.relevancy.score,
                     "verdict": record.relevancy.verdict,
-                    "reason": record.relevancy.reason,
-                    "error": record.relevancy.error,
+                    "reason": _redact_evaluation_text(record.relevancy.reason),
+                    "error": _redact_evaluation_text(record.relevancy.error or "") or None,
                 },
             }
         results_lines.append(json.dumps(row, ensure_ascii=False))
