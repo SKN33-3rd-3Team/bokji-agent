@@ -15,6 +15,7 @@ from fastapi import status
 from rag_design.embeddings import EmbeddingProviderError
 from rag_design.vector_store import VectorStoreError
 from src.rag_chatbot.service import answer_followup, ask, get_graph
+from src.rag_chatbot.graph.nodes.request_calc_info import CalculationInputError
 
 from ..core.document_parsing import split_document_items
 from ..core.errors import ApiError
@@ -27,6 +28,8 @@ _log = logging.getLogger(__name__)
 def _run(fn, *args, **kwargs) -> dict:
     try:
         return fn(*args, **kwargs)
+    except CalculationInputError as exc:
+        raise ApiError(status.HTTP_400_BAD_REQUEST, "VALIDATION_ERROR", str(exc)) from exc
     except (VectorStoreError, EmbeddingProviderError):
         # 503 VECTOR_STORE_UNAVAILABLE 매핑은 app/core/errors.py의 전역
         # 핸들러가 담당한다 - 여기서는 그대로 다시 던진다.
@@ -127,7 +130,7 @@ def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
         raise
 
 
-def continue_chat(session_id: str, message: str, *, user_id: int) -> ChatResponse:
+def continue_chat(session_id: str, message: str | dict, *, user_id: int) -> ChatResponse:
     with chat_session_store.locked(session_id, user_id=user_id) as record:
         if record is None:
             raise ApiError(

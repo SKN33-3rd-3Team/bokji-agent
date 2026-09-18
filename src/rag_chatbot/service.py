@@ -178,6 +178,7 @@ from rag_design.vector_store import (
 
 from .graph import build_graph, resume_graph, run_graph
 from .graph.nodes.slot_parser import normalize_region_input
+from .graph.nodes.request_calc_info import calculation_input_fields
 from .graph.slot_schema import (
     UNKNOWN,
     DISABILITY_STATUS_KO,
@@ -498,6 +499,10 @@ class ChatResponse(TypedDict, total=False):
     session_id: str
     question: str
     missing_slots: list[str]
+    interrupt_id: str | None
+    calc_missing_slots: list[str]
+    calc_missing_choices: list[dict]
+    calc_slot_inputs: list[dict]
     # 회원 프로필 값과 이번 대화에서 말한 값이 달라 되묻는 슬롯이 있을
     # 때만 채워진다(슬롯 이름 -> {"profile": "...", "chat": "..."}, 예:
     # {"region": {"profile": "경기도", "chat": "서울특별시"}}). 프론트엔드는
@@ -1076,13 +1081,17 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         # 원소의 .value가 질문 문자열이다.
         question = interrupt_payload[0].value
         missing_slots = result.get("missing_slots", [])
+        calculation = calculation_input_fields(result)
+        calculation["interrupt_id"] = getattr(interrupt_payload[0], "id", None)
         return {
+            **calculation,
             "status": "needs_input",
             "question": question,
             "session_id": session_id,
             "missing_slots": missing_slots,
             "slot_conflicts": result.get("slot_conflicts"),
             "output_json": {
+                **calculation,
                 "status": "needs_input",
                 "session_id": session_id,
                 "question": question,
@@ -1299,7 +1308,7 @@ def ask(
             return _to_chat_response(result, session_id=session_id, store=store)
 
 
-def answer_followup(session_id: str, user_input: str) -> ChatResponse:
+def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
     """되묻기에는 답을 전달하고, 완료된 상담에는 같은 세션으로 새 질문을 실행한다.
 
     새 질문은 알려진 프로필을 이어받지만 이전 문답을 메시지 이력으로 전달하지

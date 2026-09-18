@@ -34,7 +34,8 @@ def send_followup(
     current: AuthSessionRecord = Depends(get_current_user),
 ) -> ChatResponse:
     with user_operation(current):
-        return chat_adapter.continue_chat(session_id, payload.message, user_id=current.user_id)
+        answer = payload.calc_answers.model_dump() if payload.calc_answers is not None else payload.message
+        return chat_adapter.continue_chat(session_id, answer, user_id=current.user_id)
 
 
 @router.post(

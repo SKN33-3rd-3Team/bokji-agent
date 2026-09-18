@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
 from src.rag_chatbot.graph.slot_schema import parse_birth_date
 
@@ -105,10 +105,26 @@ class ChatRequest(BaseModel):
     known_veteran_status: _KnownVeteranStatus = None
 
 
+class CalculationAnswers(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    interrupt_id: _NonBlankStr
+    slots: dict[Literal["marital_status", "pregnancy_status", "children_count", "household_size"],
+                StrictStr | StrictInt] = Field(default_factory=dict)
+    choices: dict[str, StrictStr] = Field(default_factory=dict)
+
+
 class FollowupRequest(BaseModel):
     """API-11 요청 바디."""
 
-    message: _NonBlankStr
+    message: _NonBlankStr | None = None
+    calc_answers: CalculationAnswers | None = None
+
+    @model_validator(mode="after")
+    def require_one_answer(self):
+        if (self.message is None) == (self.calc_answers is None):
+            raise ValueError("message 또는 calc_answers 중 하나를 입력해주세요.")
+        return self
 
 
 class PolicyQuestionRequest(BaseModel):
@@ -186,6 +202,21 @@ class PolicyView(BaseModel):
     detail: PolicyDetail = Field(default_factory=PolicyDetail)
 
 
+class CalculationSlotInput(BaseModel):
+    slot: str
+    label: str
+    input_type: Literal["select", "number"]
+    options: list[dict[str, str]] = Field(default_factory=list)
+    minimum: int | None = None
+    maximum: int | None = None
+
+
+class CalculationChoice(BaseModel):
+    policy_id: str
+    labels: list[str]
+    policy_title: str
+
+
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -193,6 +224,10 @@ class ChatResponse(BaseModel):
     session_id: str
     question: str | None = None
     missing_slots: list[str] = Field(default_factory=list)
+    interrupt_id: str | None = None
+    calc_missing_slots: list[str] = Field(default_factory=list)
+    calc_missing_choices: list[CalculationChoice] = Field(default_factory=list)
+    calc_slot_inputs: list[CalculationSlotInput] = Field(default_factory=list)
     slot_conflicts: dict[str, dict[str, str]] | None = None
     answer_status: str | None = None
     final_answer: str | None = None

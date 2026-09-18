@@ -51,9 +51,11 @@ from .nodes.general_law_reference_search import search_general_law_references
 from .nodes.law_source_resolver import VectorStoreLawSourceResolver
 from .nodes.policy_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, search_policies
 from .nodes.request_calc_info import (
+    CalculationInputError,
     apply_calc_skip,
     merge_calc_choice_answer,
     merge_calc_slot_answer,
+    merge_structured_calc_answer,
     request_calc_info_input,
 )
 from .nodes.request_missing_slots import request_missing_slot_input
@@ -133,6 +135,8 @@ def _await_calc_info_input(state: GraphState, llm_client: LLMClient | None = Non
 
     update = request_calc_info_input(state)
     resumed_user_input = interrupt(update["followup_question"])
+    if isinstance(resumed_user_input, dict):
+        return {**update, **merge_structured_calc_answer(state, resumed_user_input), "needs_input": False}
     missing_fields = list(state.get("calc_missing_slots") or [])
     missing_choices = list(state.get("calc_missing_choices") or [])
     merged_slots = merge_calc_slot_answer(
@@ -494,7 +498,7 @@ def run_graph(
     return graph.invoke(initial_state, config=config)
 
 
-def resume_graph(graph: Any, *, session_id: str, user_input: str) -> dict:
+def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict:
     """실제 interrupt는 재개하고, 완료된 상담에는 같은 ID로 새 턴을 시작한다.
 
     실패/미완료 체크포인트를 완료된 답변으로 취급하거나 무조건 재실행하지 않는다.
@@ -504,6 +508,12 @@ def resume_graph(graph: Any, *, session_id: str, user_input: str) -> dict:
     snapshot = graph.get_state(config)
     if any(task.error for task in snapshot.tasks):
         raise ValueError("The previous graph execution failed; start a new session")
+    if isinstance(user_input, dict):
+        # 잠긴 현재 세션의 실제 interrupt ID와 정책/슬롯을 검사한 뒤에만 invoke한다.
+        pending = [(task.name, pause.id) for task in snapshot.tasks for pause in task.interrupts]
+        if len(pending) != 1 or pending[0] != ("request_calc_info", user_input.get("interrupt_id")):
+            raise CalculationInputError("현재 계산 질문에 대한 답변이 아닙니다.")
+        merge_structured_calc_answer(snapshot.values, user_input)
     if any(task.interrupts for task in snapshot.tasks):
         return graph.invoke(Command(resume=user_input), config=config)
     if snapshot.next or not snapshot.values or snapshot.values.get("answer_status") not in (
