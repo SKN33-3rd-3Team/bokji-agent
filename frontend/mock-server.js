@@ -41,14 +41,18 @@ function newUser(payload) {
     password: payload.password || "test1234!",
     display_name: payload.name ?? payload.display_name ?? `테스트유저${id}`,
     created_at: new Date().toISOString(),
-    region: payload.region ?? "서울특별시",
-    gender: payload.gender ?? "female",
-    birth_date: payload.birth_date ?? "2003-08-19",
-    disability_status: payload.disability_status ?? "not_registered",
-    veteran_status: payload.veteran_status ?? "not_registered",
-    income_bracket: payload.income_bracket ?? "pct_75_100",
-    household_types: payload.household_types ?? ["multi_child"],
-    interests: payload.interests ?? ["육아", "주거"],
+    // 기본 정보(선택) 항목은 실제로 입력 안 하면 빈 값 그대로 저장해야 한다.
+    // 예전엔 fallback 기본값(서울/여성/2003년생 등)을 채워 넣었는데, 그러면
+    // API-14(자동 추천)의 "가입 선택 8개가 모두 없어도 초기/계산 질문 없이
+    // 0건을 반환한다"는 정상 0건 시나리오를 mock으로 재현할 방법이 없었다.
+    region: payload.region ?? "",
+    gender: payload.gender ?? "",
+    birth_date: payload.birth_date ?? "",
+    disability_status: payload.disability_status ?? "",
+    veteran_status: payload.veteran_status ?? "",
+    income_bracket: payload.income_bracket ?? "",
+    household_types: payload.household_types ?? [],
+    interests: payload.interests ?? [],
     marketing_opt_in: payload.marketing_opt_in ?? false,
     failedAttempts: 0,
     lockedUntil: 0,
@@ -118,7 +122,9 @@ function readBody(req) {
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  // API-14 시트 "Response Headers": 성공·오류 응답은 Content-Type +
+  // Cache-Control: no-store. 브라우저 저장 방지일 뿐 서버 세션 수명과는 별개.
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
   res.end(text);
 }
 
@@ -332,6 +338,10 @@ function chatResponseAnswered(sessionId, topK) {
     session_id: sessionId,
     question: null,
     missing_slots: [],
+    interrupt_id: null,
+    calc_missing_slots: [],
+    calc_missing_choices: [],
+    calc_slot_inputs: [],
     slot_conflicts: null,
     answer_status: "complete",
     final_answer: `말씀하신 조건에 맞는 지원 제도 ${policies.length}건을 찾았어요. 아래에서 자격·지원금·중복수급 여부를 확인해 보세요.`,
@@ -342,6 +352,41 @@ function chatResponseAnswered(sessionId, topK) {
     output_markdown: `### 검색 결과\n${policies.map((p) => `- ${p.title}`).join("\n")}`,
     llm_status: mockLlmStatus(),
     timing: mockTiming(),
+  };
+}
+
+// API-14 정상 0건 — 문구는 정의서 예시 그대로(마침표 없음).
+function chatResponseEmptyRecommendation(sessionId) {
+  const text = "현재 정보로 추천할 정책이 없습니다";
+  return {
+    status: "answered",
+    session_id: sessionId,
+    question: null,
+    missing_slots: [],
+    interrupt_id: null,
+    calc_missing_slots: [],
+    calc_missing_choices: [],
+    calc_slot_inputs: [],
+    slot_conflicts: null,
+    answer_status: "complete",
+    final_answer: text,
+    final_citations: [],
+    policies: [],
+    output_json: {
+      status: "answered",
+      session_id: sessionId,
+      answer_status: "complete",
+      final_answer: text,
+      summary: { checked: 0, eligible: 0, not_eligible_or_unknown: 0 },
+      profile: [],
+      evidence_count: 0,
+      final_citations: [],
+      policies: [],
+    },
+    output_text: text,
+    output_markdown: text,
+    llm_status: emptyLlmStatus(),
+    timing: emptyTiming(),
   };
 }
 
@@ -358,6 +403,10 @@ function chatResponseNeedsRegion(sessionId) {
     question:
       "아래 정보를 알려주시면 더 정확하게 확인해드릴게요.\n1. 거주 지역이 어디신가요?\n2. 성별이 어떻게 되시나요?\n3. 생년월일이 언제신가요?\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
     missing_slots: ["region", "gender", "birth_date"],
+    interrupt_id: null,
+    calc_missing_slots: [],
+    calc_missing_choices: [],
+    calc_slot_inputs: [],
     slot_conflicts: null,
     answer_status: null,
     final_answer: null,
@@ -378,6 +427,10 @@ function chatResponseConflict(sessionId) {
     question:
       "회원 정보에는 소득 수준이(가) '중위소득 75~100%'로 되어 있는데, 방금은 '중위소득 50~75%'라고 하셨어요.\n회원 정보에는 가구 유형이(가) '다자녀'로 되어 있는데, 방금은 '한부모, 1인 가구'라고 하셨어요. 어느 쪽이 맞는지 다시 알려주세요.",
     missing_slots: [],
+    interrupt_id: null,
+    calc_missing_slots: [],
+    calc_missing_choices: [],
+    calc_slot_inputs: [],
     slot_conflicts: {
       income_bracket: { profile: "중위소득 75~100%", chat: "중위소득 50~75%" },
       household_types: { profile: "다자녀", chat: "한부모, 1인 가구" },
@@ -554,6 +607,34 @@ const routes = [
       // 요청에는 없으므로 세션 상태에 기억해뒀다가 답변 단계에서 그대로 쓴다.
       chatSessions.set(sessionId, { userId: user.id, step: 1, topK: body.top_k });
       sendJson(res, 200, chatResponseNeedsRegion(sessionId));
+    },
+  },
+  {
+    // API-14(자동추천_API_정의서_v1.0.xlsx) — 로그인 직후 1회, 요청 바디 없이
+    // 호출. 서버가 인증 쿠키로 식별한 계정의 DB 프로필만으로 판단한다(client
+    // user_id/profile/known_*/message/top_k/session_id는 받지 않음).
+    method: "POST",
+    pattern: /^\/api\/v1\/chat\/recommendations$/,
+    handler: async (req, res) => {
+      const user = getCurrentUser(req);
+      if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
+      await delay(QA_DELAY_MS);
+      const sessionId = crypto.randomUUID();
+      chatSessions.set(sessionId, { userId: user.id, step: 3 });
+      const hasAnyProfile = Boolean(
+        user.region ||
+          user.gender ||
+          user.birth_date ||
+          user.disability_status ||
+          user.income_bracket ||
+          user.veteran_status ||
+          (user.household_types && user.household_types.length > 0),
+      );
+      if (!hasAnyProfile) {
+        return sendJson(res, 200, chatResponseEmptyRecommendation(sessionId));
+      }
+      // 서버의 현재 후보 수 기본값(5)을 그대로 쓴다 - 클라이언트가 top_k를 보내지 않는다.
+      sendJson(res, 200, chatResponseAnswered(sessionId, undefined));
     },
   },
   {

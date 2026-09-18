@@ -103,16 +103,20 @@ export function MyPage() {
     e.preventDefault();
     setSaveError(null);
     try {
-      // API-05 비고: 부분 diff 대신 화면에 있는 값 전부를 매번 전송한다(실수 방지 권장 방식).
+      // API-05 비고: 부분 diff 대신 화면에 있는 값 전부를 매번 전송한다(실수 방지 권장 방식,
+      // "필드 생략=미수정, 빈 값 전달=지움"). gender 등을 `|| undefined`로 보내면 "선택 안
+      // 함"(빈 문자열)으로 되돌렸을 때 그 필드 자체가 요청에서 빠져 "미수정"으로 처리되고
+      // 예전 값이 그대로 남는 버그가 있었다 - 빈 값도 그대로 보내야 서버가 지운다
+      // (UpdateProfileRequest가 이 필드들에 ""를 정식으로 허용하므로 캐스팅 불필요).
       await updateProfile.mutateAsync({
         display_name: displayName,
         region,
-        gender: gender || undefined,
+        gender,
         birth_date: birthDate,
         interests,
-        disability_status: disabilityStatus || undefined,
-        veteran_status: veteranStatus || undefined,
-        income_bracket: incomeBracket || undefined,
+        disability_status: disabilityStatus,
+        veteran_status: veteranStatus,
+        income_bracket: incomeBracket,
         household_types: householdTypes as HouseholdType[],
       });
       setEditMode(false);
@@ -260,13 +264,25 @@ export function MyPage() {
                 <span style={{ fontSize: 13.5, fontWeight: 700 }}>{value}</span>
               </div>
             ))}
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "13px 2px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "13px 2px", borderBottom: "1px solid var(--border)" }}>
               <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>가구 유형</span>
               <span>
                 {profile.household_types.length
                   ? profile.household_types.map((code) => (
                       <span key={code} style={{ background: "var(--violet-soft)", color: "var(--violet)", fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 999, marginLeft: 6 }}>
                         {HOUSEHOLD_TYPE_LABELS_KO[code] ?? code}
+                      </span>
+                    ))
+                  : <span className="text-faint">미설정</span>}
+              </span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "13px 2px" }}>
+              <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>관심 지원조건</span>
+              <span>
+                {profile.interests.length
+                  ? profile.interests.map((label) => (
+                      <span key={label} style={{ background: "var(--primary-soft)", color: "var(--primary-hover)", fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 999, marginLeft: 6 }}>
+                        {label}
                       </span>
                     ))
                   : <span className="text-faint">미설정</span>}
@@ -420,9 +436,9 @@ export function MyPage() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
             로그아웃
           </button>
-          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={() => navigate("/chat")}>
+          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={() => navigate("/home")}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-            상담으로 돌아가기
+            홈으로 돌아가기
           </button>
         </div>
       </div>

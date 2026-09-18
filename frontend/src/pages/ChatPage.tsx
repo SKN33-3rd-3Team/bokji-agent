@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
 import { ErrorBanner } from "@/components/common/ErrorBanner";
-import { Toast } from "@/components/common/Toast";
 import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ExamplePrompts } from "@/components/chat/ExamplePrompts";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
@@ -22,7 +20,7 @@ import { usePolicySelection } from "@/features/chat/usePolicySelection";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { useAuth } from "@/features/auth/useAuth";
 import { getChatDefaults } from "@/api/userApi";
-import { ApiError } from "@/api/client";
+import { ApiError, toErrorMessage } from "@/api/client";
 import { CHAT_INPUT_PLACEHOLDER, GUIDANCE_OFFICIAL, INTRO_GREETING_BODY, INTRO_GREETING_HINT, INTRO_GREETING_TITLE } from "@/constants/labels";
 import type { PolicyView } from "@/types/chat";
 import { FALLBACK_DEFAULT_TOP_K } from "@/constants/labels";
@@ -31,20 +29,6 @@ export function ChatPage() {
   const { user } = useAuth();
   const chat = useChatSession();
   const compare = usePolicySelection();
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  // API-01 비고: 회원가입 직후 S-03으로 넘어올 때 딱 한 번 성공 토스트를 보여준다.
-  const [signupToast, setSignupToast] = useState(
-    Boolean((location.state as { justSignedUp?: boolean } | null)?.justSignedUp),
-  );
-  useEffect(() => {
-    if (!signupToast) return;
-    navigate(location.pathname, { replace: true, state: {} }); // 새로고침 시 재노출 방지
-    const timer = setTimeout(() => setSignupToast(false), 2500);
-    return () => clearTimeout(timer);
-    // 마운트 시 1회만 — location.state는 위에서 이미 초기값으로 읽었다.
-  }, []);
 
   const [input, setInput] = useState("");
   const [supportConditions, setSupportConditions] = useState<string[]>([]);
@@ -121,11 +105,7 @@ export function ChatPage() {
   const activePolicy = response?.policies.find((p) => p.policy_id === chat.selectedPolicyId) ?? null;
 
   // API-10/11 에러(예: GRAPH_EXECUTION_ERROR, SESSION_NOT_FOUND)를 서버 메시지 그대로 노출한다.
-  const sendErrorMessage = chat.sendError
-    ? chat.sendError instanceof ApiError
-      ? chat.sendError.message
-      : "일시적인 오류가 발생했습니다. 다시 시도해주세요."
-    : null;
+  const sendErrorMessage = chat.sendError ? toErrorMessage(chat.sendError) : null;
 
   return (
     <AppShell
@@ -273,7 +253,6 @@ export function ChatPage() {
         {newChatError && <p className="inline-err">{newChatError}</p>}
       </ConfirmModal>
 
-      {signupToast && <Toast message="회원가입이 완료되었습니다!" />}
     </AppShell>
   );
 }

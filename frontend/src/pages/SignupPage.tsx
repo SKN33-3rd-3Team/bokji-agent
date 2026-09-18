@@ -94,7 +94,9 @@ export function SignupPage() {
         terms_agreed: termsAgreed,
         privacy_agreed: privacyAgreed,
       });
-      navigate("/chat", { state: { justSignedUp: true } });
+      // 로그인과 동일하게 마이페이지 정보 기반 정책 자동 추천 홈 화면으로
+      // 이동한다(PR #55 후속, LoginPage.tsx와 동일 정책 / API-14).
+      navigate("/home", { state: { justSignedUp: true } });
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.errorCode === "USERNAME_TAKEN") {

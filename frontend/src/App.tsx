@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { LoginPage } from "@/pages/LoginPage";
 import { SignupPage } from "@/pages/SignupPage";
+import { HomePage } from "@/pages/HomePage";
 import { ChatPage } from "@/pages/ChatPage";
 import { MyPage } from "@/pages/MyPage";
 import { useAuth } from "@/features/auth/useAuth";
@@ -23,6 +24,14 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
+        <Route
+          path="/home"
+          element={
+            <RequireAuth>
+              <HomePage />
+            </RequireAuth>
+          }
+        />
         <Route
           path="/chat"
           element={

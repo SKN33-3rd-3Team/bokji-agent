@@ -156,6 +156,24 @@ ol {
   color: var(--text);
 }
 
+.app-brand-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: none;
+  padding: 6px 10px 6px 6px;
+  margin: 0 0 0 -6px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.app-brand-btn:hover {
+  background: var(--primary-soft);
+}
+.app-brand-btn:active {
+  background: var(--sky-1);
+}
+
 .app-body {
   flex: 1;
   overflow-y: auto;

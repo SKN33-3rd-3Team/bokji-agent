@@ -147,12 +147,39 @@ export interface Timing {
 /** slot_conflicts: {슬롯명: {profile, chat}} */
 export type SlotConflicts = Record<string, { profile: string; chat: string }>;
 
+/**
+ * D5 공용 필드(자동추천_API_정의서_v1.0.xlsx 계약참조 시트) — 금액 계산에
+ * 필요한 슬롯을 select/number 위젯으로 묻는 계산 interrupt 응답에 쓰인다.
+ * ⚠ 이 4개 필드는 모든 ChatResponse에 항상 존재해야 하는 스키마 자체는
+ * 반영했지만, 실제로 calc_slot_inputs/calc_missing_choices를 렌더링해
+ * calc_answers를 제출하는 화면(일반 상담의 금액 계산 되묻기 UI)은 아직 없다
+ * - API-14(자동 추천)는 항상 null/[]/[]/[]만 받으므로 이 갭과 무관하다.
+ */
+export interface CalculationSlotInput {
+  slot: string;
+  label: string;
+  input_type: "select" | "number";
+  options: { value: string; label: string }[];
+  minimum: number | null;
+  maximum: number | null;
+}
+
+export interface CalculationChoice {
+  policy_id: string;
+  labels: string[];
+  policy_title: string;
+}
+
 /** API-10/11 공용 응답(ChatResponse) */
 export interface ChatResponse {
   status: "needs_input" | "answered";
   session_id: string;
   question: string | null;
   missing_slots: string[];
+  interrupt_id: string | null;
+  calc_missing_slots: string[];
+  calc_missing_choices: CalculationChoice[];
+  calc_slot_inputs: CalculationSlotInput[];
   slot_conflicts: SlotConflicts | null;
   answer_status: "complete" | "partial" | "abstained" | null;
   final_answer: string | null;

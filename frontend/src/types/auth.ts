@@ -86,16 +86,22 @@ export interface LoginRequest {
   password: string;
 }
 
-/** API-05 Request Body (PATCH — 필드 생략=미수정, 빈 값 전달=지움) */
+/**
+ * API-05 Request Body (PATCH — 필드 생략=미수정, 빈 값 전달=지움).
+ * gender/disability_status/veteran_status/income_bracket은 MyPage.tsx가
+ * "선택 안 함"을 빈 문자열로 그대로 전송해 서버가 지우게 하므로, 각 코드
+ * 유니온 타입에 ""도 명시적으로 포함한다(타입을 속이는 `as Gender` 캐스팅
+ * 대신 실제로 보내는 값을 타입에 반영).
+ */
 export interface UpdateProfileRequest {
   display_name?: string;
   region?: string;
-  gender?: Gender;
+  gender?: Gender | "";
   birth_date?: string;
   interests?: string[];
-  disability_status?: DisabilityStatus;
-  veteran_status?: VeteranStatus;
-  income_bracket?: IncomeBracket;
+  disability_status?: DisabilityStatus | "";
+  veteran_status?: VeteranStatus | "";
+  income_bracket?: IncomeBracket | "";
   household_types?: HouseholdType[];
 }
 

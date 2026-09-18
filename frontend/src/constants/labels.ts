@@ -157,3 +157,13 @@ export const INTRO_GREETING_HINT = "아래 예시를 눌러 바로 시작할 수
 /** S06-05: 공식 확인 안내 고정 문구(GUIDANCE_OFFICIAL) */
 export const GUIDANCE_OFFICIAL =
   "정확한 내용은 복지로 또는 국가법령정보센터 공식 페이지에서 확인해 주세요.";
+
+/**
+ * 홈 화면(로그인 직후 진입) — API-14(자동추천_API_정의서_v1.0.xlsx)
+ * POST /api/v1/chat/recommendations를 요청 바디 없이 1회 호출한 결과를
+ * 보여주는 화면. 예전에는 이 화면이 진짜 추천 API가 없어 API-10에 고정
+ * 질의 문자열을 실어 보내는 방식으로 흉내 냈지만(HOME_INITIAL_QUERY),
+ * API-14가 생기면서 그 트릭은 더 이상 필요 없다.
+ */
+export const HOME_CAPTION = "마이페이지에 저장된 정보로 맞춤 지원 제도를 자동으로 찾아드려요.";
+export const HOME_LOADING_MESSAGE = "마이페이지 정보로 맞춤 지원 제도를 찾고 있어요...";

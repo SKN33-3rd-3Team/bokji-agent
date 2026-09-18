@@ -33,6 +33,15 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 화면에 그대로 보여줄 에러 문구로 변환한다. apiClient를 거친 에러는
+ * 인터셉터가 항상 ApiError로 감싸 던지지만(네트워크 단절도 포함), 그 경로를
+ * 거치지 않은 예외가 섞여 들어올 가능성까지 방어적으로 처리한다.
+ */
+export function toErrorMessage(err: unknown): string {
+  return err instanceof ApiError ? err.message : "일시적인 오류가 발생했습니다. 다시 시도해주세요.";
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<Partial<ApiErrorBody>>) => {

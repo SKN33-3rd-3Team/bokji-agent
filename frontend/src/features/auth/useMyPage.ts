@@ -27,6 +27,11 @@ export function useUpdateProfile() {
     onSuccess: (profile) => {
       queryClient.setQueryData(PROFILE_QUERY_KEY, profile);
       setUser(profile);
+      // ChatPage/HomePage가 쓰는 API-08(known_*)은 staleTime: Infinity라
+      // 한 번 불러오면 자동으로 다시 안 불러온다. 여기서 무효화하지 않으면
+      // 마이페이지에서 정보를 바꿔도 이미 홈/채팅을 한 번이라도 방문한
+      // 세션에서는 다음에 또 방문했을 때 예전 known_*로 검색된다.
+      queryClient.invalidateQueries({ queryKey: ["chat-defaults"] });
     },
   });
 }

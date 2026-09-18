@@ -14,6 +14,17 @@ export async function sendMessage(payload: ChatMessageRequest): Promise<ChatResp
   return data;
 }
 
+/**
+ * API-14 POST /api/v1/chat/recommendations — 로그인 직후 1회, 저장된 DB
+ * 프로필만으로 자동 정책 추천. 요청 바디를 보내지 않는다(message, known_ 계열,
+ * top_k, session_id 전부 서버가 받지 않음 - 자동추천_API_정의서_v1.0.xlsx
+ * API-14 시트, Request 섹션). 응답은 API-10/11과 같은 ChatResponse.
+ */
+export async function getAutoRecommendations(): Promise<ChatResponse> {
+  const { data } = await apiClient.post<ChatResponse>("/api/v1/chat/recommendations");
+  return data;
+}
+
 /** API-11 POST /api/v1/chat/sessions/{session_id}/followup — 되묻기 응답 제출 */
 export async function submitFollowup(
   sessionId: string,

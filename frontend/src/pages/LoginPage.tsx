@@ -32,7 +32,10 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       await login({ email, password });
-      navigate("/chat");
+      // 로그인 성공 시 채팅이 아니라 마이페이지 정보 기반 정책 자동 추천
+      // 홈 화면으로 이동한다(streamlit_ui/pages/auth.py의 _handle_login과
+      // 동일한 정책, PR #55 후속 / API-14).
+      navigate("/home");
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 423) {
