@@ -3,8 +3,9 @@
 `compare_evaluation_runs.py`가 "두 실행을 나란히 놓고 비교"한다면, 이
 스크립트는 "N개 실행을 합쳐서 하나의 지표"로 만든다 - 예를 들어
 dev_questions.jsonl(150) + policy_eval_questions.jsonl(100) +
-quasi_holdout_questions.jsonl(100) = 총 250(또는 350)문항 기준 하나의
+quasi_holdout_questions.jsonl(개발용 추가 검증 100) = 총 350문항 기준 하나의
 Recall/Citation Precision/Abstention/Faithfulness를 보고 싶을 때 쓴다.
+이 합산은 개발 평가이며, Gate 6의 독립 Holdout 검증을 대체하지 않는다.
 
 단순 평균이 아니라 **분자·분모를 실제로 더한 뒤 다시 나누는 count
 가중 결합**을 쓴다(각 요약 파일의 raw 카운트 필드만 사용, 새로 추정하지
@@ -58,28 +59,26 @@ def pool(summaries: list[dict]) -> dict:
     # 통계에서 사라져 남은 run들만의 성공률(예: 100문항 중 50문항이 실패한
     # run이 빠지면 나머지 run만으로 성공률 100%)이 "전체 운영 성공률"처럼
     # 보고된다.
-    op_calls = sum(
-        s["llm_status"]["calls"] or 0
-        for s in all_summaries
-        if s.get("llm_status", {}).get("calls") is not None
-    )
-    op_failures = sum(
-        s["llm_status"]["failures"] or 0
-        for s in all_summaries
-        if s.get("llm_status", {}).get("failures") is not None
-    )
-    # llm_status와 같은 이유로 방어적으로 읽는다: all_summaries는 이제
-    # quality_metrics_valid=False나 옛 포맷(operations/question_count가 없는)
-    # 파일도 포함하므로, 이 필드들을 무조건 인덱싱하면 그런 입력에서
-    # KeyError로 죽는다 - 예전에는 quality_metrics_valid=True인 파일만
-    # 여기 도달해서 문제가 안 됐다.
-    op_samples = sum((s.get("operations") or {}).get("sample_count") or 0 for s in all_summaries)
-    op_err_weighted = sum(
-        ((s.get("operations") or {}).get("error_rate") or 0)
-        * ((s.get("operations") or {}).get("sample_count") or 0)
-        for s in all_summaries
-    )
-    op_error_rate = op_err_weighted / op_samples if op_samples else 0.0
+    measured_llm = [
+        s["llm_status"] for s in all_summaries
+        if (s.get("llm_status") or {}).get("calls") is not None
+        and (s.get("llm_status") or {}).get("failures") is not None
+    ]
+    op_calls = sum(s["calls"] for s in measured_llm)
+    op_failures = sum(s["failures"] for s in measured_llm)
+    measured_operations = [
+        s["operations"] for s in all_summaries
+        if (s.get("operations") or {}).get("sample_count", 0)
+        and (s.get("operations") or {}).get("error_rate") is not None
+    ]
+    op_samples = sum(s["sample_count"] for s in measured_operations)
+    op_err_weighted = sum(s["error_rate"] * s["sample_count"] for s in measured_operations)
+    success_rate = 1 - op_err_weighted / op_samples if op_samples else None
+    operation_coverage = {
+        "op_measured_sets": len(measured_operations),
+        "op_measured_samples": op_samples,
+        "llm_measured_sets": len(measured_llm),
+    }
     op_total_questions = sum(s.get("question_count") or 0 for s in all_summaries)
 
     if not summaries:
@@ -93,7 +92,8 @@ def pool(summaries: list[dict]) -> dict:
             "op_sets_attempted": len(all_summaries),
             "llm_calls": op_calls,
             "llm_failures": op_failures,
-            "success_rate": 1 - op_error_rate,
+            "success_rate": success_rate,
+            **operation_coverage,
         }
 
     total_n = sum(s["question_count"] for s in summaries)
@@ -168,7 +168,8 @@ def pool(summaries: list[dict]) -> dict:
         "relevancy_judged": relevancy_judged,
         "llm_calls": op_calls,
         "llm_failures": op_failures,
-        "success_rate": 1 - op_error_rate,
+        "success_rate": success_rate,
+        **operation_coverage,
     }
 
 
@@ -179,7 +180,7 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
         "",
         f"- 합산 대상(Recall 등 품질 지표): {p['sets_included']}개 세트, 총 {p['total_questions']}문항",
         f"- 운영 통계(LLM 호출·Success Rate) 기준: 시도 전체 {p['op_sets_attempted']}개 세트, "
-        f"총 {p['op_total_questions']}문항 - quality_metrics_valid=False로 제외된 세트도 포함합니다.",
+        f"총 {p['op_total_questions']}문항 - 품질 무효 세트도 포함하며, 누락된 측정은 분모에서 제외합니다.",
         "- 계산 방식: 단순 평균이 아니라 분자·분모를 합쳐서 다시 나누는 count 가중 결합",
         "",
         "| 세트 | 문항 수 | 경로 | 상태 |",
@@ -188,7 +189,7 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
     for s, p_path in zip(summaries, paths):
         status = "포함" if s.get("quality_metrics_valid") else "제외(quality_metrics_valid=False)"
         lines.append(
-            f"| {s.get('model_name', '?')} / {s['question_set']} | {s['question_count']} | `{p_path}` | {status} |"
+            f"| {s.get('model_name', '?')} / {s.get('question_set', '?')} | {s.get('question_count', '?')} | `{p_path}` | {status} |"
         )
     if p["sets_excluded_invalid"]:
         lines.append("")
@@ -204,8 +205,8 @@ def build_report(label: str, summaries: list[dict], paths: list[Path]) -> str:
     # 기준이다 - Recall 등 나머지 지표와 분모가 다르므로 표 밑에 분모를 함께
     # 적어 헷갈리지 않게 한다.
     op_lines = [
-        f"| LLM 호출 실패율 | {_fmt(p['llm_failures']/p['llm_calls']*100 if p['llm_calls'] else None, 2)}% | {p['llm_failures']}/{p['llm_calls']} (시도 전체 {p['op_sets_attempted']}세트 {p['op_total_questions']}문항 기준) |",
-        f"| Success Rate | {_fmt(p['success_rate'])} | 시도 전체 {p['op_sets_attempted']}세트 {p['op_total_questions']}문항 기준 |",
+        f"| LLM 호출 실패율 | {_fmt(p['llm_failures']/p['llm_calls']*100 if p['llm_calls'] else None, 2)}% | {p['llm_failures']}/{p['llm_calls']} (실측 {p['llm_measured_sets']}/{p['op_sets_attempted']}세트 기준) |",
+        f"| Success Rate | {_fmt(p['success_rate'])} | 실측 {p['op_measured_sets']}/{p['op_sets_attempted']}세트 {p['op_measured_samples']}표본 기준 |",
     ]
     if not p.get("quality_metrics_valid", True):
         lines.append("")

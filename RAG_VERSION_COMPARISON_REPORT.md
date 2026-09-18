@@ -1,10 +1,11 @@
 # RAG_VERSION_COMPARISON_REPORT
 
+> 기존 quasi-holdout은 반복 평가한 추가 Dev로 분류한다. 통합 350문항은 개발 평가이며 Gate 6 Holdout 성적이 아니다.
+
 ## 1. Executive Summary
 
 이 작업의 목적은 Dev set 점수를 최대화하는 것이 아니라, 특정 평가
-데이터셋에 대한 과적합을 줄이고 준-Holdout(오늘 처음 만든, 튜닝에
-전혀 쓰이지 않은 정책·문항)에서도 안정적으로 동작하는 RAG 파이프라인을
+데이터셋에 대한 과적합을 줄이고 추가 Dev(기존 파일명 `quasi_holdout_questions.jsonl`)에서도 안정적으로 동작하는 RAG 파이프라인을
 만드는 것이었다. 코드 전체를 대상으로 한 과적합 감사에서 하드코딩된
 질문/정책 ID 분기나 평가 데이터 leakage는 발견되지 않았다
 (`RAG_PATCH_CHANGELOG_REPORT.md` 8절).
@@ -28,9 +29,9 @@ Faithfulness도 소폭 하락했다(0.755→0.725, 세트별 변동폭 내로 �
 | v0 | (기준선, 이번 세션 시작 전 원본 코드) | Dev 150, Policy-eval 100 |
 | v1 | + N4 관련성 게이트(단순 LLM 판정, 스니펫 300자) + N13 citation을 claim_type/rule_chunk_id 기반으로 정밀화 | Dev 150, Policy-eval 100 |
 | v2 | + 관련성 게이트 판정 스니펫 300→800자 | Dev 150만 |
-| v3 | + 재확인(self-consistency) 로직 + 거리 기반 사전 필터(후보 전체를 봐주는 버전) | Dev 150, Policy-eval 100(⚠️ 무효, 3.2절), 준-Holdout 100(신규) |
-| v4 | + 법령명 환각 방지(N13) + Faithfulness judge 프롬프트 보정 | Dev 150, Policy-eval 100, 준-Holdout 100 |
-| v5 = vFinal 후보 | + 거리 사전 필터를 "1등만 확정, 2등 이하는 항상 판정"으로 재설계 | Dev 150, Policy-eval 100, 준-Holdout 100 (전부 유효) |
+| v3 | + 재확인(self-consistency) 로직 + 거리 기반 사전 필터(후보 전체를 봐주는 버전) | Dev 150, Policy-eval 100(⚠️ 무효, 3.2절), 추가 Dev 100(신규) |
+| v4 | + 법령명 환각 방지(N13) + Faithfulness judge 프롬프트 보정 | Dev 150, Policy-eval 100, 추가 Dev 100 |
+| v5 = vFinal 후보 | + 거리 사전 필터를 "1등만 확정, 2등 이하는 항상 판정"으로 재설계 | Dev 150, Policy-eval 100, 추가 Dev 100 (전부 유효) |
 
 ## 3. Version Metric Table
 
@@ -79,7 +80,7 @@ Abstention/Relevancy/실패율)에서 우세하고, Faithfulness만 소폭
 
 출처: v5는 `artifacts/evaluation/v5-final/policy100/summary_v5-final_20260918.json`.
 
-### 3.3 준-Holdout(quasi_holdout_questions.jsonl, 100문항)
+### 3.3 추가 Dev(quasi_holdout_questions.jsonl, 100문항)
 
 | 지표 | v3 | v4 | v5(vFinal 후보) |
 | --- | ---: | ---: | ---: |
@@ -93,9 +94,8 @@ Abstention/Relevancy/실패율)에서 우세하고, Faithfulness만 소폭
 | Answer Relevancy | 0.628(86건) | 0.653(88건) | 0.635(85건) |
 | LLM 호출 실패율 | 6.1% | 0.99% | 0.20%(2/977) |
 
-한 번도 튜닝에 안 쓰인 이 세트에서 **v5가 Recall/MRR/Citation
-Precision 세 지표 모두 세 버전 중 최고치**를 냈다 - 과적합이 아니라는
-근거가 하나 더 늘었다. 다만 Abstention은 v4가 더 낫다(v5는 v3와
+반복 평가한 이 개발 세트에서 **v5가 Recall/MRR/Citation
+Precision 세 지표 모두 세 버전 중 최고치**를 냈다. 독립 Holdout 검증은 남아 있어 과적합 여부는 단정할 수 없다. 다만 Abstention은 v4가 더 낫다(v5는 v3와
 동일한 수치로 회귀 - 재확인 로직의 적용 범위가 "1등이 확정된 경우"엔
 줄었기 때문으로 추정).
 
@@ -118,19 +118,18 @@ Precision 세 지표 모두 세 버전 중 최고치**를 냈다 - 과적합이 
 출처: `artifacts/evaluation/v4-final/POOLED_RESULT.md`,
 `artifacts/evaluation/v5-final/POOLED_RESULT.md`.
 
-## 4. Generalization Gap
+## 4. 개발 세트 간 성능 차이
 
 **Citation Precision (v4→v5)**: Dev 150 (0.228→0.385, +69%),
-Policy-eval 100 (0.186→0.268, +44%), 준-Holdout(0.178→0.255, +43%).
-**세 세트 모두 비슷한 크기로 회복됐다** - 특정 세트에만 맞춘 수정이
-아니라는 뜻이다.
+Policy-eval 100 (0.186→0.268, +44%), 추가 Dev(0.178→0.255, +43%).
+**세 세트 모두 회복됐다.** 반복 평가한 개발 세트의 관찰이며 독립 일반화 검증은 아니다.
 
 **MRR (v4→v5)**: Dev 150 (0.629→0.700), Policy-eval 100
-(0.594→0.620), 준-Holdout(0.548→0.675, 가장 큰 폭). 세 세트 모두
+(0.594→0.620), 추가 Dev(0.548→0.675, 가장 큰 폭). 세 세트 모두
 개선 - 이것도 일관된 방향이다.
 
 **Abstention (v4→v5)**: Dev 150은 개선(0.667/0.500→0.750/0.750),
-Policy-eval 100은 오탐이 늘고(1→3), 준-Holdout은 v3 수준으로
+Policy-eval 100은 오탐이 늘고(1→3), 추가 Dev은 v3 수준으로
 후퇴(1.000/0.450→0.750/0.300). **세 세트가 서로 다른 방향**이다 -
 표본이 작아서(각 8~20건) 나오는 변동일 가능성이 높지만, Dev에서
 개선되고 다른 두 세트에서 후퇴했다는 점은 "Dev set에 유리하게
@@ -140,7 +139,7 @@ Policy-eval 100은 오탐이 늘고(1→3), 준-Holdout은 v3 수준으로
 한다(9절에 더 큰 보류 표본 확보를 다음 과제로 남김).
 
 **Faithfulness (v4→v5)**: 세 세트 모두 소폭 하락(Dev -0.037,
-Policy-eval -0.016, 준-Holdout -0.037) - 크기와 방향이 비슷해
+Policy-eval -0.016, 추가 Dev -0.037) - 크기와 방향이 비슷해
 과적합 신호는 아니고, 오늘 하루 반복된 라이브 LLM 판정의 자연스러운
 실행 편차 범위로 보인다(같은 세션 내내 반복 관찰된 폭, ±0.03~0.05).
 
@@ -165,7 +164,7 @@ Policy-eval -0.016, 준-Holdout -0.037) - 크기와 방향이 비슷해
   1위)는 소폭 하락하지만 폭이 작고 세트별로 비슷해(±0.03~0.04) 노이즈
   범위일 가능성이 있다.
 - **v4를 선택하는 경우**: 350문항 통합 기준 Abstention
-  Precision/Recall이 더 높고(0.812/0.464 vs 0.632/0.429), 준-Holdout의
+  Precision/Recall이 더 높고(0.812/0.464 vs 0.632/0.429), 추가 Dev의
   Abstention이 세 버전 중 유일하게 완벽한 정밀도(1.000)를 보인다.
   Faithfulness도 통합 기준 더 높다(0.755 vs 0.725).
 - **판단 근거로 부적합한 것**: "Citation Precision이 우선순위 2위니까

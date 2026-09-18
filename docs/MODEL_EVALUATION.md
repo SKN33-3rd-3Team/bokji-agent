@@ -83,24 +83,33 @@ python scripts/run_model_evaluation.py `
 - `HF_TOKEN`이 없어 LLM 클라이언트가 없으면(`.env` 참고) 자동으로 답변 품질
   채점을 건너뛰고 그 사실을 stderr에 남긴다 — 조용히 빈 값으로 채우지 않는다.
 
-## 출력 — 파일명에 모델명·실행 날짜 포함
+## 출력 — 파일명에 모델명·실행 ID 포함
 
 ```
 artifacts/evaluation/<run-name>/
-  report_<model>_<date>.md          # 파이프라인 지표 + 답변 품질 섹션
-  metrics_<model>_<date>.svg        # 기존 파이프라인 지표 그래프
-  answer_quality_<model>_<date>.svg # Faithfulness / Answer relevancy 그래프
-  summary_<model>_<date>.json       # 위 report.md의 근거가 되는 전체 수치
-  results_<model>_<date>.jsonl      # 질문별 원본 + answer_quality 판정 상세
-  _pipeline_only/                   # run_dev_validation.py와 동일한, 파일명 없는 원본 산출물
+  report_<model>_<run_id>.md          # 파이프라인 지표 + 답변 품질 섹션
+  metrics_<model>_<run_id>.svg        # 기존 파이프라인 지표 그래프
+  answer_quality_<model>_<run_id>.svg # Faithfulness / Answer relevancy 그래프
+  summary_<model>_<run_id>.json       # 위 report.md의 근거가 되는 전체 수치
+  results_<model>_<run_id>.jsonl      # 질문별 원본 + answer_quality 판정 상세
+  _pipeline_only/<run_id>/          # run_dev_validation.py와 동일한, 파일명 없는 원본 산출물
 ```
 
 `<model>`은 `.env`의 `LLM_MODEL_NAME`(또는 `--model-name`으로 직접 지정),
-`<date>`는 실행일(`YYYYMMDD`, 로컬 시각 기준)이다. 같은 실험을 여러 모델·여러
-날짜로 반복해도 파일이 서로 덮어쓰지 않고 나란히 쌓인다.
+`<run_id>`는 `YYYYMMDD-HHMMSS-ffffff-xxxxxxxx` 형식이다(로컬 시각, 마이크로초, 임의 식별자).
+실행별 원본 폴더를 중복 생성 불가 방식으로 확보하므로 같은 출력 경로에서 반복·동시
+실행해도 원본과 최종 산출물이 분리된다. `summary`의 `pipeline_directory`는
+출력 폴더 기준 원본의 상대 경로다. 중단된 실행의 원본도 보존한다.
 
 같은 실험 결과를 덮어쓰지 않도록 `--output-dir`에는 `run_dev_validation.py`와
 같은 관례로 실험별 이름을 쓴다(예: `qwen3.5-9b-baseline`,
 `qwen3.5-9b-reindexed`). 한 실험에서는 한 조건만 바꾸고, 비교할 때는 같은
 질문 파일(과 그 SHA-256, `summary_*.json`에 기록됨)을 유지한다 —
 `docs/PROJECT_COMPLIANCE.md`의 실험 규칙과 동일하다.
+
+## 평가 세트의 역할
+
+`quasi_holdout_questions.jsonl`은 여러 버전에서 반복 평가한 개발용 추가 검증 세트다.
+파일명은 기존 명령과 결과의 추적을 위해 유지한다. Dev·Policy-eval과 합산한 값은
+개발 평가 통계이며 Gate 6 Holdout 성적이나 미관측 데이터 일반화의 증거가 아니다.
+Gate 6에는 별도로 동결한 미사용 Holdout을 최종 설정 확정 후 한 번만 평가한다.

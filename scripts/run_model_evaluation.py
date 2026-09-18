@@ -8,18 +8,18 @@ LLM judge (``rag_design/answer_quality.py``). See
 ``docs/MODEL_EVALUATION.md`` for why both layers are needed and how to read
 the output.
 
-Every output file name carries the evaluated model name and the run date, so
-runs against different models/dates never collide and stay easy to diff:
+Every output file name carries the evaluated model name and a unique run ID, so
+repeated and concurrent runs stay isolated and stay easy to diff:
 
-    artifacts/evaluation/<run-name>/report_<model>_<date>.md
-    artifacts/evaluation/<run-name>/metrics_<model>_<date>.svg
-    artifacts/evaluation/<run-name>/answer_quality_<model>_<date>.svg
-    artifacts/evaluation/<run-name>/summary_<model>_<date>.json
-    artifacts/evaluation/<run-name>/results_<model>_<date>.jsonl
+    artifacts/evaluation/<run-name>/report_<model>_<run_id>.md
+    artifacts/evaluation/<run-name>/metrics_<model>_<run_id>.svg
+    artifacts/evaluation/<run-name>/answer_quality_<model>_<run_id>.svg
+    artifacts/evaluation/<run-name>/summary_<model>_<run_id>.json
+    artifacts/evaluation/<run-name>/results_<model>_<run_id>.jsonl
 
 The unnamed pipeline-only files (``report.md``, ``metrics.svg``,
 ``summary.json``, ``results.jsonl``) are also written, unchanged, to a
-``_pipeline_only/`` subdirectory — that is exactly what
+``_pipeline_only/<run_id>/`` subdirectory — that is exactly what
 ``run_dev_validation.py`` alone would have produced, kept for anyone who wants
 to diff against the plain pipeline run.
 
@@ -70,6 +70,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping, Sequence
+from uuid import uuid4
 
 
 _EVAL_EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
@@ -103,6 +104,20 @@ from rag_design.validation_runner import (
     run_questions,
     write_report,
 )
+
+
+def _create_run_directory(output_dir: Path) -> tuple[str, Path]:
+    """Reserve an isolated directory before writing any run artifacts."""
+    parent = output_dir / "_pipeline_only"
+    parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid4().hex[:8]
+        pipeline_dir = parent / run_id
+        try:
+            pipeline_dir.mkdir()
+        except FileExistsError:
+            continue
+        return run_id, pipeline_dir
 
 
 def _sanitize_for_filename(name: str) -> str:
@@ -629,7 +644,7 @@ def main() -> int:
     )
     summary = calculate_summary(records, top_k=args.top_k)
 
-    pipeline_dir = args.output_dir / "_pipeline_only"
+    run_id, pipeline_dir = _create_run_directory(args.output_dir)
     write_report(
         pipeline_dir,
         records,
@@ -646,7 +661,6 @@ def main() -> int:
     llm_client = build_llm_client()
     model_name = args.model_name or getattr(llm_client, "model", None) or "no-llm"
     model_slug = _sanitize_for_filename(model_name)
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     date_str = run_id[:8]
 
     quality_summary = None
@@ -700,7 +714,7 @@ def main() -> int:
     (args.output_dir / metrics_svg_name).write_text(base_metrics_svg, encoding="utf-8")
 
     # write_report()가 만든 report.md는 같은 폴더에 있는 "metrics.svg"를 상대경로로
-    # 가리킨다. 그 원본은 _pipeline_only/ 안에 그대로 두고, 여기서 만드는 모델명·날짜가
+    # 가리킨다. 그 원본은 _pipeline_only/<run_id>/ 안에 그대로 두고, 여기서 만드는 모델명·날짜가
     # 붙은 사본은 args.output_dir에 놓이므로 링크를 그대로 복사하면 존재하지 않는
     # 파일을 가리켜 이미지가 깨진다(실측 2026-09-14). 파일명을 같이 바꿔준다.
     report_text = base_report.replace("](metrics.svg)", f"]({metrics_svg_name})")
@@ -737,6 +751,7 @@ def main() -> int:
     summary_payload["model_name"] = model_name
     summary_payload["run_date"] = date_str
     summary_payload["run_id"] = run_id
+    summary_payload["pipeline_directory"] = pipeline_dir.relative_to(args.output_dir).as_posix()
     summary_payload["llm_status"] = llm_summary
     if quality_summary is not None:
         summary_payload["answer_quality"] = quality_summary
