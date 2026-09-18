@@ -53,3 +53,5 @@ data/vector_db/
 .runtime/vector_db/
 .runtime/vector_db-smoke/
 
+# 평가결과 ignore제외
+artifacts/evaluation/*
