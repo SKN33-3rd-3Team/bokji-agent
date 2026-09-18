@@ -5,10 +5,12 @@ from datetime import date
 from unittest.mock import Mock
 
 import pytest
+from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from backend.app.core.errors import ApiError
 from backend.app.services import chat_adapter
 from src.rag_chatbot import service
 from src.rag_chatbot.graph import builder
@@ -102,16 +104,28 @@ def test_interrupted_turn_resumes_before_starting_new_turn(turn_graph):
 
 def test_missing_or_failed_checkpoint_cannot_become_a_new_turn(turn_graph):
     graph, seen = turn_graph
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as missing:
         service.answer_followup("absent", "question")
+    assert not isinstance(missing.value, builder.FailedCheckpointError)
     with pytest.raises(RuntimeError):
         builder.run_graph(graph, user_input="fail", session_id="failed")
-    with pytest.raises(ValueError):
+    with pytest.raises(builder.FailedCheckpointError) as failed:
         service.answer_followup("failed", "do not restart")
+    assert isinstance(failed.value, ValueError)  # existing shared callers remain compatible
     assert len(seen) == 1
 
 
-def test_http_completed_turn_ownership_and_failure_mapping(client, turn_graph):
+def test_unrelated_value_error_keeps_generic_guidance():
+    def fail():
+        raise ValueError("The previous graph execution failed; start a new session")
+
+    with pytest.raises(ApiError) as caught:
+        chat_adapter._run(fail)
+    assert (caught.value.status_code, caught.value.code) == (500, "GRAPH_EXECUTION_ERROR")
+    assert caught.value.message == "일시적인 오류가 발생했습니다. 다시 시도해주세요."
+
+
+def test_http_completed_turn_ownership_and_failure_mapping(client, turn_graph, monkeypatch):
     graph, seen = turn_graph
     signup = client.post("/api/v1/auth/signup", json={
         "email": "turns@example.com", "name": "Tester", "password": "Passw0rd!123",
@@ -125,10 +139,39 @@ def test_http_completed_turn_ownership_and_failure_mapping(client, turn_graph):
     assert len(seen) == 2
     failed = client.post(f"/api/v1/chat/sessions/{sid}/followup", json={"message": "fail"})
     assert (failed.status_code, failed.json()["code"]) == (500, "GRAPH_EXECUTION_ERROR")
+    assert failed.json()["message"] == "일시적인 오류가 발생했습니다. 다시 시도해주세요."
+    config = {"configurable": {"thread_id": sid}}
+    assert any(task.error for task in graph.get_state(config).tasks)
+    checkpoints = list(graph.checkpointer.list(config))
+    owner = chat_adapter.chat_session_store._sessions[sid]
     blocked = client.post(f"/api/v1/chat/sessions/{sid}/followup", json={"message": "retry"})
     assert (blocked.status_code, blocked.json()["code"]) == (500, "GRAPH_EXECUTION_ERROR")
+    assert blocked.json()["message"] == "이 상담을 계속할 수 없습니다. 새 상담을 시작해 주세요."
     assert len(seen) == 3
+    assert list(graph.checkpointer.list(config)) == checkpoints
+    assert chat_adapter.chat_session_store._sessions[sid] is owner
     chat_adapter.chat_session_store.create("other", user_id=999)
     denied = client.post("/api/v1/chat/sessions/other/followup", json={"message": "question"})
     assert (denied.status_code, denied.json()["code"]) == (404, "SESSION_NOT_FOUND")
     assert len(seen) == 3
+
+    other = TestClient(client.app)
+    assert other.post("/api/v1/auth/signup", json={
+        "email": "other-turns@example.com", "name": "Other", "password": "Passw0rd!123",
+        "password_confirm": "Passw0rd!123", "terms_agreed": True, "privacy_agreed": True,
+    }).status_code == 201
+    read_state = Mock(wraps=graph.get_state)
+    monkeypatch.setattr(graph, "get_state", read_state)
+    for requester, expected in ((other, (404, "SESSION_NOT_FOUND")),
+                                (TestClient(client.app), (401, "UNAUTHORIZED"))):
+        denied = requester.post(f"/api/v1/chat/sessions/{sid}/followup", json={"message": "retry"})
+        assert (denied.status_code, denied.json()["code"]) == expected
+        assert "이 상담을 계속할 수 없습니다" not in denied.json()["message"]
+    read_state.assert_not_called()
+
+    # A new API-10 request recovers without requiring DELETE or reusing the failed ID.
+    fresh = client.post("/api/v1/chat/messages", json={"message": "new session"})
+    assert fresh.status_code == 200 and fresh.json()["final_answer"] == "new session"
+    assert fresh.json()["session_id"] != sid and len(seen) == 4
+    assert chat_adapter.chat_session_store._sessions[sid] is owner
+    assert list(graph.checkpointer.list(config)) == checkpoints

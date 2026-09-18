@@ -78,6 +78,10 @@ _SlotGateRoute = Literal["sufficient", "general_law", "request_input"]
 _BenefitCalcRoute = Literal["result_assembly", "request_calc_info"]
 
 
+class FailedCheckpointError(ValueError):
+    """이전 실행이 실패해 같은 상담을 재개할 수 없는 체크포인트."""
+
+
 def _route_after_slot_completeness_gate(state: GraphState) -> _SlotGateRoute:
     """N2 이후 3갈래 분기(E3/E4/E5)를 위해 두 판정 함수를 하나로 합친다.
 
@@ -517,7 +521,7 @@ def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict
     config = {"configurable": {"thread_id": session_id}}
     snapshot = graph.get_state(config)
     if any(task.error for task in snapshot.tasks):
-        raise ValueError("The previous graph execution failed; start a new session")
+        raise FailedCheckpointError("The previous graph execution failed; start a new session")
     if isinstance(user_input, dict):
         # 잠긴 현재 세션의 실제 interrupt ID와 정책/슬롯을 검사한 뒤에만 invoke한다.
         pending = [(task.name, pause.id) for task in snapshot.tasks for pause in task.interrupts]
@@ -540,4 +544,4 @@ def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict
     )
 
 
-__all__ = ["build_graph", "run_graph", "resume_graph"]
+__all__ = ["FailedCheckpointError", "build_graph", "run_graph", "resume_graph"]
