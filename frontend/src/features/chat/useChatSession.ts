@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { resetSession as resetSessionApi, sendMessage as sendMessageApi, submitFollowup } from "@/api/chatApi";
 import type { ChatMessageRequest, ChatResponse, ChatTurn } from "@/types/chat";
@@ -15,6 +15,12 @@ export function useChatSession() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [policyView, setPolicyView] = useState<PolicyViewMode>("list");
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  // 최초 턴(API-10)에 보낸 top_k/extra_interests/known_*를 기억해뒀다가
+  // 되묻기(API-11) 요청에도 그대로 실어 보낸다. 백엔드가 지금 당장은 이
+  // 값들을 안 쓰더라도(top_k는 체크포인터가 보존, 나머지는 아직 파라미터가
+  // 없어 무시함) 최초 입력값이 요청 바디에서 조용히 빠지지 않도록 한다
+  // (코드리뷰 반영, 2026-09-18).
+  const initialContextRef = useRef<Omit<ChatMessageRequest, "message"> | null>(null);
 
   const latestResponse = [...messages].reverse().find((m) => m.response)?.response ?? null;
 
@@ -22,9 +28,12 @@ export function useChatSession() {
     mutationFn: async (payload: ChatMessageRequest): Promise<ChatResponse> => {
       // session_id 보유 여부로 API-10(최초)/API-11(진행 중)을 분기 호출한다
       // (S03-06 요구사항).
-      return sessionId
-        ? submitFollowup(sessionId, { message: payload.message })
-        : sendMessageApi(payload);
+      if (sessionId) {
+        return submitFollowup(sessionId, { message: payload.message, ...initialContextRef.current });
+      }
+      const { message: _message, ...context } = payload;
+      initialContextRef.current = context;
+      return sendMessageApi(payload);
     },
     onSuccess: (response, variables) => {
       setMessages((prev) => [
@@ -55,6 +64,7 @@ export function useChatSession() {
       setSessionId(null);
       setPolicyView("list");
       setSelectedPolicyId(null);
+      initialContextRef.current = null;
     },
   });
 

@@ -30,9 +30,23 @@ export interface ChatMessageRequest {
   known_veteran_status?: VeteranStatus;
 }
 
-/** API-11 Request Body */
+/**
+ * API-11 Request Body. message 외 필드는 실제 answer_followup()이 아직
+ * 받지 않아 백엔드가 무시하지만(top_k는 체크포인터가 보존), 최초 턴에
+ * 보낸 값을 요청 바디에서 조용히 빠뜨리지 않기 위해 옵셔널로 동봉한다
+ * (코드리뷰 반영, 2026-09-18 - useChatSession.ts 참고).
+ */
 export interface FollowupRequest {
   message: string;
+  top_k?: number;
+  extra_interests?: string[];
+  known_region?: string;
+  known_gender?: Gender;
+  known_birth_date?: string;
+  known_disability_status?: DisabilityStatus;
+  known_income_bracket?: IncomeBracket;
+  known_household_types?: HouseholdType[];
+  known_veteran_status?: VeteranStatus;
 }
 
 /** API-12 Request Body */
