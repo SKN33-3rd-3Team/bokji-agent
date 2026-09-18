@@ -52,6 +52,14 @@ def _quality_score(summary: dict, metric: str) -> float | None:
     return block.get("mean_score")
 
 
+def _success_rate(summary: dict) -> float | None:
+    operations = summary.get("operations") or {}
+    error_rate = operations.get("error_rate")
+    if not operations.get("sample_count") or error_rate is None:
+        return None
+    return 1 - error_rate
+
+
 def _row(label: str, before, after, digits: int = 3) -> str:
     return (
         f"| {label} | {_fmt(before, digits)} | {_fmt(after, digits)}{_delta(before, after, digits)} |"
@@ -103,10 +111,10 @@ def build_report(before: dict, after: dict, *, before_label: str, after_label: s
             " 그대로 포함한 값이니 정상 실행과 비교한 것처럼 취급하지 마세요.\n\n"
         )
 
-    r_before, r_after = before.get("retrieval", {}), after.get("retrieval", {})
-    c_before, c_after = before.get("citation", {}), after.get("citation", {})
-    a_before, a_after = before.get("abstention", {}), after.get("abstention", {})
-    o_before, o_after = before.get("operations", {}), after.get("operations", {})
+    r_before, r_after = before.get("retrieval") or {}, after.get("retrieval") or {}
+    c_before, c_after = before.get("citation") or {}, after.get("citation") or {}
+    a_before, a_after = before.get("abstention") or {}, after.get("abstention") or {}
+    o_before, o_after = before.get("operations") or {}, after.get("operations") or {}
 
     faith_before = _quality_score(before, "faithfulness")
     faith_after = _quality_score(after, "faithfulness")
@@ -135,8 +143,8 @@ def build_report(before: dict, after: dict, *, before_label: str, after_label: s
         _row("Abstention Recall", a_before.get("recall"), a_after.get("recall")),
         _row(
             "Success Rate (오류 없이 완료)",
-            1 - o_before.get("error_rate", 0) if o_before else None,
-            1 - o_after.get("error_rate", 0) if o_after else None,
+            _success_rate(before),
+            _success_rate(after),
         ),
         _row("Faithfulness (LLM-judge)", faith_before, faith_after),
         _row("Answer relevancy (LLM-judge)", rel_before, rel_after),

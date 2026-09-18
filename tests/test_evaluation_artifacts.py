@@ -6,9 +6,19 @@ from pathlib import Path
 
 from scripts.run_model_evaluation import _create_run_directory
 from scripts.pool_evaluation_runs import pool, build_report
+from scripts.compare_evaluation_runs import build_report as compare_report
 
 
 class EvaluationArtifactsTests(unittest.TestCase):
+    def test_comparison_does_not_invent_success_for_missing_measurements(self):
+        for operations in (None, {}, {"sample_count": 10},
+                           {"sample_count": 10, "error_rate": None},
+                           {"sample_count": 0, "error_rate": 0}):
+            before = {"operations": operations}
+            after = {"operations": {"sample_count": 10, "error_rate": .2}}
+            report = compare_report(before, after, before_label="old", after_label="new")
+            self.assertIn("| Success Rate (오류 없이 완료) | N/A | 0.800 |", report)
+
     def test_concurrent_runs_preserve_previous_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
