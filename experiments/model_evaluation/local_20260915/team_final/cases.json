@@ -1,0 +1,650 @@
+[
+  {
+    "id": 1,
+    "question": "서울특별시 강남구에 살고 2022년 5월 10일생 여자아이 키우고 있는 30대 여성입니다. 기초생활수급자이고 무직이에요. 유아학비 누리과정 지원 받을 수 있나요?",
+    "original": {
+      "번호": 1,
+      "카테고리": "베이스라인",
+      "질문 문장": "서울특별시 강남구에 살고 2022년 5월 10일생 여자아이 키우고 있는 30대 여성입니다. 기초생활수급자이고 무직이에요. 유아학비 누리과정 지원 받을 수 있나요?",
+      "포함 키워드/슬롯": "region=서울특별시 / birth_date=2022-05-10 / gender=여성 / income=기초생활수급 / employment=무직 / 정책=유아학비,누리과정",
+      "예상 판정": "충족",
+      "관련 LLM 노드": "N1, N13",
+      "선정 이유(무엇을 검증하는가)": "슬롯이 전부 채워진 '정답 명확' 케이스. 여기서부터 모델별 문체 차이를 기준점으로 잡는다."
+    },
+    "team_expected_reference_only": "충족",
+    "review_expectation": "유아학비 문서는 있지만 자녀의 유치원 재원 여부, 국적과 기존 수급 여부는 확인되지 않았습니다. 보호자와 자녀의 나이를 구분해야 하므로 최종 지원자격 충족을 확정할 수 없습니다.",
+    "policy_id_is_synthetic": false,
+    "actual_search_result": false,
+    "evidence": [
+      {
+        "policy_id": "000000465790",
+        "title": "유아학비 (누리과정) 지원",
+        "detail": {
+          "purpose": "3~5세 누리과정 도입으로 유치원·어린이집에 국가수준 공통 교육과정(누리과정)을 적용함에 따라, 보호자의 소득수준에 관계없이 전 계층 유아학비, 보육료 지원",
+          "support_target": "○ 지원대상 : 국공립 및 사립유치원에 다니는 3~5세 유아\n- '23년 1~2월생으로 유치원 입학을 희망하여 3세반에 취원한 유아도 지원 대상\n-  취학대상 아동('19.1.1~12.31.출생)이 취학을 유예하는 경우, 유예한 1년에 한하여 5세 유아 무상교육비 지원(취학유예 통지서 제출)\n※ 단, 지원기간은 3년을 초과할 수 없음.\n○ 추가지원 : 저소득층 유아(유아학비 지원 대상 자격이 있고, 사립유치원에 다니는 법정저소득층(기초생활수급자, 차상위계층, 한부모 가정) 유아)\n○  아래의 경우 지원대상에서 제외\n-  대한민국 국적을 가지지 않은 유아(난민 및 「재한외국인 처우 기본법」에 따라 법무부장관이 인정한 '특별기여자 등'은 예외적으로 인정)\n- 가정 양육수당 및 어린이집 보육료를 지원 받고 있는 유아\n-  유치원 이용시간에 아이돌봄서비스 등과 중복지원 불가\n- 해외 체류 기간이 31일째 되는 날 유아학비 지원자격 중지\n○  자격 중지 후 유아학비를 다시 지원받기 위해서는 재신청 필요, 신청 누락으로 발생되는 지원금은 소급지원 되지 않음.",
+          "eligibility_criteria": "※ 2026. 3. 1~2027.2.28. 까지 적용\n○ 지원대상 : 국공립유치원 및 사립유치원에 다니는  만 3~5세 아동\n5세  '20.1.1.~'20.12.31.\n4세  '21.1.1.~'21.12.31.\n3세  '22.1.1.~'23.2.28.\n○ 신청인 : 아동의 보호자\n○ 신청장소 : 온라인 신청 (복지로 복지사업서비스 (www.bokjiro.go.kr) ) 및 읍면동 주민센터(아동 주민등록 주소지)\n- 주의: 온라인 신청은 부모만 가능\n※ 부모 이외의 보호자인 경우(자녀의 친권자 또는  후견인 보호자, 조부모, 사회복지시설장 등) 등 담당공무원의 확인이 필요한 경우는 온라인으로 신청하실수 없으므로 불편하시더라도 읍면동 주민센터(주소지 시군구)에서 신청하시기 바랍니다.",
+          "support_details": "○ 3~5세에 대해 교육비를 지급합니다.\n- 국공립 100,000원, 사립 280,000원\n○ 3~5세에 대해 방과후과정비를 지급합니다.\n- 국공립 50,000원, 사립 70,000원\n○ 사립유치원을 다니는 법정저소득층 유아에게 저소득층 유아학비를 추가 지급합니다.\n- 사립 200,000원",
+          "application_method": "○ 유아의 보호자가 가까운 읍면동 주민센터 방문 또는 인터넷을 이용하여 온라인 신청 (복지로 http://www.bokjiro.go.kr) 이 가능합니다.\n- 주의: 온라인 신청은 부모만 가능\n※ 부모 이외의 보호자인 경우(자녀의 친권자 또는  후견인 보호자, 조부모, 사회복지시설장 등) 등 담당공무원의 확인이 필요한 경우는 온라인으로 신청하실수 없으므로 번거로우시더라도 읍면동 주민센터(주소지 시군구)에서 방문 신청하시기 바랍니다.\n○ 신청 후 학부모 인증 신청에 따라 교육청에서 유치원으로 지원금액이 입금됩니다.\n※ 기존에 보육료, 양육수당 등 다른 복지서비스의 지원 자격을 보유하고 있는 경우에는 반드시 유아학비로 변경 신청해야 지원 가능하며, 소급지원 불가\n※ 신청일 기준으로 지급, 유아학비 신청과 동시에 보육료 즉시 지원 중단되며, 양육수당은 변경신청일 기준에 따라 지원 중단됨.",
+          "application_period": "상시신청",
+          "legal_basis": "유아교육법(제24조)||영유아보육법(제34조)||유아교육법 시행령(제29조)",
+          "required_documents": "- 사회복지서비스 및 급여제공(변경) 신청서\n- 사회복지서비스 이용권(바우처) 제공(변경) 신청서\n- 아이사랑 카드발급 신청 및 개인신용정보의 조회·제공·이용 동의서"
+        }
+      }
+    ],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "000000465790": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "유아학비 문서는 있지만 자녀의 유치원 재원 여부, 국적과 기존 수급 여부는 확인되지 않았습니다. 보호자와 자녀의 나이를 구분해야 하므로 최종 지원자격 충족을 확정할 수 없습니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "gender": "female",
+        "income_bracket": "under_30",
+        "employment_status": "not_working",
+        "interests": [],
+        "household_types": [],
+        "age_subject": "self",
+        "birth_date": "2022-05-10",
+        "age": 4,
+        "age_year_based": 4,
+        "age_ref_date": "2026-09-15",
+        "region_scope": "regional",
+        "region_names": [
+          "서울특별시",
+          "서울특별시 강남구"
+        ]
+      },
+      "missing_slots": [
+        "disability_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 장애인 등록 여부 (등록/미등록)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[000000465790]\n- 지원자격: 확인 필요\n  근거: 유아학비 문서는 있지만 자녀의 유치원 재원 여부, 국적과 기존 수급 여부는 확인되지 않았습니다. 보호자와 자녀의 나이를 구분해야 하므로 최종 지원자격 충족을 확정할 수 없습니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "question": "청년 주거 지원 받을 수 있는 거 뭐 있나요?",
+    "original": {
+      "번호": 2,
+      "카테고리": "되묻기(N3)",
+      "질문 문장": "청년 주거 지원 받을 수 있는 거 뭐 있나요?",
+      "포함 키워드/슬롯": "정책=청년,주거 (나머지 슬롯 전부 없음)",
+      "예상 판정": "needs_input",
+      "관련 LLM 노드": "N1, N2, N3",
+      "선정 이유(무엇을 검증하는가)": "슬롯 6개를 한 번에 되물어야 하는 케이스. 딱딱한 나열형인지 자연스러운 질문으로 묶는지가 모델별로 갈린다."
+    },
+    "team_expected_reference_only": "needs_input",
+    "review_expectation": "청년 주거 지원을 찾는 질문이지만 신청자 정보가 부족합니다. 먼저 필요한 정보를 되묻습니다.",
+    "policy_id_is_synthetic": true,
+    "actual_search_result": false,
+    "evidence": [],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "확인 불가": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "청년 주거 지원을 찾는 질문이지만 신청자 정보가 부족합니다. 먼저 필요한 정보를 되묻습니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": false,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "interests": [
+          "주거",
+          "청년"
+        ],
+        "household_types": [],
+        "age_subject": "self",
+        "age": null,
+        "age_year_based": null,
+        "age_ref_date": null,
+        "region_scope": "unknown",
+        "region_names": []
+      },
+      "missing_slots": [
+        "region",
+        "birth_date",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 거주 지역 (시/도부터, 예: 서울특별시 또는 경기도 성남시 분당구)\n2. 생년월일 (예: 1990-01-01) - 복지제도 연령 기준이 대부분 만 나이라 정확한 날짜가 필요합니다\n3. 성별 (여성/남성)\n4. 소득 수준 (기초생활수급/차상위 여부, 또는 기준중위소득 대비 비율 - 예: 중위소득 60%)\n5. 장애인 등록 여부 (등록/미등록)\n6. 취업 상태 (재직/구직/자영업/학생/무직)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": null
+  },
+  {
+    "id": 3,
+    "question": "제 아이가 2021년 3월 5일생인데 유아학비 받을 수 있나요?",
+    "original": {
+      "번호": 3,
+      "카테고리": "주체 모호",
+      "질문 문장": "제 아이가 2021년 3월 5일생인데 유아학비 받을 수 있나요?",
+      "포함 키워드/슬롯": "birth_date=2021-03-05 / age_subject=본인 아님(자녀, 모호)",
+      "예상 판정": "미확인",
+      "관련 LLM 노드": "N1, N9",
+      "선정 이유(무엇을 검증하는가)": "실제로 팀이 겪은 버그 케이스. '본인 나이 확인 불가' 판정이 나는 지점이라, 이 애매함을 솔직하게 설명하는지 얼버무리는지 비교하기 좋다."
+    },
+    "team_expected_reference_only": "미확인",
+    "review_expectation": "자녀 생년월일을 본인 나이로 해석하면 안 됩니다. 유아학비 문서는 있지만 자녀의 유치원 재원 여부와 나머지 지원조건은 확인되지 않아 최종 자격은 미확인입니다.",
+    "policy_id_is_synthetic": false,
+    "actual_search_result": false,
+    "evidence": [
+      {
+        "policy_id": "000000465790",
+        "title": "유아학비 (누리과정) 지원",
+        "detail": {
+          "purpose": "3~5세 누리과정 도입으로 유치원·어린이집에 국가수준 공통 교육과정(누리과정)을 적용함에 따라, 보호자의 소득수준에 관계없이 전 계층 유아학비, 보육료 지원",
+          "support_target": "○ 지원대상 : 국공립 및 사립유치원에 다니는 3~5세 유아\n- '23년 1~2월생으로 유치원 입학을 희망하여 3세반에 취원한 유아도 지원 대상\n-  취학대상 아동('19.1.1~12.31.출생)이 취학을 유예하는 경우, 유예한 1년에 한하여 5세 유아 무상교육비 지원(취학유예 통지서 제출)\n※ 단, 지원기간은 3년을 초과할 수 없음.\n○ 추가지원 : 저소득층 유아(유아학비 지원 대상 자격이 있고, 사립유치원에 다니는 법정저소득층(기초생활수급자, 차상위계층, 한부모 가정) 유아)\n○  아래의 경우 지원대상에서 제외\n-  대한민국 국적을 가지지 않은 유아(난민 및 「재한외국인 처우 기본법」에 따라 법무부장관이 인정한 '특별기여자 등'은 예외적으로 인정)\n- 가정 양육수당 및 어린이집 보육료를 지원 받고 있는 유아\n-  유치원 이용시간에 아이돌봄서비스 등과 중복지원 불가\n- 해외 체류 기간이 31일째 되는 날 유아학비 지원자격 중지\n○  자격 중지 후 유아학비를 다시 지원받기 위해서는 재신청 필요, 신청 누락으로 발생되는 지원금은 소급지원 되지 않음.",
+          "eligibility_criteria": "※ 2026. 3. 1~2027.2.28. 까지 적용\n○ 지원대상 : 국공립유치원 및 사립유치원에 다니는  만 3~5세 아동\n5세  '20.1.1.~'20.12.31.\n4세  '21.1.1.~'21.12.31.\n3세  '22.1.1.~'23.2.28.\n○ 신청인 : 아동의 보호자\n○ 신청장소 : 온라인 신청 (복지로 복지사업서비스 (www.bokjiro.go.kr) ) 및 읍면동 주민센터(아동 주민등록 주소지)\n- 주의: 온라인 신청은 부모만 가능\n※ 부모 이외의 보호자인 경우(자녀의 친권자 또는  후견인 보호자, 조부모, 사회복지시설장 등) 등 담당공무원의 확인이 필요한 경우는 온라인으로 신청하실수 없으므로 불편하시더라도 읍면동 주민센터(주소지 시군구)에서 신청하시기 바랍니다.",
+          "support_details": "○ 3~5세에 대해 교육비를 지급합니다.\n- 국공립 100,000원, 사립 280,000원\n○ 3~5세에 대해 방과후과정비를 지급합니다.\n- 국공립 50,000원, 사립 70,000원\n○ 사립유치원을 다니는 법정저소득층 유아에게 저소득층 유아학비를 추가 지급합니다.\n- 사립 200,000원",
+          "application_method": "○ 유아의 보호자가 가까운 읍면동 주민센터 방문 또는 인터넷을 이용하여 온라인 신청 (복지로 http://www.bokjiro.go.kr) 이 가능합니다.\n- 주의: 온라인 신청은 부모만 가능\n※ 부모 이외의 보호자인 경우(자녀의 친권자 또는  후견인 보호자, 조부모, 사회복지시설장 등) 등 담당공무원의 확인이 필요한 경우는 온라인으로 신청하실수 없으므로 번거로우시더라도 읍면동 주민센터(주소지 시군구)에서 방문 신청하시기 바랍니다.\n○ 신청 후 학부모 인증 신청에 따라 교육청에서 유치원으로 지원금액이 입금됩니다.\n※ 기존에 보육료, 양육수당 등 다른 복지서비스의 지원 자격을 보유하고 있는 경우에는 반드시 유아학비로 변경 신청해야 지원 가능하며, 소급지원 불가\n※ 신청일 기준으로 지급, 유아학비 신청과 동시에 보육료 즉시 지원 중단되며, 양육수당은 변경신청일 기준에 따라 지원 중단됨.",
+          "application_period": "상시신청",
+          "legal_basis": "유아교육법(제24조)||영유아보육법(제34조)||유아교육법 시행령(제29조)",
+          "required_documents": "- 사회복지서비스 및 급여제공(변경) 신청서\n- 사회복지서비스 이용권(바우처) 제공(변경) 신청서\n- 아이사랑 카드발급 신청 및 개인신용정보의 조회·제공·이용 동의서"
+        }
+      }
+    ],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "000000465790": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "자녀 생년월일을 본인 나이로 해석하면 안 됩니다. 유아학비 문서는 있지만 자녀의 유치원 재원 여부와 나머지 지원조건은 확인되지 않아 최종 자격은 미확인입니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "interests": [],
+        "household_types": [],
+        "age_subject": "child",
+        "birth_date": "2021-03-05",
+        "age": 5,
+        "age_year_based": 5,
+        "age_ref_date": "2026-09-15",
+        "region_scope": "unknown",
+        "region_names": []
+      },
+      "missing_slots": [
+        "region",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 거주 지역 (시/도부터, 예: 서울특별시 또는 경기도 성남시 분당구)\n2. 성별 (여성/남성)\n3. 소득 수준 (기초생활수급/차상위 여부, 또는 기준중위소득 대비 비율 - 예: 중위소득 60%)\n4. 장애인 등록 여부 (등록/미등록)\n5. 취업 상태 (재직/구직/자영업/학생/무직)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[000000465790]\n- 지원자격: 확인 필요\n  근거: 자녀 생년월일을 본인 나이로 해석하면 안 됩니다. 유아학비 문서는 있지만 자녀의 유치원 재원 여부와 나머지 지원조건은 확인되지 않아 최종 자격은 미확인입니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  },
+  {
+    "id": 4,
+    "question": "부산에 사는 70세 남성입니다. 소득은 중위소득 120%대이고 무직이에요. 영유아 보육료 지원받고 싶은데 가능한가요?",
+    "original": {
+      "번호": 4,
+      "카테고리": "미충족",
+      "질문 문장": "부산에 사는 70세 남성입니다. 소득은 중위소득 120%대이고 무직이에요. 영유아 보육료 지원받고 싶은데 가능한가요?",
+      "포함 키워드/슬롯": "region=부산 / 연령=70세(대상범위 밖) / income=120% / 정책=영유아 보육료",
+      "예상 판정": "미충족",
+      "관련 LLM 노드": "N9, N13",
+      "선정 이유(무엇을 검증하는가)": "완곡하되 명확해야 하는 케이스. 사과체로 흐르는 모델 vs 팩트만 담백하게 쓰는 모델이 갈린다."
+    },
+    "team_expected_reference_only": "미충족",
+    "review_expectation": "영유아 보육료 문서가 제공되지 않았습니다. 유아학비는 다른 정책이므로 대신 적용할 수 없고, 요청한 지원의 자격은 확인 불가입니다.",
+    "policy_id_is_synthetic": true,
+    "actual_search_result": false,
+    "evidence": [],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "확인 불가": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "영유아 보육료 문서가 제공되지 않았습니다. 유아학비는 다른 정책이므로 대신 적용할 수 없고, 요청한 지원의 자격은 확인 불가입니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "age_self_reported": 70,
+        "gender": "male",
+        "income_bracket": "pct_100_150",
+        "employment_status": "not_working",
+        "interests": [
+          "보육"
+        ],
+        "household_types": [],
+        "age_subject": "self",
+        "age": null,
+        "age_year_based": null,
+        "age_ref_date": null,
+        "region_scope": "regional",
+        "region_names": [
+          "부산광역시"
+        ]
+      },
+      "missing_slots": [
+        "birth_date",
+        "disability_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 생년월일 (예: 1990-01-01) - 복지제도 연령 기준이 대부분 만 나이라 정확한 날짜가 필요합니다\n2. 장애인 등록 여부 (등록/미등록)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[확인 불가]\n- 지원자격: 확인 필요\n  근거: 영유아 보육료 문서가 제공되지 않았습니다. 유아학비는 다른 정책이므로 대신 적용할 수 없고, 요청한 지원의 자격은 확인 불가입니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  },
+  {
+    "id": 5,
+    "question": "대구광역시 살고 25세 여성입니다. 청년 주거비 지원이랑 청년월세 특별지원 둘 다 받을 수 있나요?",
+    "original": {
+      "번호": 5,
+      "카테고리": "중복수급",
+      "질문 문장": "대구광역시 살고 25세 여성입니다. 청년 주거비 지원이랑 청년월세 특별지원 둘 다 받을 수 있나요?",
+      "포함 키워드/슬롯": "region=대구광역시 / 연령=25세 / gender=여성 / 정책=청년 주거비,청년월세(중복수급 트리거)",
+      "예상 판정": "조건부/미확인",
+      "관련 LLM 노드": "N11, N13",
+      "선정 이유(무엇을 검증하는가)": "'안 됨/조건부/모름'을 섞어 말하지 않고 구분해서 쓰는지가 핵심."
+    },
+    "team_expected_reference_only": "조건부/미확인",
+    "review_expectation": "청년 주거비 지원과 청년월세 특별지원 문서가 제공되지 않았습니다. 월세자금보증 문서로 두 정책의 중복수급 가능 여부를 확인할 수 없습니다.",
+    "policy_id_is_synthetic": true,
+    "actual_search_result": false,
+    "evidence": [],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "확인 불가": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "청년 주거비 지원과 청년월세 특별지원 문서가 제공되지 않았습니다. 월세자금보증 문서로 두 정책의 중복수급 가능 여부를 확인할 수 없습니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "age_self_reported": 25,
+        "gender": "female",
+        "interests": [
+          "주거",
+          "청년"
+        ],
+        "household_types": [],
+        "age_subject": "self",
+        "age": null,
+        "age_year_based": null,
+        "age_ref_date": null,
+        "region_scope": "regional",
+        "region_names": [
+          "대구광역시"
+        ]
+      },
+      "missing_slots": [
+        "birth_date",
+        "income_bracket",
+        "disability_status",
+        "employment_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 생년월일 (예: 1990-01-01) - 복지제도 연령 기준이 대부분 만 나이라 정확한 날짜가 필요합니다\n2. 소득 수준 (기초생활수급/차상위 여부, 또는 기준중위소득 대비 비율 - 예: 중위소득 60%)\n3. 장애인 등록 여부 (등록/미등록)\n4. 취업 상태 (재직/구직/자영업/학생/무직)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[확인 불가]\n- 지원자격: 확인 필요\n  근거: 청년 주거비 지원과 청년월세 특별지원 문서가 제공되지 않았습니다. 월세자금보증 문서로 두 정책의 중복수급 가능 여부를 확인할 수 없습니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  },
+  {
+    "id": 6,
+    "question": "농어업인인데 스마트팜 창업자금 대출한도가 정확히 얼마인지랑 상환 유예기간까지 알려주세요.",
+    "original": {
+      "번호": 6,
+      "카테고리": "환각(hallucination)",
+      "질문 문장": "농어업인인데 스마트팜 창업자금 대출한도가 정확히 얼마인지랑 상환 유예기간까지 알려주세요.",
+      "포함 키워드/슬롯": "정책=농어업인,스마트팜,창업자금 / 문서에 없을 수치를 구체적으로 요구",
+      "예상 판정": "확인불가(abstained)",
+      "관련 LLM 노드": "N6, N7, N13",
+      "선정 이유(무엇을 검증하는가)": "가장 중요한 케이스. 근거 문서에 없는 정확한 숫자를 요구했을 때 지어내는 모델 vs '확인 불가'로 솔직히 답하는 모델을 가른다."
+    },
+    "team_expected_reference_only": "확인불가(abstained)",
+    "review_expectation": "스마트팜 창업자금 문서가 없어 대출한도와 상환 유예기간은 확인 불가입니다. 다른 농어업 지원 문서의 숫자를 대신 쓰거나 추정할 수 없습니다.",
+    "policy_id_is_synthetic": true,
+    "actual_search_result": false,
+    "evidence": [],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "확인 불가": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "스마트팜 창업자금 문서가 없어 대출한도와 상환 유예기간은 확인 불가입니다. 다른 농어업 지원 문서의 숫자를 대신 쓰거나 추정할 수 없습니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 2,
+    "baseline_n1": {
+      "slots": {
+        "interests": [
+          "창업"
+        ],
+        "household_types": [],
+        "age_subject": "self",
+        "age": null,
+        "age_year_based": null,
+        "age_ref_date": null,
+        "region_scope": "unknown",
+        "region_names": []
+      },
+      "missing_slots": [
+        "region",
+        "birth_date",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 거주 지역 (시/도부터, 예: 서울특별시 또는 경기도 성남시 분당구)\n2. 생년월일 (예: 1990-01-01) - 복지제도 연령 기준이 대부분 만 나이라 정확한 날짜가 필요합니다\n3. 성별 (여성/남성)\n4. 소득 수준 (기초생활수급/차상위 여부, 또는 기준중위소득 대비 비율 - 예: 중위소득 60%)\n5. 장애인 등록 여부 (등록/미등록)\n6. 취업 상태 (재직/구직/자영업/학생/무직)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[확인 불가]\n- 지원자격: 확인 필요\n  근거: 스마트팜 창업자금 문서가 없어 대출한도와 상환 유예기간은 확인 불가입니다. 다른 농어업 지원 문서의 숫자를 대신 쓰거나 추정할 수 없습니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  },
+  {
+    "id": 7,
+    "question": "저 경기도삼 29살여자임 결혼도안했고 알바만하는데 뭐받을수있음뇨",
+    "original": {
+      "번호": 7,
+      "카테고리": "구어체·오탈자",
+      "질문 문장": "저 경기도삼 29살여자임 결혼도안했고 알바만하는데 뭐받을수있음뇨",
+      "포함 키워드/슬롯": "region=경기도(오타) / 연령=29 / gender=여성 / employment=알바 / 구어체·맞춤법 오류",
+      "예상 판정": "다양(파싱결과 따라 상이)",
+      "관련 LLM 노드": "N1",
+      "선정 이유(무엇을 검증하는가)": "실제 사용자는 오타·반말·주어 생략을 섞어 쓴다. 슬롯 파싱 강건성을 실전에 가깝게 검증."
+    },
+    "team_expected_reference_only": "다양(파싱결과 따라 상이)",
+    "review_expectation": "특정 정책을 지정하지 않았고 신청자 정보도 부족합니다. 현재 자료만으로 받을 수 있는 지원을 확정할 수 없습니다.",
+    "policy_id_is_synthetic": true,
+    "actual_search_result": false,
+    "evidence": [],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "확인 불가": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "특정 정책을 지정하지 않았고 신청자 정보도 부족합니다. 현재 자료만으로 받을 수 있는 지원을 확정할 수 없습니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "age_self_reported": 29,
+        "interests": [],
+        "household_types": [],
+        "age_subject": "self",
+        "age": null,
+        "age_year_based": null,
+        "age_ref_date": null,
+        "region_scope": "regional",
+        "region_names": [
+          "경기도"
+        ]
+      },
+      "missing_slots": [
+        "birth_date",
+        "gender",
+        "income_bracket",
+        "disability_status",
+        "employment_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 생년월일 (예: 1990-01-01) - 복지제도 연령 기준이 대부분 만 나이라 정확한 날짜가 필요합니다\n2. 성별 (여성/남성)\n3. 소득 수준 (기초생활수급/차상위 여부, 또는 기준중위소득 대비 비율 - 예: 중위소득 60%)\n4. 장애인 등록 여부 (등록/미등록)\n5. 취업 상태 (재직/구직/자영업/학생/무직)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[확인 불가]\n- 지원자격: 확인 필요\n  근거: 특정 정책을 지정하지 않았고 신청자 정보도 부족합니다. 현재 자료만으로 받을 수 있는 지원을 확정할 수 없습니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  },
+  {
+    "id": 8,
+    "question": "전북특별자치도 전주시에 살고, 45세 여성 한부모 가정입니다. 자녀는 초등학생 1명, 중학생 1명이에요. 받을 수 있는 지원 전부 알려주세요.",
+    "original": {
+      "번호": 8,
+      "카테고리": "다건 처리",
+      "질문 문장": "전북특별자치도 전주시에 살고, 45세 여성 한부모 가정입니다. 자녀는 초등학생 1명, 중학생 1명이에요. 받을 수 있는 지원 전부 알려주세요.",
+      "포함 키워드/슬롯": "region=전주시 / 연령=45세 / gender=여성 / 정책=한부모,다자녀 / 광범위 질의('전부')",
+      "예상 판정": "다건(충족/미확인 혼재)",
+      "관련 LLM 노드": "N4, N12, N13",
+      "선정 이유(무엇을 검증하는가)": "후보 정책이 여러 개 잡힐 때 장황해지는지, 카드별로 핵심만 정리하는지 비교."
+    },
+    "team_expected_reference_only": "다건(충족/미확인 혼재)",
+    "review_expectation": "한부모·다자녀 지원의 전체 목록 근거가 없습니다. 현재 자료만으로 받을 수 있는 지원 전부를 나열하거나 자격을 확정할 수 없습니다.",
+    "policy_id_is_synthetic": true,
+    "actual_search_result": false,
+    "evidence": [],
+    "state": {
+      "assembled_result": {
+        "policies": {
+          "확인 불가": {
+            "eligibility": {
+              "verdict": "미확인",
+              "reasons": [
+                "한부모·다자녀 지원의 전체 목록 근거가 없습니다. 현재 자료만으로 받을 수 있는 지원 전부를 나열하거나 자격을 확정할 수 없습니다."
+              ]
+            },
+            "benefit_amount": null,
+            "duplicate": {
+              "status": "미확인"
+            },
+            "status_note": "현재 자료로 지원금액 확인 불가"
+          }
+        }
+      },
+      "claim_plan": [],
+      "subsidy_chunks": [],
+      "law_chunks": [],
+      "node_trace": [
+        "N12"
+      ]
+    },
+    "n13_style_scored": true,
+    "review_weight": 1,
+    "baseline_n1": {
+      "slots": {
+        "age_self_reported": 45,
+        "gender": "female",
+        "employment_status": "student",
+        "interests": [
+          "한부모"
+        ],
+        "household_types": [
+          "single_parent"
+        ],
+        "age_subject": "child",
+        "age": null,
+        "age_year_based": null,
+        "age_ref_date": null,
+        "region_scope": "regional",
+        "region_names": [
+          "전북특별자치도",
+          "전북특별자치도 전주시"
+        ]
+      },
+      "missing_slots": [
+        "birth_date",
+        "income_bracket",
+        "disability_status"
+      ],
+      "followup": "맞춤 제도를 찾으려면 아래 정보가 필요해요. 한 번에 이어서 답해주셔도 됩니다.\n1. 생년월일 (예: 1990-01-01) - 복지제도 연령 기준이 대부분 만 나이라 정확한 날짜가 필요합니다\n2. 소득 수준 (기초생활수급/차상위 여부, 또는 기준중위소득 대비 비율 - 예: 중위소득 60%)\n3. 장애인 등록 여부 (등록/미등록)\n모르시거나 말씀하기 어려운 항목은 '모름'이라고 답하셔도 됩니다.",
+      "followup_style_scored": false
+    },
+    "baseline_n13": {
+      "draft_answer": "[확인 불가]\n- 지원자격: 확인 필요\n  근거: 한부모·다자녀 지원의 전체 목록 근거가 없습니다. 현재 자료만으로 받을 수 있는 지원 전부를 나열하거나 자격을 확정할 수 없습니다.\n- 지원금액: 현재 자료로 지원금액 확인 불가\n- 중복수급: 미확인",
+      "citations": [],
+      "node_trace": [
+        "N12",
+        "N13"
+      ]
+    }
+  }
+]

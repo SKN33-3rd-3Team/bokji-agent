@@ -1,0 +1,11 @@
+{
+  "reason": "채점자 간 나이 주체 필드의 해석 차이를 동일하게 정리",
+  "source": "src/rag_chatbot/graph/slot_schema.py:AgeSubject",
+  "definition": "연령 조건이 누구를 가리키는지",
+  "application": "나이·생년월일이 전혀 없는 질문에서 age_subject=self 또는 unknown만으로 일반 질문 대상 오해나 나이 이전을 확정해 감점하지 않는다. 실제 제시된 조건의 사람 간 이전, 미제공 조건 추가는 계속 오류로 센다. 상세 답변의 질문 대상 이해는 별도 평가한다.",
+  "audit_situations": [
+    "S014",
+    "S070"
+  ],
+  "scope": "세 모델 모두에 적용. 질문·서비스·생성 설정·사전 N1 평가 포함 여부는 유지. 원래 채점 파일은 보존한다."
+}

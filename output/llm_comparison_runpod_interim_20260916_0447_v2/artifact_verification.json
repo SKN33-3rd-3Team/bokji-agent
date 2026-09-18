@@ -1,0 +1,36 @@
+{
+  "workbook_cells_checked": 3088,
+  "formula_results_checked": 36,
+  "sheets": [
+    {
+      "sheet": "중간 요약",
+      "rows": 13,
+      "verified": true
+    },
+    {
+      "sheet": "공통 질문",
+      "rows": 44,
+      "verified": true
+    },
+    {
+      "sheet": "최종 답변과 검토",
+      "rows": 132,
+      "verified": true
+    },
+    {
+      "sheet": "조건 이해 검토",
+      "rows": 132,
+      "verified": true
+    },
+    {
+      "sheet": "실행 기록",
+      "rows": 132,
+      "verified": true
+    }
+  ],
+  "all_5_sheet_previews_visually_checked": true,
+  "pdf_pages": 3,
+  "all_pdf_pages_visually_checked": true,
+  "formula_errors": 0,
+  "clipped_row_candidates": 0
+}

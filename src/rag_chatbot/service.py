@@ -196,6 +196,7 @@ from .graph.slot_schema import (
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
 from .llm import (
+    OllamaClient,
     HuggingFaceInferenceClient,
     RecordingLLMClient,
     RunPodServerlessClient,
@@ -284,12 +285,14 @@ def connect_store() -> ChromaVectorStore:
 
 
 def build_llm_client() -> RecordingLLMClient | None:
-    """``HF_TOKEN``이 있으면 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
-    만든다. 없으면(기본 상태) 조용히 ``None``을 반환해서 네 노드 모두 규칙
-    기반/템플릿 경로로 동작한다 - 이 서비스가 LLM 없이도 항상 끝까지 도는
-    성질은 그대로 유지한다.
+    """선택한 백엔드로 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
+    만든다. HF/RunPod 인증정보가 없으면 ``None``을 반환하여 기존 규칙 기반/
+    템플릿 경로를 유지한다. Ollama를 선택하면 명시적인 모델 이름이 필요하다.
 
     백엔드 선택(``LLM_BACKEND`` 환경변수):
+    - ``ollama``: 로컬 Ollama. ``LLM_MODEL_NAME`` 필수, HF 토큰 불필요.
+      ``OLLAMA_BASE_URL``은 loopback만 허용한다. ``LLM_DISABLE_THINKING=1``은
+      /api/show capabilities에 thinking이 있을 때만 think=False를 보낸다.
     - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
       ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
     - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
@@ -297,6 +300,16 @@ def build_llm_client() -> RecordingLLMClient | None:
     """
 
     backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
+
+    if backend == "ollama":
+        return RecordingLLMClient(OllamaClient(
+            model=os.environ.get("LLM_MODEL_NAME") or "",
+            base_url=os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434",
+            timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+            num_predict=int(os.environ.get("LLM_MAX_NEW_TOKENS") or 1024),
+            num_ctx=int(os.environ.get("OLLAMA_NUM_CTX") or 4096),
+            disable_thinking=os.environ.get("LLM_DISABLE_THINKING") == "1",
+        ))
 
     if backend == "runpod":
         if not (os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY")):
@@ -307,7 +320,7 @@ def build_llm_client() -> RecordingLLMClient | None:
             )
         )
     if backend not in {"hf", "huggingface"}:
-        raise ValueError("LLM_BACKEND must be hf, huggingface, or runpod")
+        raise ValueError("LLM_BACKEND must be hf, huggingface, runpod, or ollama")
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
