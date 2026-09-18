@@ -147,7 +147,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack, nullcontext
-from datetime import date
 import sys
 from pathlib import Path
 from threading import Lock
@@ -191,6 +190,7 @@ from .graph.slot_schema import (
     VETERAN_STATUS_KO,
     HouseholdType,
     is_valid_slot_value,
+    korea_today,
     parse_birth_date,
 )
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
@@ -1233,6 +1233,7 @@ def ask(
             _on_graph_ready(graph)
         store = get_store()
         with _llm_request_scope():
+            reference_date = korea_today()
             interests = [str(item) for item in (extra_interests or []) if item]
             initial_slots: dict = {}
             if interests:
@@ -1254,7 +1255,7 @@ def ask(
             if known_gender and is_valid_slot_value("gender", known_gender):
                 initial_slots["gender"] = known_gender
                 profile_sourced.append("gender")
-            if known_birth_date and parse_birth_date(known_birth_date, date.today()):
+            if known_birth_date and parse_birth_date(known_birth_date, reference_date):
                 initial_slots["birth_date"] = known_birth_date
                 profile_sourced.append("birth_date")
             if known_disability_status and is_valid_slot_value(
@@ -1291,6 +1292,7 @@ def ask(
                 session_id=session_id,
                 top_k=top_k,
                 slots=initial_slots or None,
+                as_of=reference_date,
             )
             # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
             request_timer.close()

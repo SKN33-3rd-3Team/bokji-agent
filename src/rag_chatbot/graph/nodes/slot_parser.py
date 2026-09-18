@@ -41,6 +41,7 @@ from ..slot_schema import (
     AgeSubject,
     calculate_ages,
     is_valid_slot_value,
+    korea_today,
     parse_birth_date,
 )
 from ..state import GraphState, SlotState
@@ -126,6 +127,7 @@ def parse_slots(state: GraphState, llm_client: LLMClient | None = None) -> dict:
     reference_date = state.get("as_of")
     if reference_date is not None and type(reference_date) is not date:
         raise ValueError("state['as_of'] must be a date")
+    reference_date = reference_date or korea_today()
 
     extracted = extract_slots(
         user_input,
@@ -358,7 +360,7 @@ def _apply_birth_date(
         if profile_sourced is not None:
             profile_sourced.discard("birth_date")
 
-    reference_date = reference_date or date.today()
+    reference_date = reference_date or korea_today()
     birth_date = parse_birth_date(merged.get("birth_date"), reference_date)
     if birth_date is None:
         # 생년월일이 없으면 파생 값도 남기지 않는다. 예전 턴에 계산해 둔

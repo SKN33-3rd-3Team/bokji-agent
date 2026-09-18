@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from . import lockout
 from . import repository as repo
@@ -105,10 +105,8 @@ _SIDO_VALUES = frozenset(
 # API-09의 signup_interest_options와 일치하는지 확인한다.
 _INTEREST_VALUES = frozenset({"임신/출산", "노인/어르신", "농어업인", "청년"})
 
-# 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
-# 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가
-# 하드게이트 슬롯으로 쓰기 직전에 다시 검증한다). 미래 날짜만 걸러
-# 명백히 잘못된 값이 암호화돼 저장되는 것을 막는다.
+# graph.slot_schema와 같은 한국 날짜·만 120세 상한. 인증 모듈은 무거운
+# graph 패키지를 import하지 않으며 경계 일치는 계약 테스트로 확인한다.
 _MAX_PLAUSIBLE_AGE_YEARS = 120
 
 
@@ -133,27 +131,19 @@ def _clean_birth_date(value: object) -> str:
         parsed = date.fromisoformat(text)
     except ValueError as exc:
         raise AuthError("생년월일 형식이 올바르지 않습니다.") from exc
-    today = _utcnow_date()
+    if parsed.isoformat() != text:
+        raise AuthError("생년월일 형식이 올바르지 않습니다.")
+    today = _korea_today()
     if parsed > today:
         raise AuthError("생년월일이 미래일 수 없습니다.")
-    if parsed < _earliest_plausible_birth_date(today):
+    age = today.year - parsed.year - ((today.month, today.day) < (parsed.month, parsed.day))
+    if age > _MAX_PLAUSIBLE_AGE_YEARS:
         raise AuthError("생년월일이 올바르지 않습니다.")
     return parsed.isoformat()
 
 
-def _earliest_plausible_birth_date(today: date) -> date:
-    """"오늘 기준 120년 전" 날짜. 연도만 빼면 2/29 같은 날은 실제 120년보다
-    최대 며칠 더 넉넉하게 통과시키는 경계 오류가 생겨(연도 차만 비교) 여기서는
-    실제 날짜로 뺀다. 오늘이 2/29 인 마지막 해가 윤년이 아니면 2/28 로 내림."""
-
-    try:
-        return today.replace(year=today.year - _MAX_PLAUSIBLE_AGE_YEARS)
-    except ValueError:
-        return today.replace(year=today.year - _MAX_PLAUSIBLE_AGE_YEARS, day=28)
-
-
-def _utcnow_date() -> date:
-    return datetime.now(timezone.utc).date()
+def _korea_today() -> date:
+    return datetime.now(timezone(timedelta(hours=9))).date()
 
 
 def _clean_choice(value: object, allowed: frozenset[str], label: str) -> str:

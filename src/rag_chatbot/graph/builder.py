@@ -69,6 +69,7 @@ from .nodes.slot_parser import parse_slots
 from .nodes.targeted_law_search import search_targeted_laws
 from ..timing import timed_node
 from .policy_conditions import PolicyUserTypeIndex, SupportConditionsIndex
+from .slot_schema import korea_today
 from .state import GraphState
 
 _SlotGateRoute = Literal["sufficient", "general_law", "request_input"]
@@ -453,7 +454,7 @@ def run_graph(
     initial_state: GraphState = {
         "query_id": session_id,
         "policy_top_k": top_k,
-        "as_of": as_of if as_of is not None else _date.today(),
+        "as_of": as_of if as_of is not None else korea_today(),
         "user_input": user_input,
         "slots": dict(slots) if slots else {},
         "slot_ask_counts": {},
