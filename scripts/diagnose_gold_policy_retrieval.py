@@ -182,6 +182,21 @@ def _slots_from_question(item: dict) -> dict:
     return slots
 
 
+# 2026-09-15: 여기 있던 ``_intent_tail``("마지막 문장만 남긴다")은 삭제했다.
+#
+# 질의 희석 효과 자체는 실재했다(Top-5 62/95 -> 85/95). 하지만 그 구현은 이
+# 질문 세트가 전부 "인적사항 문장 + 요구 문장" 한 가지 틀로 쓰였다는 사실에
+# 기대고 있었다 - 즉 fixture 과적합이다. 마지막 문장이 "관련 지원이 있나요?"
+# 같은 일반 문형이면 주제어는 앞 문장에 남는데 그걸 통째로 버려서,
+# dev-energy-led-019(2위)와 dev-marine-defense-minor-022(1위)가 top-50 밖으로
+# 회귀했다.
+#
+# 대신 ``llm_gateway.strip_profile_phrases``가 "이미 필터가 처리하는 표현만
+# 걷어낸다"는 규칙으로 같은 효과를 내고 문장 순서에 의존하지 않는다. 그게
+# 이제 서비스 기본 동작이므로 **이 스크립트의 기본 실행이 곧 수정 후**이고,
+# ``--raw-query``가 수정 전(인적사항이 섞인 질의)을 재현한다.
+
+
 def _rank_of(policy_id: str, results) -> int | None:
     seen: list[str] = []
     for hit in results:
@@ -205,10 +220,18 @@ def main() -> None:
         help="순위 밀림(C)을 판정하려고 크게 잡는 top_k. 서비스 기본은 5다.",
     )
     parser.add_argument(
+        "--raw-query",
+        action="store_true",
+        help="인적사항을 걷어내기 전(2026-09-15 이전)의 질의로 검색한다."
+        " 기본 실행과 두 번 돌려 총계를 비교하면 이 수정이 실제로 순위를"
+        " 올렸는지 확인할 수 있다.",
+    )
+    parser.add_argument(
         "--per-policy",
         type=int,
-        default=4,
-        help="정책마다 실제 검색을 재현해볼 질문 수",
+        default=0,
+        help="정책마다 재현할 질문 수. 0(기본)이면 전부 - 일부만 보면 '9/19가 왜"
+        " 실패하는가'를 판단할 수 없다. 빠르게 훑을 때만 4 같은 값을 준다.",
     )
     args = parser.parse_args()
 
@@ -227,6 +250,8 @@ def main() -> None:
           f"사용자구분 {len(user_types)}건 로드.\n", flush=True)
 
     verdicts: dict[str, str] = {}
+    totals: dict[str, int] = {}
+    top5_counts: dict[str, int] = {}
 
     for policy_id in sorted(by_policy, key=lambda p: -len(by_policy[p])):
         items = by_policy[policy_id]
@@ -320,14 +345,21 @@ def main() -> None:
             print(f"  지원조건: {len(items)}건 모두 통과")
 
         # --- C. 실제 질의 재현 -------------------------------------------
-        print(f"  재현   : 서비스와 같은 질의·필터, top_k={args.deep_top_k}")
+        sample = items if args.per_policy <= 0 else items[: args.per_policy]
+        mode = "수정 전 질의(인적사항 포함)" if args.raw_query else "서비스와 같은 질의"
+        print(
+            f"  재현   : {mode}·필터, top_k={args.deep_top_k}"
+            f" ({len(sample)}/{len(items)}건)"
+        )
         ranks: list[int | None] = []
-        for item in items[: args.per_policy]:
+        for item in sample:
             slots = _slots_from_question(item)
             plan = resolve_filter_slots(slots, reference_date=date.today())
             condition = plan["hard"].get("region")
             region_names = tuple(condition.get("any_of", ())) if condition else ()
-            query = _build_query(slots, item["question"])
+            query = _build_query(
+                slots, item["question"], strip_profile=not args.raw_query
+            )
             try:
                 results = store.search(
                     SourceType.SUBSIDY,
@@ -345,22 +377,71 @@ def main() -> None:
             mark = "OK " if rank and rank <= 5 else "MISS"
             print(f"    {mark} {item['question_id']:<38} {shown}")
 
+        # 순위 분포. "9/19 실패"가 '5위 턱걸이로 밀린 것'인지 '아예 후보에도
+        # 없는 것'인지에 따라 고치는 방법이 완전히 달라서, 실패 건을 구간으로
+        # 쪼개 보여준다.
         found = [r for r in ranks if r]
-        if not found:
-            verdicts[policy_id] = f"A/B 후보에 없음(top-{args.deep_top_k}에도 미등장)"
-        elif all(r > 5 for r in found):
-            verdicts[policy_id] = f"C 순위 밀림(최선 {min(found)}위)"
+        absent = len(ranks) - len(found)
+        in_top5 = sum(1 for r in found if r <= 5)
+        near = sorted(r for r in found if 5 < r <= 10)
+        far = sorted(r for r in found if r > 10)
+        print(
+            f"    └ 순위 분포: Top-5 {in_top5}건 / 6~10위 {len(near)}건"
+            f" / 11위~ {len(far)}건 / top-{args.deep_top_k} 밖 {absent}건"
+        )
+        if near:
+            print(f"      6~10위(아깝게 밀림): {', '.join(f'{r}위' for r in near)}")
+        if far:
+            print(f"      11위~(크게 밀림)   : {', '.join(f'{r}위' for r in far)}")
+
+        # 판정은 통과 **비율**로 낸다. 예전에는 한 건이라도 Top-5에 들면
+        # "정상"이라 9/19 실패하는 정책까지 정상으로 찍혀 쓸모가 없었다.
+        total = len(ranks)
+        totals[policy_id] = total
+        top5_counts[policy_id] = in_top5
+        if not total:
+            verdicts[policy_id] = "재현 실패(검색 에러)"
+        elif in_top5 == total:
+            verdicts[policy_id] = f"정상 ({in_top5}/{total} Top-5)"
+        elif not found:
+            verdicts[policy_id] = (
+                f"A/B 후보에 없음 ({total}건 전부 top-{args.deep_top_k} 밖)"
+            )
         else:
-            verdicts[policy_id] = "정상"
+            detail = []
+            if near:
+                detail.append(f"6~10위 {len(near)}")
+            if far:
+                detail.append(f"11위~ {len(far)}")
+            if absent:
+                detail.append(f"미등장 {absent}")
+            verdicts[policy_id] = (
+                f"C 순위 밀림 ({in_top5}/{total} Top-5"
+                + (f", {', '.join(detail)}" if detail else "")
+                + ")"
+            )
         print()
 
     print("=" * 72)
     print("판정")
     for policy_id, verdict in verdicts.items():
         print(f"  {policy_id}: {verdict}")
+
+    # 두 모드(기본 / --raw-query)를 번갈아 돌려 비교할 수 있게 총계를 찍는다.
+    # 정책별 숫자만 보면 "좋아졌나?"를 눈으로 더해야 한다.
+    total_all = sum(totals.values())
+    top5_all = sum(top5_counts.values())
+    mode = "수정 전 질의(인적사항 포함)" if args.raw_query else "현재 서비스 질의(기본)"
+    print()
+    print("=" * 72)
+    print(f"총계 [{mode}]: Top-5 {top5_all}/{total_all}"
+          f" ({top5_all / total_all:.1%})" if total_all else "총계: 없음")
+    print("=" * 72)
+    print("--raw-query 로 한 번 더 돌려 이 숫자를 비교하세요. 기본 실행이 더")
+    print("높아야 인적사항 제거가 실제로 효과가 있다는 뜻입니다.")
     print()
     print("A 색인 누락 -> 그 정책을 다시 색인. B 필터 탈락 -> region 메타데이터 수정.")
-    print("C 순위 밀림 -> _build_query()/랭킹 수정(지자체 정책이 상위를 채우는 문제).")
+    print("C 순위 밀림 -> _build_query()/랭킹 수정.")
 
 
 if __name__ == "__main__":
