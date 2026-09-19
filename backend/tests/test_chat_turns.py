@@ -15,6 +15,7 @@ from backend.app.services import chat_adapter
 from src.rag_chatbot import service
 from src.rag_chatbot.graph import builder
 from src.rag_chatbot.graph.nodes.slot_parser import parse_slots
+from src.rag_chatbot.graph.slot_schema import resolve_filter_slots
 from src.rag_chatbot.graph.state import GraphState
 
 
@@ -50,15 +51,20 @@ def turn_graph(monkeypatch):
     return compiled, seen
 
 
-def test_completed_turn_resets_query_results_and_keeps_profile(turn_graph, monkeypatch):
+@pytest.mark.parametrize("age_subject", ["self", None])
+def test_completed_turn_resets_query_results_and_keeps_profile(turn_graph, monkeypatch, age_subject):
     graph, seen = turn_graph
     builder.run_graph(graph, user_input="first", session_id="same", top_k=3,
                       as_of=date(2026, 12, 31), slots={
                           "birth_date": "2000-01-01", "gender": "female",
                           "region_scope": "regional", "region_names": ["서울특별시"],
-                          "interests": ["old-interest"], "age_subject": "child",
+                          "interests": ["old-interest"], "age_subject": "self",
                       })
     config = {"configurable": {"thread_id": "same"}}
+    if age_subject is None:
+        confirmed = dict(graph.get_state(config).values["slots"])
+        confirmed.pop("age_subject")
+        graph.update_state(config, {"slots": confirmed})
     # Simulate all downstream fields left by a prior completed turn.
     graph.update_state(config, {
         "assembled_result": {"policies": {"old-policy": {}}},
@@ -89,6 +95,33 @@ def test_completed_turn_resets_query_results_and_keeps_profile(turn_graph, monke
     assert slots["birth_date"] == "2000-01-01" and slots["age"] == 27
     assert slots["gender"] == "female" and slots["region_names"] == ["서울특별시"]
     assert not slots.get("interests") and slots["age_subject"] == "self"
+    assert resolve_filter_slots(slots, reference_date=date(2027, 1, 1))["hard"]["birth_date"]["age"] == 27
+
+
+@pytest.mark.parametrize("message, subject", [
+    ("우리 아이는 2015-01-01생입니다", "child"),
+    ("어머니는 1960-01-01생입니다", "household_member"),
+    ("가구원은 2000-01-01생입니다", "household_member"),
+    ("저는 우리 아이 2015-01-01생 지원을 문의합니다", "unknown"),
+])
+def test_completed_turn_discards_non_self_birth_date(turn_graph, monkeypatch, message, subject):
+    graph, seen = turn_graph
+    reference_date = date(2026, 9, 19)
+    monkeypatch.setattr(builder, "korea_today", lambda: reference_date)
+    first = builder.run_graph(graph, user_input=message, session_id="same")
+    config = {"configurable": {"thread_id": "same"}}
+    assert first["answer_status"] == "complete" and not graph.get_state(config).next
+    assert first["slots"]["age_subject"] == subject
+    assert first["slots"]["birth_date"]
+    assert "birth_date" not in resolve_filter_slots(first["slots"], reference_date=reference_date)["hard"]
+
+    result = builder.resume_graph(graph, session_id="same", user_input="본인 청년 지원을 알려주세요")
+    assert result["answer_status"] == "complete" and len(seen) == 2
+    slots = graph.get_state(config).values["slots"]
+    assert slots["age_subject"] == "self"
+    assert "birth_date" not in resolve_filter_slots(slots, reference_date=reference_date)["hard"]
+    assert not slots.get("birth_date")
+    assert slots["age"] is slots["age_year_based"] is slots["age_ref_date"] is None
 
 
 def test_interrupted_turn_resumes_before_starting_new_turn(turn_graph):
