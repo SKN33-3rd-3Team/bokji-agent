@@ -40,7 +40,18 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from typing import Sequence
 
+from rag_design.policy import (
+    LEGAL_ARTICLE_BODY_ASPECT,
+    LEGAL_INTERPRETATION_ASPECT,
+    LEGAL_METADATA_ASPECT,
+)
+
 from ...llm import LLMCallError, LLMClient, loads_json_object
+
+# evidence_gate._LEGAL_ASPECTS와 같은 집합 - N7이 받아주는 값만 통과시킨다.
+_SUPPORTED_ASPECTS = frozenset(
+    {LEGAL_METADATA_ASPECT, LEGAL_ARTICLE_BODY_ASPECT, LEGAL_INTERPRETATION_ASPECT}
+)
 
 
 _CLAIM_TYPES = ("eligibility", "amount", "duplicate")
@@ -115,6 +126,21 @@ def _prefetch_workers() -> int:
     return max(1, min(value, 16))
 # 캐시 상한. 한 프로세스가 오래 살아도 메모리가 무한정 늘지 않게 한다.
 _CACHE_MAX_ENTRIES = 512
+
+# 전역 LLM_MAX_NEW_TOKENS(1024)로는 claim 3종을 한 번에 뽑는 이 호출이 종종
+# 잘려(finish_reason=length) 규칙 기반 폴백으로 조용히 떨어진다(2026-09-19 평가:
+# 잘림 실패가 이 호출에 집중). N10처럼 호출 시점에 읽는다 - import 시점에 읽으면
+# .env 값이 반영되지 않는다.
+_CLAIM_EXTRACT_MAX_NEW_TOKENS = 2048
+
+
+def _claim_extract_max_new_tokens() -> int:
+    # 잘못된 값이면 기본값으로 - 아래 try가 ValueError를 삼켜 N5 전체가 조용히
+    # 규칙 기반으로 떨어지는 걸 막는다.
+    try:
+        return int(os.environ.get("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT") or _CLAIM_EXTRACT_MAX_NEW_TOKENS)
+    except ValueError:
+        return _CLAIM_EXTRACT_MAX_NEW_TOKENS
 
 
 class LLMClaimExtractor:
@@ -206,7 +232,11 @@ class LLMClaimExtractor:
             "발췌한 문장이어야 합니다."
         )
         try:
-            raw = self.llm_client.complete(prompt, system=EXTRACTOR_SYSTEM_PROMPT)
+            raw = self.llm_client.complete(
+                prompt,
+                system=EXTRACTOR_SYSTEM_PROMPT,
+                max_tokens=_claim_extract_max_new_tokens(),
+            )
             # json.loads(raw)를 그대로 쓰면 모델이 코드펜스(```json)나 앞뒤
             # 설명을 붙여 답할 때마다 파싱이 터져, 제대로 뽑아준 claim이
             # 통째로 버려지고 규칙 기반으로 폴백한다. 프로브에서 N5만 한
@@ -232,7 +262,9 @@ class LLMClaimExtractor:
             # 원문에 실제로 없는 reason은 여기서 조용히 버린다 - N6이 또
             # 검증하지만, 애초에 지어낸 claim을 claim_plan에 남기지 않는
             # 편이 이후 노드들의 판단을 덜 흐린다.
-            reasons = [r for r in reasons if r and r in text]
+            # dict.fromkeys로 중복 제거(순서 유지) - N7은 reasons에 중복이 있으면
+            # ValueError로 파이프라인을 죽인다(2026-09-19 policy100에서 실측).
+            reasons = list(dict.fromkeys(r for r in reasons if r and r in text))
             if not reasons:
                 continue
             validated.append(
@@ -240,9 +272,13 @@ class LLMClaimExtractor:
                     "claim_type": claim_type,
                     "law_check_required": bool(raw_claim.get("law_check_required", False)),
                     "reasons": reasons,
-                    "required_aspects": [
-                        str(a) for a in raw_claim.get("required_aspects", []) or []
-                    ],
+                    # N7(evidence_gate)은 지원하지 않는 aspect가 오면 ValueError로
+                    # 파이프라인 전체를 죽인다. 프롬프트가 허용값을 알려주지 않아 모델이
+                    # 임의의 문자열을 넣을 수 있으므로 여기서 걸러낸다.
+                    "required_aspects": sorted(
+                        {str(a) for a in raw_claim.get("required_aspects", []) or []}
+                        & _SUPPORTED_ASPECTS
+                    ),
                 }
             )
 
