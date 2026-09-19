@@ -69,7 +69,10 @@ _ANSWER_MAX_NEW_TOKENS = 2048
 
 def _answer_max_new_tokens() -> int:
     # 호출 시점에 읽는다(benefit_calculator와 같은 이유 - import 시점엔 .env 미반영).
-    return int(os.environ.get("LLM_MAX_NEW_TOKENS_ANSWER") or _ANSWER_MAX_NEW_TOKENS)
+    try:
+        return int(os.environ.get("LLM_MAX_NEW_TOKENS_ANSWER") or _ANSWER_MAX_NEW_TOKENS)
+    except ValueError:  # 잘못된 값이 아래 try에서 삼켜져 LLM 경로가 꺼지는 걸 막는다
+        return _ANSWER_MAX_NEW_TOKENS
 
 
 _STRUCTURED_SYSTEM_PROMPT = (

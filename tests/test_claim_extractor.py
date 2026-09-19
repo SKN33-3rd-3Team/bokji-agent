@@ -262,3 +262,35 @@ def test_claim_extract_token_budget_is_read_at_call_time(monkeypatch) -> None:
     LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
 
     assert client.calls[0]["max_tokens"] == 512
+
+
+def test_invalid_token_budget_env_falls_back_to_default(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", "2k")
+    client = _CapturingClient()
+
+    LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
+
+    assert client.calls[0]["max_tokens"] == 2048
+
+
+def test_response_in_hinted_format_passes_validation() -> None:
+    text = "나이 65세 이상 대상자에게 월 10만원을 지급한다."
+    response = json.dumps(
+        {
+            "claims": [
+                {
+                    "claim_type": "eligibility",
+                    "law_check_required": False,
+                    "reasons": ["나이 65세 이상 대상자에게 월 10만원을 지급한다."],
+                    "required_aspects": [],
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    claims = LLMClaimExtractor(FakeLLMClient(response=response)).extract(
+        policy_id="policy-a", text=text
+    )
+
+    assert [c["claim_type"] for c in claims] == ["eligibility"]

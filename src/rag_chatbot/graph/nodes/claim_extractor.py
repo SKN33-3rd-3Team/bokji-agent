@@ -137,7 +137,12 @@ _CLAIM_EXTRACT_MAX_NEW_TOKENS = 2048
 
 
 def _claim_extract_max_new_tokens() -> int:
-    return int(os.environ.get("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT") or _CLAIM_EXTRACT_MAX_NEW_TOKENS)
+    # 잘못된 값이면 기본값으로 - 아래 try가 ValueError를 삼켜 N5 전체가 조용히
+    # 규칙 기반으로 떨어지는 걸 막는다.
+    try:
+        return int(os.environ.get("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT") or _CLAIM_EXTRACT_MAX_NEW_TOKENS)
+    except ValueError:
+        return _CLAIM_EXTRACT_MAX_NEW_TOKENS
 
 
 class LLMClaimExtractor:
