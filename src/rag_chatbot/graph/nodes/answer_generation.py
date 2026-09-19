@@ -64,17 +64,6 @@ _STATUS_LABELS = {
     "미확인": "확인 필요",
 }
 
-_ANSWER_MAX_NEW_TOKENS = 2048
-
-
-def _answer_max_new_tokens() -> int:
-    # 호출 시점에 읽는다(benefit_calculator와 같은 이유 - import 시점엔 .env 미반영).
-    try:
-        return int(os.environ.get("LLM_MAX_NEW_TOKENS_ANSWER") or _ANSWER_MAX_NEW_TOKENS)
-    except ValueError:  # 잘못된 값이 아래 try에서 삼켜져 LLM 경로가 꺼지는 걸 막는다
-        return _ANSWER_MAX_NEW_TOKENS
-
-
 _STRUCTURED_SYSTEM_PROMPT = (
     "너는 복지 정책 안내 문구를 다듬는 보조 도구다. 반드시 JSON 객체 하나로만 "
     "답한다 - 코드펜스나 그 외 설명 문장을 앞뒤에 붙이지 않는다. 주어진 정보에 "
@@ -429,7 +418,6 @@ def generate_answer(state: GraphState, llm_client: LLMClient | None = None) -> d
             response = llm_client.complete(
                 _build_structured_prompt(sections_by_id),
                 system=_STRUCTURED_SYSTEM_PROMPT,
-                max_tokens=_answer_max_new_tokens(),
             )
             parsed = loads_json_object(response)
             validated_summaries = _validate_structured_summaries(parsed, sections_by_id)
