@@ -51,6 +51,19 @@ EXTRACTOR_SYSTEM_PROMPT = (
     "추론하거나 요약해서 새로 만들지 마세요."
 )
 
+# HF 클라이언트는 guided_json을 쓰지 않아 EXTRACTOR_OUTPUT_SCHEMA가 모델에
+# 전달되지 않는다. 형식 지시가 없으면 모델이 JS 코드·배열 등 제멋대로의 형식으로,
+# 지원대상 항목마다 claim을 하나씩 만들어 토큰 한도까지 이어 쓰는 경우가 실측으로
+# 확인됐다(2026-09-19, 잘림 6/6건). 형식과 분량을 프롬프트로 직접 제한한다.
+_OUTPUT_FORMAT_HINT = (
+    "[출력 형식] 코드·설명·마크다운 없이 아래 형태의 JSON 객체 하나만 출력하세요.\n"
+    '{"claims": [{"claim_type": "eligibility", "law_check_required": false, '
+    '"reasons": ["원문 문장"], "required_aspects": []}]}\n'
+    "- claim_type은 eligibility/amount/duplicate 중 하나이며, 종류마다 claim은 최대 1개입니다.\n"
+    "- 원문에 해당 내용이 없는 종류는 생략하세요.\n"
+    "- reasons는 claim당 가장 핵심적인 원문 문장 최대 3개만 넣으세요(항목이 많아도 전부 나열하지 마세요)."
+)
+
 EXTRACTOR_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -115,6 +128,16 @@ def _prefetch_workers() -> int:
     return max(1, min(value, 16))
 # 캐시 상한. 한 프로세스가 오래 살아도 메모리가 무한정 늘지 않게 한다.
 _CACHE_MAX_ENTRIES = 512
+
+# 전역 LLM_MAX_NEW_TOKENS(1024)로는 claim 3종을 한 번에 뽑는 이 호출이 종종
+# 잘려(finish_reason=length) 규칙 기반 대체 경로로 조용히 떨어진다(2026-09-19
+# 재실행 실측: 잘림 6/6건이 이 호출). N10처럼 호출 시점에 읽는다 - import 시점에
+# 읽으면 .env 값이 반영되지 않는다.
+_CLAIM_EXTRACT_MAX_NEW_TOKENS = 2048
+
+
+def _claim_extract_max_new_tokens() -> int:
+    return int(os.environ.get("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT") or _CLAIM_EXTRACT_MAX_NEW_TOKENS)
 
 
 class LLMClaimExtractor:
@@ -203,10 +226,14 @@ class LLMClaimExtractor:
             f"[정책 ID: {policy_id}]\n[정책 원문]\n{text}\n\n"
             "위 원문에서 자격(eligibility)/지원금액(amount)/중복수급(duplicate) "
             "claim 후보를 뽑아 JSON으로만 답하세요. reasons는 원문에서 그대로 "
-            "발췌한 문장이어야 합니다."
+            "발췌한 문장이어야 합니다.\n\n" + _OUTPUT_FORMAT_HINT
         )
         try:
-            raw = self.llm_client.complete(prompt, system=EXTRACTOR_SYSTEM_PROMPT)
+            raw = self.llm_client.complete(
+                prompt,
+                system=EXTRACTOR_SYSTEM_PROMPT,
+                max_tokens=_claim_extract_max_new_tokens(),
+            )
             # json.loads(raw)를 그대로 쓰면 모델이 코드펜스(```json)나 앞뒤
             # 설명을 붙여 답할 때마다 파싱이 터져, 제대로 뽑아준 claim이
             # 통째로 버려지고 규칙 기반으로 폴백한다. 프로브에서 N5만 한
