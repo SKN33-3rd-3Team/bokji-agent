@@ -32,19 +32,28 @@ def test_signup_sets_session_cookie_and_returns_user(client):
     assert "marketing_opt_in" not in body
 
 
-def test_signup_does_not_call_login(client, monkeypatch):
+def test_signup_reauthenticates_under_user_lock(client, monkeypatch):
     from backend.app.services import auth_adapter
+    from backend.app.session_store.chat_session import chat_session_store
 
-    def fail_login(*_args, **_kwargs):
-        raise AssertionError("signup must not call auth_adapter.login")
+    original = auth_adapter.login
+    calls = []
 
-    monkeypatch.setattr(auth_adapter, "login", fail_login)
+    def locked_login(email, password):
+        user = original(email, password)
+        assert chat_session_store._user_locks[user.id].locked()
+        calls.append((email, password))
+        return user
+
+    monkeypatch.setattr(auth_adapter, "login", locked_login)
     r = _signup(client)
+    assert calls == [(_SIGNUP_PAYLOAD["email"], _SIGNUP_PAYLOAD["password"])]
     assert r.status_code == 201
     assert "session_id" in r.cookies
     body = r.json()["user"]
     assert body["email"] == _SIGNUP_PAYLOAD["email"]
     assert body["display_name"] == "Tester"
+    assert client.get("/api/v1/users/me").status_code == 200
 
 
 def test_signup_duplicate_email_is_409(client):

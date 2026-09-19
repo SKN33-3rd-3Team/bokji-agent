@@ -40,7 +40,7 @@ def _issue_session(
 @router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest, response: Response) -> SignupResponse:
     user = auth_adapter.signup(payload)
-    return SignupResponse(user=_issue_session(user, response))
+    return SignupResponse(user=_issue_session(user, response, password=payload.password))
 
 
 @router.post("/login", response_model=LoginResponse)

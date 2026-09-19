@@ -119,6 +119,45 @@ def test_preauthenticated_waiter_is_rejected_after_revocation(sessions, monkeypa
 
 
 @pytest.mark.parametrize("mutation", ["password", "withdraw_and_register"])
+def test_signup_committed_before_account_change_cannot_issue_old_token(client, monkeypatch, mutation):
+    pending_client = TestClient(client.app)
+    registered, release = Event(), Event()
+    original = auth_adapter.signup
+
+    def pause(payload):
+        result = original(payload)
+        if not registered.is_set():
+            registered.set()
+            assert release.wait(10)
+        return result
+
+    monkeypatch.setattr(auth_adapter, "signup", pause)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(pending_client.post, "/api/v1/auth/signup", json={
+            "email": EMAIL, "name": "Tester", "password": OLD,
+            "password_confirm": OLD, "terms_agreed": True, "privacy_agreed": True,
+        })
+        try:
+            assert registered.wait(10)
+            authenticated = login(client)
+            assert authenticated.status_code == 200
+            if mutation == "password":
+                assert change(client).status_code == 200
+            else:
+                assert withdraw(client).status_code == 200
+                assert signup(client, EMAIL) != authenticated.json()["user"]["id"]
+            sessions_after_change = dict(auth_session_store._sessions)
+        finally:
+            release.set()
+        result = pending.result(timeout=10)
+    assert result.status_code == 401
+    assert "set-cookie" not in result.headers
+    assert pending_client.get("/api/v1/users/me").status_code == 401
+    assert auth_session_store._sessions == sessions_after_change
+    assert client.get("/api/v1/users/me").status_code == 200
+
+
+@pytest.mark.parametrize("mutation", ["password", "withdraw_and_register"])
 def test_login_authenticated_before_account_change_cannot_issue_old_token(sessions, monkeypatch, mutation):
     current, _, _, _ = sessions
     pending_client = TestClient(current.app)
