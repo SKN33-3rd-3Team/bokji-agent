@@ -42,6 +42,9 @@ def _delta(before, after, digits: int = 3) -> str:
     return f" ({sign}{diff:.{digits}f})"
 
 
+_INVALID_MARKER = " ⚠️진단용"
+
+
 def _quality_score(summary: dict, metric: str) -> float | None:
     quality = summary.get("answer_quality")
     if not quality:
@@ -60,7 +63,13 @@ def _success_rate(summary: dict) -> float | None:
     return 1 - error_rate
 
 
-def _row(label: str, before, after, digits: int = 3) -> str:
+def _row(label: str, before, after, digits: int = 3, *, invalid: bool = False) -> str:
+    # invalid=True(둘 중 하나라도 quality_metrics_valid=False)면 Delta를
+    # 아예 안 보여준다 - "+0.15" 같은 구체적 증감 숫자는 경고 문단을 건너뛰고
+    # 표만 보는 사람에게 실제 성능 개선처럼 읽히기 쉽다. 값 자체는 계속
+    # 보여주되(투명성), 신뢰할 수 없는 부분 표본이라는 표시를 값 옆에 남긴다.
+    if invalid:
+        return f"| {label} | {_fmt(before, digits)} | {_fmt(after, digits)}{_INVALID_MARKER} |"
     return (
         f"| {label} | {_fmt(before, digits)} | {_fmt(after, digits)}{_delta(before, after, digits)} |"
     )
@@ -135,20 +144,31 @@ def build_report(before: dict, after: dict, *, before_label: str, after_label: s
         "",
         "| 지표 | Before | After |",
         "| --- | ---: | ---: |",
-        _row("Recall@k", r_before.get("recall_at_k"), r_after.get("recall_at_k")),
-        _row("MRR@k", r_before.get("mrr_at_k"), r_after.get("mrr_at_k")),
-        _row("Citation Precision", c_before.get("precision"), c_after.get("precision")),
-        _row("Citation Coverage", c_before.get("coverage"), c_after.get("coverage")),
-        _row("Abstention Precision", a_before.get("precision"), a_after.get("precision")),
-        _row("Abstention Recall", a_before.get("recall"), a_after.get("recall")),
+        _row("Recall@k", r_before.get("recall_at_k"), r_after.get("recall_at_k"), invalid=bool(invalid_sides)),
+        _row("MRR@k", r_before.get("mrr_at_k"), r_after.get("mrr_at_k"), invalid=bool(invalid_sides)),
+        _row("Citation Precision", c_before.get("precision"), c_after.get("precision"), invalid=bool(invalid_sides)),
+        _row("Citation Coverage", c_before.get("coverage"), c_after.get("coverage"), invalid=bool(invalid_sides)),
+        _row("Abstention Precision", a_before.get("precision"), a_after.get("precision"), invalid=bool(invalid_sides)),
+        _row("Abstention Recall", a_before.get("recall"), a_after.get("recall"), invalid=bool(invalid_sides)),
+        # Success Rate/latency는 quality_metrics_valid로 걸러지지 않는
+        # operations 블록(validation_runner.calculate_summary가 항상 records
+        # 전체로 계산)에서 나온다 - Recall 등과 달리 "일부 문항 실패 = 이
+        # 값도 못 믿음"이 아니라, 오히려 그 실패 자체를 보여주는 지표다.
+        # pool_evaluation_runs.py도 같은 이유로 이 둘은 invalid 여부와
+        # 무관하게 계산한다(그쪽 주석 참고) - 여기서도 Delta를 죽이지 않는다.
         _row(
             "Success Rate (오류 없이 완료)",
             _success_rate(before),
             _success_rate(after),
         ),
-        _row("Faithfulness (LLM-judge)", faith_before, faith_after),
-        _row("Answer relevancy (LLM-judge)", rel_before, rel_after),
-        _row("p50 latency (ms)", o_before.get("p50_latency_ms"), o_after.get("p50_latency_ms"), 0),
+        _row("Faithfulness (LLM-judge)", faith_before, faith_after, invalid=bool(invalid_sides)),
+        _row("Answer relevancy (LLM-judge)", rel_before, rel_after, invalid=bool(invalid_sides)),
+        _row(
+            "p50 latency (ms)",
+            o_before.get("p50_latency_ms"),
+            o_after.get("p50_latency_ms"),
+            0,
+        ),
         "",
         f"- Citation pair count: before={c_before.get('citation_pair_count')}, "
         f"after={c_after.get('citation_pair_count')} "

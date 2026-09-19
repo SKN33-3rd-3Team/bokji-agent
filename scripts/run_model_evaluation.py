@@ -76,18 +76,39 @@ from uuid import uuid4
 _EVAL_EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _EVAL_PHONE_PATTERN = re.compile(r"01[0-9]-?\d{3,4}-?\d{4}")
 _EVAL_RESIDENT_ID_PATTERN = re.compile(r"\d{6}-?[1-4]\d{6}")
-_EVAL_BIRTH_DATE_PATTERN = re.compile(
-    r"(?<!\d)(?:19|20)\d{2}\s*[-./년]\s*\d{1,2}\s*[-./월]\s*\d{1,2}\s*일?(?!\d)"
+# 날짜 형태 전체를 가리면 정책의 공식 날짜(신청기한·시행일)까지 지워져 날짜가
+# 맞는 답과 틀린 답이 채점기 입력에서 똑같아진다. 그래서 날짜 형태는 "이 질문의
+# fixture에서 확인된 생년월일"을 찾는 데만 쓰고, 그 값(과 표기 변형)만 가린다.
+_EVAL_DATE_PATTERN = re.compile(
+    r"(?<!\d)((?:19|20)\d{2})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})\s*일?(?!\d)"
 )
 
 
-def _redact_evaluation_text(text: str) -> str:
-    """Remove direct identifiers before sending or persisting evaluation text."""
+def _birth_date_patterns(slot_answers: Mapping | None) -> list[re.Pattern]:
+    text = str((slot_answers or {}).get("birth_date") or "")
+    patterns = []
+    for year, month, day in _EVAL_DATE_PATTERN.findall(text):
+        patterns.append(
+            re.compile(
+                rf"(?<!\d){year}\s*[-./년]\s*0?{int(month)}\s*[-./월]\s*0?{int(day)}(?:\s*일)?(?!\d)"
+            )
+        )
+    return patterns
+
+
+def _redact_evaluation_text(text: str, birth_date_patterns: Sequence[re.Pattern] = ()) -> str:
+    """Remove direct identifiers before sending or persisting evaluation text.
+
+    Only birth dates known from the question's own profile fixture are masked;
+    other dates (policy deadlines etc.) are evidence and must survive.
+    """
 
     redacted = _EVAL_EMAIL_PATTERN.sub("[이메일]", str(text))
     redacted = _EVAL_PHONE_PATTERN.sub("[전화번호]", redacted)
     redacted = _EVAL_RESIDENT_ID_PATTERN.sub("[주민번호]", redacted)
-    return _EVAL_BIRTH_DATE_PATTERN.sub("[생년월일]", redacted)
+    for pattern in birth_date_patterns:
+        redacted = pattern.sub("[생년월일]", redacted)
+    return redacted
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -173,10 +194,46 @@ def _policy_evidence_text(policy: Mapping) -> str:
     return "\n".join(parts)
 
 
+def _full_policy_evidence_text(policy: Mapping, store=None) -> str:
+    """Grounding text built from ALL stored chunks of the policy.
+
+    ``PolicyView.detail`` comes from a top_k=1 lookup per section, so a section
+    split into several chunks only shows one of them while the answer may have
+    been written from another. Reading every chunk (in document order) keeps the
+    judge's evidence a superset of what the answer could have used. Falls back to
+    the detail-based text when the store is unavailable or returns nothing.
+    """
+
+    fallback = _policy_evidence_text(policy)
+    if store is None:
+        return fallback
+    policy_id = str(policy.get("policy_id"))
+    try:
+        from rag_design.contracts import SourceType
+        from rag_design.vector_store import VectorSearchFilter
+
+        hits = store.search(
+            SourceType.SUBSIDY,
+            policy_id,
+            query_id=f"eval-evidence-{policy_id}",
+            top_k=200,
+            search_filter=VectorSearchFilter(metadata_equals={"source_id": policy_id}),
+        )
+    except Exception:
+        return fallback
+    chunks = sorted({h.chunk.chunk_id: h.chunk for h in hits}.values(), key=lambda c: c.ordinal)
+    if not chunks:
+        return fallback
+    body = "\n".join(chunk.text for chunk in chunks)
+    law_lines = [line for line in fallback.splitlines() if line.startswith("관련 법령")]
+    return "\n".join([body, *law_lines])
+
+
 def _build_answer_quality_cases(
     questions: Sequence[Mapping],
     records: Sequence[Mapping],
     captured_responses: Mapping[str, Mapping],
+    store=None,
 ) -> list[AnswerQualityCase]:
     """Pair each completed question with its final_answer + cited-evidence text.
 
@@ -201,15 +258,17 @@ def _build_answer_quality_cases(
         cited_ids = {str(v) for v in record.get("cited_policy_ids", [])}
         policies = response.get("policies") or []
         evidence_text = "\n\n".join(
-            _policy_evidence_text(policy)
+            _full_policy_evidence_text(policy, store)
             for policy in policies
             if isinstance(policy, Mapping) and str(policy.get("policy_id")) in cited_ids
         )
+        question_item = questions_by_id.get(record["question_id"], {})
+        birth_patterns = _birth_date_patterns(question_item.get("slot_answers"))
         question_text = _redact_evaluation_text(
-            str(questions_by_id.get(record["question_id"], {}).get("question", ""))
+            str(question_item.get("question", "")), birth_patterns
         )
-        final_answer = _redact_evaluation_text(final_answer)
-        evidence_text = _redact_evaluation_text(evidence_text)
+        final_answer = _redact_evaluation_text(final_answer, birth_patterns)
+        evidence_text = _redact_evaluation_text(evidence_text, birth_patterns)
         cases.append(
             AnswerQualityCase(
                 question_id=str(record["question_id"]),
@@ -588,7 +647,13 @@ def main() -> int:
         )
 
     try:
-        from src.rag_chatbot.service import answer_followup, ask, build_llm_client, get_graph
+        from src.rag_chatbot.service import (
+            answer_followup,
+            ask,
+            build_llm_client,
+            get_graph,
+            get_store,
+        )
     except ModuleNotFoundError as exc:
         parser.error(
             f"프로젝트 실행 의존성이 없습니다: {exc.name}. "
@@ -690,7 +755,7 @@ def main() -> int:
             file=sys.stderr,
         )
     else:
-        cases = _build_answer_quality_cases(questions, records, captured)
+        cases = _build_answer_quality_cases(questions, records, captured, get_store())
         if args.judge_max_questions is not None:
             cases = cases[: args.judge_max_questions]
         cases_by_id = {case.question_id: case for case in cases}
