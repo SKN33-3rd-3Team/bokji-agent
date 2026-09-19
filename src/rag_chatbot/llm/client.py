@@ -28,7 +28,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import wraps
 import json
+import logging
 import os
 import re
 import threading
@@ -37,6 +39,7 @@ from typing import Iterator, Protocol
 from urllib.parse import urlsplit
 
 from ..timing import TIMER
+from ..deadline import NodeDeadlineExceeded, active_write, check_deadline, remaining_timeout
 
 
 class LLMClient(Protocol):
@@ -69,6 +72,74 @@ class LLMCallError(Exception):
     한다 - 잡아서 "LLM 단계를 못 거쳤다"는 사실을 정직하게 남기고, 절대
     추측한 값으로 대체하지 않는다.
     """
+
+
+class GraphProviderError(RuntimeError):
+    """자동 추천의 실제 provider 실패: 노드의 일반 규칙 폴백으로 흡수하지 않는다."""
+
+
+_strict_llm = ContextVar("strict_graph_llm", default=False)
+
+
+@contextmanager
+def strict_llm_scope(enabled: bool):
+    token = _strict_llm.set(enabled)
+    try:
+        yield
+    finally:
+        _strict_llm.reset(token)
+
+
+@dataclass
+class GraphLLMClient:
+    inner: LLMClient
+
+    def complete(self, prompt: str, *, system: str | None = None, max_tokens: int | None = None) -> str:
+        try:
+            return self.inner.complete(prompt, system=system, max_tokens=max_tokens)
+        except NodeDeadlineExceeded:
+            raise
+        except Exception as exc:
+            if _strict_llm.get():
+                raise GraphProviderError("Automatic recommendation provider failed") from exc
+            raise
+
+
+def _error_identifier(value: object) -> str | None:
+    """로그에는 짧은 기계 식별자만 남긴다. 오류 메시지/본문은 기록하지 않는다."""
+    if isinstance(value, (str, int)) and re.fullmatch(r"[\w.-]{1,64}", str(value), re.ASCII):
+        return str(value)
+    return None
+
+
+def _log_runpod_failures(complete):
+    @wraps(complete)
+    def wrapped(*args, **kwargs):
+        try:
+            return complete(*args, **kwargs)
+        except (LLMCallError, NodeDeadlineExceeded) as exc:
+            cause = exc.__cause__ or exc
+            response = getattr(cause, "response", None)
+            status = getattr(response, "status_code", None)
+            if not isinstance(status, int):
+                status = None
+            error = getattr(exc, "provider_error", {})
+            if response is not None:
+                try:
+                    body = response.json()
+                    error = body.get("error", {}) if isinstance(body, dict) else {}
+                except (ValueError, TypeError):
+                    error = {}
+            if not isinstance(error, dict):
+                error = {}
+            logging.getLogger(__name__).warning(
+                "RunPod %s status=%s code=%s type=%s",
+                "auth_failure" if status in (401, 403) else "server_failure",
+                status, _error_identifier(error.get("code")),
+                _error_identifier(error.get("type")) or type(cause).__name__,
+            )
+            raise
+    return wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -311,15 +382,16 @@ class RecordingLLMClient:
     def complete(
         self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
     ) -> str:
-        with self._lock:
+        with self._lock, active_write():
             stats = self._current_stats()
             stats.call_count += 1
         started = time.perf_counter()
         try:
             result = self.inner.complete(prompt, system=system, max_tokens=max_tokens)
+            check_deadline()
         except LLMCallError as exc:
             message = str(exc)
-            with self._lock:
+            with self._lock, active_write():
                 # 같은 원인이 노드마다 반복되므로 중복은 한 번만 남긴다.
                 if message not in stats.failures:
                     stats.failures.append(message)
@@ -328,10 +400,10 @@ class RecordingLLMClient:
             # 실패한 호출도 시간을 잰다. 타임아웃으로 느린 경우가 있어서
             # 성공한 것만 재면 "왜 느린지"를 놓친다.
             elapsed = time.perf_counter() - started
-            with self._lock:
+            with self._lock, active_write():
                 stats.durations.append(elapsed)
-            TIMER.record("llm_call", elapsed)
-        with self._lock:
+                TIMER.record("llm_call", elapsed)
+        with self._lock, active_write():
             stats.success_count += 1
         return result
 
@@ -391,6 +463,7 @@ class RunPodServerlessClient:
                 "생성자 인자로 직접 전달하세요)."
             )
 
+    @_log_runpod_failures
     def complete(
         self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
     ) -> str:
@@ -412,9 +485,11 @@ class RunPodServerlessClient:
         }
 
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout_seconds)
+            response = requests.post(url, json=payload, headers=headers, timeout=remaining_timeout(self.timeout_seconds))
+            check_deadline()
             response.raise_for_status()
         except requests.RequestException as exc:
+            check_deadline()
             raise LLMCallError(f"RunPod 호출 실패: {exc}") from exc
 
         try:
@@ -424,9 +499,13 @@ class RunPodServerlessClient:
 
         status = data.get("status")
         if status not in (None, "COMPLETED"):
-            raise LLMCallError(f"RunPod job 상태가 COMPLETED가 아님: {status!r} (raw={data!r})")
+            error = LLMCallError(f"RunPod job 상태가 COMPLETED가 아님: {status!r} (raw={data!r})")
+            error.provider_error = data.get("error", {})
+            raise error
 
-        return self._parse_output(data.get("output"))
+        result = self._parse_output(data.get("output"))
+        check_deadline()
+        return result
 
     @staticmethod
     def _parse_output(output: object) -> str:
@@ -449,6 +528,127 @@ class RunPodServerlessClient:
             f"형태에 맞게 RunPodServerlessClient._parse_output()을 조정해야 함. "
             f"raw output: {output!r}"
         )
+
+
+class RunPodPodClient:
+    """RunPod에서 대여한 Pod(영구 GPU 인스턴스)에 직접 띄운 OpenAI 호환
+    추론 서버(vLLM 등)를 호출한다. ``RunPodServerlessClient``(과금형
+    Serverless 엔드포인트, ``/v2/{id}/runsync``)와는 별개 제품이니 혼동하지
+    말 것 - 이쪽은 Pod의 공개 프록시 URL로 OpenAI 호환
+    ``/v1/chat/completions``를 직접 부른다.
+
+    주의(팀이 실제 Pod를 띄운 뒤 확인할 것, 미확인 항목,
+    ``PROJECT_STRUCTURE.md`` 2.4절 참고): ``https://{pod_id}-{port}.proxy.runpod.net``
+    프록시 URL 패턴은 RunPod의 일반적인 Pod HTTP 포트 노출 방식을 근거로
+    적었다 - 실제 콘솔에서 발급되는 URL과 다를 수 있으니 Pod를 띄운 뒤
+    콘솔에 표시되는 실제 프록시 주소로 교체 확인할 것. Pod 위에 무엇을
+    띄우느냐(vLLM/TGI/커스텀 서버)에 따라 응답 JSON 모양이 다를 수 있다.
+    """
+
+    def __init__(
+        self,
+        pod_id: str | None = None,
+        *,
+        port: int | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout_seconds: float = 60.0,
+    ):
+        self.pod_id = pod_id or os.environ.get("RUNPOD_POD_ID", "")
+        self.port = int(port or os.environ.get("RUNPOD_POD_PORT") or 8000)
+        self.model = model or os.environ.get("LLM_MODEL_NAME", "")
+        self.api_key = api_key or os.environ.get("RUNPOD_POD_API_KEY", "")
+        self.timeout_seconds = timeout_seconds
+        if not self.pod_id:
+            raise ValueError("RunPodPodClient에는 pod_id가 필요합니다 (RUNPOD_POD_ID).")
+
+    @_log_runpod_failures
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        import requests
+
+        url = f"https://{self.pod_id}-{self.port}.proxy.runpod.net/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": self.model, "messages": messages}
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=remaining_timeout(self.timeout_seconds))
+            check_deadline()
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            check_deadline()
+            raise LLMCallError(f"RunPod Pod 호출 실패: {exc}") from exc
+        try:
+            choice = response.json()["choices"][0]
+            content = choice["message"]["content"]
+            finish_reason = choice.get("finish_reason")
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise LLMCallError(f"RunPod Pod 응답을 파싱하지 못함: {exc}") from exc
+        if finish_reason == "length":
+            raise LLMCallError("RunPod Pod 응답이 잘림(finish_reason='length')")
+        if not isinstance(content, str) or not content.strip():
+            raise LLMCallError("RunPod Pod 응답이 비어 있거나 문자열이 아님")
+        check_deadline()
+        return content
+
+
+class FallbackLLMClient:
+    """1순위 클라이언트 호출이 실패하면 2순위로 자동 전환하는 래퍼.
+
+    RunPod Pod(1순위)가 연결 장애 등으로 실패하면, 같은 요청 안에서 바로
+    HuggingFace Inference API(2순위)로 넘어간다(2026-09-16 팀 결정). 둘 다
+    ``LLMClient`` 프로토콜(``complete()``만 만족)을 따르는 아무 구현체나
+    받을 수 있어 특정 제품에 묶이지 않는다.
+
+    ``RecordingLLMClient``는 이 클래스가 던지는 ``LLMCallError``만 보고
+    "LLM 실패"로 기록한다 - primary/secondary 중 어느 쪽이 응답했는지는
+    ``llm_status``에 통화별로 구분되어 남지 않는다(기존 ``RecordingLLMClient``
+    구조의 한계). 성공/실패 자체와 실패 사유 메시지는 그대로 드러난다.
+    """
+
+    def __init__(
+        self,
+        primary: LLMClient,
+        secondary: LLMClient,
+        *,
+        primary_name: str = "primary",
+        secondary_name: str = "secondary",
+    ):
+        self.primary = primary
+        self.secondary = secondary
+        self.primary_name = primary_name
+        self.secondary_name = secondary_name
+        primary_model = getattr(primary, "model", None)
+        secondary_model = getattr(secondary, "model", None)
+        self.model = f"{primary_name}:{primary_model}→fallback:{secondary_name}:{secondary_model}"
+
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
+        check_deadline()
+        try:
+            result = self.primary.complete(prompt, system=system, max_tokens=max_tokens)
+            check_deadline()
+            return result
+        except LLMCallError as primary_exc:
+            check_deadline()
+            try:
+                result = self.secondary.complete(prompt, system=system, max_tokens=max_tokens)
+                check_deadline()
+                return result
+            except LLMCallError as secondary_exc:
+                raise LLMCallError(
+                    f"{self.primary_name} 실패({primary_exc}) 후 "
+                    f"{self.secondary_name} 폴백도 실패({secondary_exc})"
+                ) from secondary_exc
 
 
 class HuggingFaceInferenceClient:
@@ -545,11 +745,20 @@ class HuggingFaceInferenceClient:
                 "'pip install huggingface_hub'로 설치하세요."
             ) from exc
 
-        client = InferenceClient(
+        class DeadlineInferenceClient(InferenceClient):
+            def _inner_post(self, *args, **kwargs):
+                # HF provider 검색(model_info)은 inference timeout 밖에 있다.
+                # 늦은 검색 완료 뒤 POST를 시작하지 않도록 이 호출의 인스턴스만 감싼다.
+                self.timeout = remaining_timeout(self.timeout)
+                result = super()._inner_post(*args, **kwargs)
+                check_deadline()
+                return result
+
+        client = DeadlineInferenceClient(
             model=self.base_url or self.model,
             token=self.token,
             provider=self.provider,
-            timeout=self.timeout_seconds,
+            timeout=remaining_timeout(self.timeout_seconds),
         )
 
         messages = []
@@ -564,7 +773,11 @@ class HuggingFaceInferenceClient:
                 extra_body=self.extra_body,
                 **({"model": self.model} if self.base_url else {}),
             )
+            check_deadline()
+        except NodeDeadlineExceeded:
+            raise
         except (HfHubHTTPError, Exception) as exc:
+            check_deadline()
             # 상태코드별로 "무엇을 확인하면 되는지"까지 담아 던진다.
             # HfHubHTTPError를 따로 잡지 않는 이유: provider 라우팅 경로에서는
             # requests의 HTTPError 등 다른 예외가 그대로 올라오는 경우가 있어
@@ -604,6 +817,7 @@ class HuggingFaceInferenceClient:
             raise LLMCallError("Ollama 응답이 비어 있거나 문자열이 아님")
         if not content:
             raise LLMCallError(f"HuggingFace 응답이 비어 있음: {response!r}")
+        check_deadline()
         return content
 
 

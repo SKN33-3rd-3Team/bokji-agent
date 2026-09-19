@@ -15,6 +15,9 @@ from __future__ import annotations
 import os
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from unittest.mock import MagicMock, call, patch
 
 from rag_chatbot.auth import (
     AuthBackendUnavailableError,
@@ -111,6 +114,8 @@ class BackendSelectionTests(unittest.TestCase):
 
         os.environ["AUTH_DB_URL"] = "mysql://u:p@h:3306/bokji"
         self.assertIsInstance(repo.get_backend(), MySQLBackend)
+        with patch.dict(os.environ, {"AUTH_DB_DUAL_WRITE": "1"}):
+            self.assertIsInstance(repo.get_backend(), MySQLBackend)
 
     def test_service_wraps_bad_url_as_backend_unavailable(self):
         # 형식 오류는 pymysql 유무와 무관하게 화면단이 다루기 쉬운
@@ -236,6 +241,86 @@ class CrudDisconnectTests(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
+class FailedLoginTransactionTests(unittest.TestCase):
+    def test_missing_failed_login_row_ends_transaction_without_update(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        conn = MagicMock()
+        cur = conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.return_value = None
+        result = MySQLBackend({}).record_failed_login(conn, 7, max_attempts=5, lock_seconds=60)
+        self.assertEqual(result, (0, None))
+        conn.begin.assert_called_once_with()
+        conn.commit.assert_called_once_with()
+        conn.rollback.assert_not_called()
+        cur.execute.assert_called_once_with(
+            "SELECT failed_login_count, locked_until FROM users WHERE id = %s FOR UPDATE", (7,),
+        )
+
+    def test_missing_failed_login_row_commit_failure_is_not_swallowed(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = None
+        conn.commit.side_effect = pymysql.err.OperationalError(2013, "Lost connection")
+        with self.assertRaises(AuthBackendUnavailableError):
+            MySQLBackend({}).record_failed_login(conn, 7, max_attempts=5, lock_seconds=60)
+        conn.commit.assert_called_once_with()
+        conn.rollback.assert_called_once_with()
+
+    def test_locked_read_and_literal_update_are_independent_of_assignment_mode(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        for old_count, expired, limit, expected_count, expected_lock in (
+            (3, None, 5, 4, False),
+            (4, None, 5, 5, True),
+            (5, "2000-01-01T00:00:00+00:00", 5, 1, False),
+            (5, "2000-01-01T00:00:00+00:00", 1, 1, True),
+        ):
+            with self.subTest(old_count=old_count, expired=expired, limit=limit):
+                conn = MagicMock()
+                cur = conn.cursor.return_value.__enter__.return_value
+                cur.fetchone.return_value = {
+                    "failed_login_count": old_count, "locked_until": expired,
+                }
+                count, locked_until = MySQLBackend({}).record_failed_login(
+                    conn, 7, max_attempts=limit, lock_seconds=60,
+                )
+                self.assertEqual(count, expected_count)
+                self.assertEqual(locked_until is not None, expected_lock)
+                self.assertEqual(cur.execute.call_args_list, [
+                    call("SELECT failed_login_count, locked_until FROM users "
+                         "WHERE id = %s FOR UPDATE", (7,)),
+                    call("UPDATE users SET failed_login_count = %s, locked_until = %s "
+                         "WHERE id = %s", (expected_count, locked_until, 7)),
+                ])
+                self.assertEqual(conn.mock_calls[0], call.begin())
+                self.assertEqual(conn.mock_calls[-1], call.commit())
+                conn.rollback.assert_not_called()
+
+    def test_sql_failure_rolls_back_and_maps_to_backend_unavailable(self):
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        for stage in ("select", "update", "commit"):
+            with self.subTest(stage=stage):
+                conn = MagicMock()
+                cur = conn.cursor.return_value.__enter__.return_value
+                cur.fetchone.return_value = {"failed_login_count": 4, "locked_until": None}
+                error = pymysql.err.OperationalError(2013, "Lost connection")
+                if stage == "commit":
+                    conn.commit.side_effect = error
+                else:
+                    cur.execute.side_effect = [error] if stage == "select" else [None, error]
+                with self.assertRaises(AuthBackendUnavailableError):
+                    MySQLBackend({}).record_failed_login(
+                        conn, 7, max_attempts=5, lock_seconds=60,
+                    )
+                conn.rollback.assert_called_once_with()
+                if stage != "commit":
+                    conn.commit.assert_not_called()
+
+
 @unittest.skipUnless(_LIVE_URL, "AUTH_TEST_DB_URL 미설정 — 라이브 DB 테스트 skip")
 @unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
 class LiveRemoteDbTests(unittest.TestCase):
@@ -270,12 +355,12 @@ class LiveRemoteDbTests(unittest.TestCase):
 
     def test_signup_authenticate_roundtrip_decrypts_pii(self):
         sign_up(self._email, _GOOD_PW, "홍길동", region="서울특별시",
-                interests=["장애인", "청년"], marketing_opt_in=True)
+                interests=["임신/출산", "청년"], marketing_opt_in=True)
         user = authenticate(self._email, _GOOD_PW)
         self.assertEqual(user.username, self._email)
         self.assertEqual(user.display_name, "홍길동")
         self.assertEqual(user.region, "서울특별시")
-        self.assertEqual(set(user.interests), {"장애인", "청년"})
+        self.assertEqual(set(user.interests), {"임신/출산", "청년"})
         self.assertTrue(user.marketing_opt_in)
 
     def test_duplicate_signup_rejected(self):
@@ -287,6 +372,52 @@ class LiveRemoteDbTests(unittest.TestCase):
         sign_up(self._email, _GOOD_PW, "홍길동")
         with self.assertRaises(Exception):
             authenticate(self._email, "Wrong999$")
+
+    def test_failed_login_locks_exactly_at_threshold_after_expiry_too(self):
+        user = sign_up(self._email, _GOOD_PW, "홍길동")
+        backend = repo.get_backend()
+        conn = backend.connect()
+        try:
+            for limit in (1, 2, 5):
+                for expired_lock in (None, "2000-01-01T00:00:00+00:00"):
+                    with self.subTest(limit=limit, expired_lock=expired_lock):
+                        backend.set_login_security(
+                            conn, user.id,
+                            failed_login_count=limit if expired_lock else 0,
+                            locked_until=expired_lock,
+                        )
+                        for attempt in range(1, limit + 1):
+                            fails, locked_until = backend.record_failed_login(
+                                conn, user.id, max_attempts=limit, lock_seconds=60,
+                            )
+                            self.assertEqual(fails, attempt)
+                            self.assertEqual(locked_until is not None, attempt == limit)
+                            row = backend.get_user_by_username(conn, self._email)
+                            self.assertEqual(row["failed_login_count"], attempt)
+                            self.assertEqual(row["locked_until"], locked_until)
+        finally:
+            conn.close()
+
+    def test_concurrent_failed_logins_are_counted_once_each(self):
+        user = sign_up(self._email, _GOOD_PW, "홍길동")
+        backend = repo.get_backend()
+        barrier = Barrier(5)
+
+        def fail_login(_):
+            conn = backend.connect()
+            try:
+                barrier.wait(timeout=10)
+                return backend.record_failed_login(
+                    conn, user.id, max_attempts=5, lock_seconds=60,
+                )
+            finally:
+                conn.close()
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(fail_login, range(5)))
+        self.assertEqual(sorted(count for count, _ in results), [1, 2, 3, 4, 5])
+        for count, locked_until in results:
+            self.assertEqual(locked_until is not None, count == 5)
 
     def test_update_profile_and_get_profile(self):
         sign_up(self._email, _GOOD_PW, "원래이름", region="부산광역시")

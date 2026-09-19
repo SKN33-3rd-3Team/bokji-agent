@@ -53,6 +53,9 @@ _INSUFFICIENT: RouteKey = "insufficient"
 def check_slot_completeness(state: GraphState) -> dict:
     """하드 게이트 슬롯이 모두 확정됐는지 판정한다."""
 
+    if state.get("automatic_recommendation"):
+        return {"missing_slots": []}  # 누락값을 채우지 않고, 질문만 생략한다.
+
     slots: SlotState = state.get("slots", {})
     ask_counts = state.get("slot_ask_counts", {})
     reference_date = state.get("as_of")

@@ -87,7 +87,7 @@ class CheckDuplicateBenefitRealChromaTests(unittest.TestCase):
         )
         self.store.sync_snapshot(SourceType.SUBSIDY, chunks, snapshot_id="snap-001")
 
-    def test_real_search_confirms_불가_when_conflict_metadata_matches_eligible_policy(self) -> None:
+    def test_real_search_confirms_조건부_when_conflict_metadata_matches_eligible_policy(self) -> None:
         self._sync_with_exclusion(["other-policy"])
         state = {
             "query_id": "q1",
@@ -101,8 +101,9 @@ class CheckDuplicateBenefitRealChromaTests(unittest.TestCase):
         result = check_duplicate_benefit(state, self.store)
 
         verdict = result["duplicate_verdicts"][0]
-        self.assertEqual(verdict["status"], "불가")
+        self.assertEqual(verdict["status"], "조건부")
         self.assertEqual(verdict["conflicts_with"], ["other-policy"])
+        self.assertIn("실제 수급 여부", verdict["condition_note"])
 
     def test_real_search_no_exclusion_metadata_defaults_to_미확인(self) -> None:
         self.store.sync_snapshot(

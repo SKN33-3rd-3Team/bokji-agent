@@ -3,18 +3,18 @@
 실행:
     pip install pymysql
     python scripts/check_auth_db.py
-    python scripts/check_auth_db.py --url mysql://user:pass@host:port/bokji
-    python scripts/check_auth_db.py --url mysql://user:pass@host:port/bokji_test
+    python scripts/check_auth_db.py --url mysql://user:pass@host:port/bokji_auth
+    python scripts/check_auth_db.py --url mysql://user:pass@host:port/bokji_auth_test
 
-왜 필요한가: "RunPod 포트에 MariaDB가 제대로 올라갔나?" 를 한눈에 확인한다.
-RunPod 의 TCP 포트 매핑은 뒤에 아무것도 없어도 "열린 것처럼" 보일 수 있어서,
+왜 필요한가: "원격 서버에 MariaDB가 제대로 올라갔나?" 를 한눈에 확인한다.
+포트포워딩/방화벽은 뒤에 아무것도 없어도 "열린 것처럼" 보일 수 있어서,
 포트 도달 → 서버 응답 → 로그인 → DB 선택 → users 테이블을 단계별로 나눠 찍는다.
 
 확인 순서
 ---------
 1. AUTH_DB_URL(또는 --url / AUTH_TEST_DB_URL)이 있고 형식이 맞는지
 2. pymysql 설치 여부
-3. host:port 로 TCP 가 열리는지 (여기서 막히면 Pod 가 꺼졌거나 포트 매핑 문제)
+3. host:port 로 TCP 가 열리는지 (여기서 막히면 서버가 꺼졌거나 방화벽/포트포워딩 문제)
 4. 그 포트 뒤에 진짜 MySQL/MariaDB 가 있는지 (SELECT VERSION())
 5. 계정으로 로그인되고 대상 DB 가 존재하는지
 6. users 테이블이 있는지 / 행 수
@@ -73,9 +73,9 @@ def _check_tcp(host: str, port: int, timeout: float) -> bool:
             pass
     except OSError as exc:
         print(f"{_FAIL} 포트에 붙지 못했습니다: {exc}")
-        print("       -> RunPod Pod 가 Running 상태인지 확인하세요.")
-        print("       -> Connect > TCP Port Mappings 의 '외부 IP:포트' 를 그대로")
-        print(f"          썼는지 확인하세요(내부 3306 아님). {_DOC} 1-3 참고.")
+        print("       -> DB 서버가 켜져 있는지 확인하세요.")
+        print("       -> 서버의 방화벽/공유기 포트포워딩이 이 포트를 허용하는지,")
+        print(f"          host:port 를 정확히 썼는지 확인하세요. {_DOC} 1장 참고.")
         return False
     print(f"{_OK} 포트 열림 (무언가가 응답 대기 중)")
     return True
@@ -195,7 +195,7 @@ def main() -> int:
     url = _resolve_url(args.url)
     if not url:
         print(f"{_FAIL} AUTH_DB_URL 이 없습니다.")
-        print("       -> .env 에 AUTH_DB_URL=mysql://user:pass@host:port/bokji")
+        print("       -> .env 에 AUTH_DB_URL=mysql://user:pass@host:port/bokji_auth")
         print("       -> 또는 --url 로 직접 넘기세요.")
         return 1
 

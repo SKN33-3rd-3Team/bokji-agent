@@ -1,4 +1,4 @@
-"""원격 MySQL/MariaDB 백엔드 (예: RunPod Pod 의 MariaDB 컨테이너).
+"""원격 MySQL/MariaDB 백엔드 (예: skn33.iptime.org 의 MariaDB 서버).
 
 ``AUTH_DB_URL`` 이 설정돼 있을 때만 ``repository.get_backend`` 이 이 모듈을
 import 한다. ``pymysql`` (순수 파이썬, 빌드 도구 불필요) 이 필요하다:
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from .repository import _UNSET, DuplicateUsername, _utcnow
@@ -50,18 +51,24 @@ _schema_ready: set[tuple[str, int, str]] = set()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id                  BIGINT       NOT NULL AUTO_INCREMENT,
-    username            VARCHAR(254) NOT NULL,
-    password_hash       VARCHAR(255) NOT NULL,
-    display_name_enc    TEXT         NULL,
-    region              VARCHAR(255) NULL,
-    interests_enc       TEXT         NULL,
-    marketing_opt_in    TINYINT      NOT NULL DEFAULT 0,
-    created_at          VARCHAR(32)  NOT NULL,
-    updated_at          VARCHAR(32)  NOT NULL,
-    password_changed_at VARCHAR(32)  NULL,
-    failed_login_count  INT          NOT NULL DEFAULT 0,
-    locked_until        VARCHAR(32)  NULL,
+    id                     BIGINT       NOT NULL AUTO_INCREMENT,
+    username               VARCHAR(254) NOT NULL,
+    password_hash          VARCHAR(255) NOT NULL,
+    display_name_enc       TEXT         NULL,
+    region                 VARCHAR(255) NULL,
+    gender                 VARCHAR(16)  NULL,
+    birth_date_enc         TEXT         NULL,
+    interests_enc          TEXT         NULL,
+    disability_status_enc  TEXT         NULL,
+    veteran_status_enc     TEXT         NULL,
+    income_bracket_enc     TEXT         NULL,
+    household_types_enc    TEXT         NULL,
+    marketing_opt_in       TINYINT      NOT NULL DEFAULT 0,
+    created_at             VARCHAR(32)  NOT NULL,
+    updated_at             VARCHAR(32)  NOT NULL,
+    password_changed_at    VARCHAR(32)  NULL,
+    failed_login_count     INT          NOT NULL DEFAULT 0,
+    locked_until           VARCHAR(32)  NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uq_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -88,7 +95,7 @@ def _as_backend_unavailable(fn):
             return fn(*args, **kwargs)
         except _MySQLError as exc:
             raise AuthBackendUnavailableError(
-                "회원 데이터베이스 처리 중 연결이 끊겼습니다. RunPod Pod 가 "
+                "회원 데이터베이스 처리 중 연결이 끊겼습니다. 원격 DB 서버가 "
                 "실행 중인지 확인하고 잠시 후 다시 시도해 주세요."
             ) from exc
 
@@ -135,7 +142,7 @@ class MySQLBackend:
             )
         except _MySQLOperationalError as exc:
             raise AuthBackendUnavailableError(
-                "회원 데이터베이스에 연결할 수 없습니다. RunPod Pod 가 실행 "
+                "회원 데이터베이스에 연결할 수 없습니다. 원격 DB 서버가 실행 "
                 "중인지, AUTH_DB_URL 의 호스트/포트/계정/DB이름이 맞는지 "
                 "확인하세요."
             ) from exc
@@ -173,7 +180,13 @@ class MySQLBackend:
         password_hash: str,
         display_name_enc: str | None,
         region: str | None = None,
+        gender: str | None = None,
+        birth_date_enc: str | None = None,
         interests_enc: str | None = None,
+        disability_status_enc: str | None = None,
+        veteran_status_enc: str | None = None,
+        income_bracket_enc: str | None = None,
+        household_types_enc: str | None = None,
         marketing_opt_in: bool = False,
     ) -> tuple[int, str]:
         now = _utcnow()
@@ -181,15 +194,23 @@ class MySQLBackend:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO users "
-                    "(username, password_hash, display_name_enc, region, "
-                    "interests_enc, marketing_opt_in, created_at, updated_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "(username, password_hash, display_name_enc, region, gender, "
+                    "birth_date_enc, interests_enc, disability_status_enc, "
+                    "veteran_status_enc, income_bracket_enc, household_types_enc, "
+                    "marketing_opt_in, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         username,
                         password_hash,
                         display_name_enc,
                         region,
+                        gender,
+                        birth_date_enc,
                         interests_enc,
+                        disability_status_enc,
+                        veteran_status_enc,
+                        income_bracket_enc,
+                        household_types_enc,
                         1 if marketing_opt_in else 0,
                         now,
                         now,
@@ -238,6 +259,48 @@ class MySQLBackend:
         conn.commit()
 
     @_as_backend_unavailable
+    def record_failed_login(
+        self,
+        conn,
+        user_id: int,
+        *,
+        max_attempts: int,
+        lock_seconds: int,
+    ) -> tuple[int, str | None]:
+        """행 잠금 안에서 계산한 값을 저장해 UPDATE 대입 순서에 의존하지 않는다."""
+
+        conn.begin()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT failed_login_count, locked_until FROM users "
+                    "WHERE id = %s FOR UPDATE", (user_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    conn.commit()
+                    return 0, None
+                now_dt = datetime.now(timezone.utc)
+                expired = (
+                    row["locked_until"] is not None
+                    and row["locked_until"] <= now_dt.isoformat(timespec="seconds")
+                )
+                fails = 1 if expired else int(row["failed_login_count"]) + 1
+                locked_until = (
+                    (now_dt + timedelta(seconds=lock_seconds)).isoformat(timespec="seconds")
+                    if fails >= max_attempts else None
+                )
+                cur.execute(
+                    "UPDATE users SET failed_login_count = %s, locked_until = %s "
+                    "WHERE id = %s", (fails, locked_until, user_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return fails, locked_until
+
+    @_as_backend_unavailable
     def delete_user(self, conn, user_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
@@ -251,14 +314,26 @@ class MySQLBackend:
         *,
         display_name_enc: object = _UNSET,
         region: object = _UNSET,
+        gender: object = _UNSET,
+        birth_date_enc: object = _UNSET,
         interests_enc: object = _UNSET,
+        disability_status_enc: object = _UNSET,
+        veteran_status_enc: object = _UNSET,
+        income_bracket_enc: object = _UNSET,
+        household_types_enc: object = _UNSET,
     ) -> None:
         sets: list[str] = []
         params: list[object] = []
         for column, value in (
             ("display_name_enc", display_name_enc),
             ("region", region),
+            ("gender", gender),
+            ("birth_date_enc", birth_date_enc),
             ("interests_enc", interests_enc),
+            ("disability_status_enc", disability_status_enc),
+            ("veteran_status_enc", veteran_status_enc),
+            ("income_bracket_enc", income_bracket_enc),
+            ("household_types_enc", household_types_enc),
         ):
             if value is not _UNSET:
                 sets.append(f"{column} = %s")

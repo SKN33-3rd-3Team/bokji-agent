@@ -13,11 +13,9 @@ N1~N3(슬롯 파싱 / 적합성 체크·하드 게이트 / 추가 정보 요청)
 없이 매 요청마다 새 state를 버린다"는 설계는 더 이상 맞지 않아 이 문단으로
 교체한다. 체크포인터의 키는 ``thread_id=session_id``이므로, 서로 다른
 session_id는 서로 다른 저장 슬롯을 쓰고, 한 세션 안에서만 인터럽트가
-재개된다 - 여러 세션의 대화 상태가 서로 섞일 여지가 없다. 다만 이건
-"슬롯 재입력 한 턴을 잠깐 기다리기" 용도이지 여러 턴에 걸친 일반 대화
-기억이 아니다(멀티턴 대화 자체는 여전히 Gate 2 범위 밖 -
-docs/PROJECT_COMPLIANCE.md "하이브리드 검색, Re-ranking, ... 대화 이력 ...
-Baseline이 안정적으로 동작한 뒤 검토"). 또한 ``MemorySaver``는 프로세스
+재개된다. 완료된 세션의 새 질문은 알려진 프로필만 이어받아 새 턴으로 실행한다.
+이 체크포인트는 메시지 이력이 아니며 이전 문답을 새 질문의 대화 문맥으로
+전달하지 않는다. 또한 ``MemorySaver``는 프로세스
 메모리에만 저장되고 디스크에 남지 않는다 - 서버가 재시작되면 재개 대기
 중이던 세션은 사라진다(알려진 한계, 후속 작업에서 영속 체크포인터로 교체
 검토 필요).
@@ -40,6 +38,8 @@ from langgraph.types import Command, interrupt
 from rag_design.vector_store import ChromaVectorStore
 
 from ..llm import LLMClient
+from ..deadline import graph_execution
+from ..llm.client import GraphLLMClient, strict_llm_scope
 from .nodes.answer_generation import generate_answer
 from .nodes.benefit_calculator import calculate_benefit_amount
 from .nodes.claim_extractor import LLMClaimExtractor, RuleBasedClaimExtractor
@@ -53,9 +53,11 @@ from .nodes.general_law_reference_search import search_general_law_references
 from .nodes.law_source_resolver import VectorStoreLawSourceResolver
 from .nodes.policy_search import DEFAULT_TOP_K, MAX_TOP_K, MIN_TOP_K, search_policies
 from .nodes.request_calc_info import (
+    CalculationInputError,
     apply_calc_skip,
     merge_calc_choice_answer,
     merge_calc_slot_answer,
+    merge_structured_calc_answer,
     request_calc_info_input,
 )
 from .nodes.request_missing_slots import request_missing_slot_input
@@ -69,10 +71,15 @@ from .nodes.slot_parser import parse_slots
 from .nodes.targeted_law_search import search_targeted_laws
 from ..timing import timed_node
 from .policy_conditions import PolicyUserTypeIndex, SupportConditionsIndex
+from .slot_schema import korea_today
 from .state import GraphState
 
 _SlotGateRoute = Literal["sufficient", "general_law", "request_input"]
 _BenefitCalcRoute = Literal["result_assembly", "request_calc_info"]
+
+
+class FailedCheckpointError(ValueError):
+    """이전 실행이 실패해 같은 상담을 재개할 수 없는 체크포인트."""
 
 
 def _route_after_slot_completeness_gate(state: GraphState) -> _SlotGateRoute:
@@ -134,6 +141,8 @@ def _await_calc_info_input(state: GraphState, llm_client: LLMClient | None = Non
 
     update = request_calc_info_input(state)
     resumed_user_input = interrupt(update["followup_question"])
+    if isinstance(resumed_user_input, dict):
+        return {**update, **merge_structured_calc_answer(state, resumed_user_input), "needs_input": False}
     missing_fields = list(state.get("calc_missing_slots") or [])
     missing_choices = list(state.get("calc_missing_choices") or [])
     merged_slots = merge_calc_slot_answer(
@@ -168,7 +177,7 @@ def route_after_benefit_calculator(state: GraphState) -> _BenefitCalcRoute:
     않는다.
     """
 
-    if state.get("calc_missing_slots") or state.get("calc_missing_choices"):
+    if not state.get("automatic_recommendation") and (state.get("calc_missing_slots") or state.get("calc_missing_choices")):
         return "request_calc_info"  # E18a: 계산에 필요한 소프트 슬롯/선택 옵션 재질문
     return "result_assembly"  # E18: 계산 완료(또는 더 물을 수 없어 확정)
 
@@ -232,6 +241,8 @@ def build_graph(
     부르면 이전 인터럽트 상태를 잃는다.
     """
 
+    if llm_client is not None:
+        llm_client = GraphLLMClient(llm_client)
     extractor = (
         LLMClaimExtractor(llm_client)
         if llm_client is not None
@@ -242,7 +253,7 @@ def build_graph(
     graph: StateGraph = StateGraph(GraphState)
 
     # --- N1~N3: 슬롯 파싱 / 적합성 체크 / 추가 정보 요청 -------------------
-    graph.add_node("slot_parser", timed_node("slot_parser", functools.partial(parse_slots, llm_client=llm_client)))
+    graph.add_node("slot_parser", timed_node("slot_parser", functools.partial(parse_slots, llm_client=llm_client), llm=llm_client is not None))
     graph.add_node("slot_completeness_gate", timed_node("slot_completeness_gate", check_slot_completeness))
     graph.add_node("general_law_reference_search", timed_node("general_law_reference_search", search_general_law_references))
     graph.add_node("request_missing_slots", timed_node("request_missing_slots", _await_missing_slot_input))
@@ -251,6 +262,7 @@ def build_graph(
         timed_node(
             "request_calc_info",
             functools.partial(_await_calc_info_input, llm_client=llm_client),
+            llm=llm_client is not None,
         ),
     )
 
@@ -276,6 +288,7 @@ def build_graph(
                 extractor=extractor,
                 law_resolver=law_resolver,
             ),
+            llm=llm_client is not None,
         ),
     )
     graph.add_node("document_verification", timed_node("document_verification", functools.partial(verify_official_documents, store=store))
@@ -292,9 +305,10 @@ def build_graph(
                 llm_client=llm_client,
                 support_conditions=support_conditions,
             ),
+            llm=llm_client is not None,
         ),
     )
-    graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client),))
+    graph.add_node("benefit_calculator", timed_node("benefit_calculator", functools.partial(calculate_benefit_amount, store=store, llm_client=llm_client), llm=llm_client is not None))
     graph.add_node("duplicate_benefit", timed_node("duplicate_benefit", functools.partial(check_duplicate_benefit, store=store)))
     # defer=True: N10(benefit_calculator)이 되묻기 루프(E18a/E18b)로 빠진
     # 라운드에는 N11(duplicate_benefit)만 먼저 이 노드로 라우팅하는데,
@@ -315,7 +329,7 @@ def build_graph(
         timed_node("result_assembly", functools.partial(assemble_result, store=store)),
         defer=True,
     )
-    graph.add_node("answer_generation", timed_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client)))
+    graph.add_node("answer_generation", timed_node("answer_generation", functools.partial(generate_answer, llm_client=llm_client), llm=llm_client is not None))
     graph.add_node("final_verification", timed_node("final_verification", verify_final_answer))
     graph.add_node("abstain_insufficient_evidence", timed_node("abstain_insufficient_evidence", _abstain_insufficient_evidence))
 
@@ -417,8 +431,9 @@ def run_graph(
     top_k: int = DEFAULT_TOP_K,
     as_of=None,
     safety_blocked: bool = False,
+    automatic_recommendation: bool = False,
 ) -> dict:
-    """session_id별 새 대화를 시작한다(첫 턴, Edge E1).
+    """session_id별 새 턴을 시작한다(Edge E1). 이전 턴의 계산/검색 상태는 지운다.
 
     user_input: 이번 턴 사용자 발화. N1(slot_parser)이 여기서 슬롯을 뽑는다.
     session_id: 사용자별 요청 격리 키. GraphState["query_id"]로 흘려보내
@@ -450,33 +465,89 @@ def run_graph(
     if as_of is not None and type(as_of) is not _date:
         raise ValueError("as_of must be a date")
 
+    # LangGraph는 같은 thread의 부분 입력을 병합하므로 모든 턴 상태를 초기화한다.
     initial_state: GraphState = {
+        "automatic_recommendation": automatic_recommendation,
         "query_id": session_id,
         "policy_top_k": top_k,
-        "as_of": as_of if as_of is not None else _date.today(),
+        "as_of": as_of if as_of is not None else korea_today(),
         "user_input": user_input,
+        "initial_user_input": user_input.strip(),
         "slots": dict(slots) if slots else {},
+        "slot_conflicts": None,
+        "missing_slots": [],
         "slot_ask_counts": {},
+        "region_fallback_applied": False,
+        "general_law_references": [],
+        "needs_input": False,
+        "followup_question": None,
+        "subsidy_chunks": [],
+        "subsidy_legal_basis_chunks": [],
+        "subsidy_full_chunks": [],
+        "law_chunks": [],
+        "claim_plan": [],
+        "eligibility_verdicts": [],
+        "benefit_amounts": [],
+        "calc_missing_slots": [],
+        "calc_missing_choices": [],
+        "calc_choice_answers": {},
+        "duplicate_verdicts": [],
+        "assembled_result": {},
         "node_trace": [],
         "safety_blocked": safety_blocked,
+        "evidence_gate_verdict": None,
+        "abstention_decision": None,
+        "missing_document_claim_ids": [],
+        "missing_law_claim_ids": [],
+        "doc_retry_count": 0,
+        "law_retry_count": 0,
+        "draft_answer": "",
+        "citations": [],
+        "final_answer": "",
+        "final_citations": [],
+        "answer_status": None,
     }
     config = {"configurable": {"thread_id": session_id}}
-    return graph.invoke(initial_state, config=config)
+    with graph_execution(), strict_llm_scope(automatic_recommendation):
+        return graph.invoke(initial_state, config=config)
 
 
-def resume_graph(graph: Any, *, session_id: str, user_input: str) -> dict:
-    """N3(request_missing_slots)에서 멈춘 세션을 재개한다(Edge E6).
+def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict:
+    """실제 interrupt는 재개하고, 완료된 상담에는 같은 ID로 새 턴을 시작한다.
 
-    ``run_graph()`` (또는 이전 ``resume_graph()``) 결과에
-    ``"__interrupt__"``가 있었던 session_id에 대해서만 호출할 수 있다 -
-    체크포인터가 해당 ``thread_id``로 저장해 둔 이전 진행 상태가 없으면
-    LangGraph가 에러를 낸다. 재개 시 그래프는 멈췄던 ``request_missing_slots``
-    노드부터 이어서 실행되고(``_await_missing_slot_input``의
-    ``interrupt()`` 호출이 이 ``user_input``을 그대로 돌려받는다), 이후
-    Edge E6을 따라 N1(slot_parser)로 이동해 새 발화를 기존 슬롯에 병합한다.
+    실패/미완료 체크포인트를 완료된 답변으로 취급하거나 무조건 재실행하지 않는다.
+    프로필은 유지하되 이전 질문의 관심사/연령 대상과 파생 나이는 재사용하지 않는다.
     """
     config = {"configurable": {"thread_id": session_id}}
-    return graph.invoke(Command(resume=user_input), config=config)
+    snapshot = graph.get_state(config)
+    if any(task.error for task in snapshot.tasks):
+        raise FailedCheckpointError("The previous graph execution failed; start a new session")
+    if isinstance(user_input, dict):
+        # 잠긴 현재 세션의 실제 interrupt ID와 정책/슬롯을 검사한 뒤에만 invoke한다.
+        pending = [(task.name, pause.id) for task in snapshot.tasks for pause in task.interrupts]
+        if len(pending) != 1 or pending[0] != ("request_calc_info", user_input.get("interrupt_id")):
+            raise CalculationInputError("현재 계산 질문에 대한 답변이 아닙니다.")
+        merge_structured_calc_answer(snapshot.values, user_input)
+    if any(task.interrupts for task in snapshot.tasks):
+        with graph_execution():
+            return graph.invoke(Command(resume=user_input), config=config)
+    if snapshot.next or not snapshot.values or snapshot.values.get("answer_status") not in (
+        "complete", "partial", "abstained",
+    ):
+        raise ValueError("No completed or interrupted chat checkpoint")
+    slots = dict(snapshot.values.get("slots") or {})
+    # 본인 프로필에서 온 날짜는 보존하고, 타인 상담에서 확인한 날짜만 버린다.
+    if (
+        slots.get("age_subject") in ("child", "household_member", "unknown")
+        and "birth_date" not in (slots.get("profile_sourced") or [])
+    ):
+        slots.pop("birth_date", None)
+    for field in ("interests", "age_subject", "age_self_reported", "age", "age_year_based", "age_ref_date"):
+        slots.pop(field, None)
+    return run_graph(
+        graph, session_id=session_id, user_input=user_input, slots=slots,
+        top_k=snapshot.values.get("policy_top_k", DEFAULT_TOP_K),
+    )
 
 
-__all__ = ["build_graph", "run_graph", "resume_graph"]
+__all__ = ["FailedCheckpointError", "build_graph", "run_graph", "resume_graph"]

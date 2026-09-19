@@ -65,9 +65,10 @@ State 계약:
 from __future__ import annotations
 
 from ...llm import LLMCallError, LLMClient
-from ..llm_gateway import extract_slots
+from ..llm_gateway import extract_slots, _LLM_MAX_CHILDREN_COUNT, _LLM_MAX_HOUSEHOLD_SIZE
 from ..slot_schema import SLOT_ENUMS, UNKNOWN, is_valid_slot_value
 from ..state import GraphState, SlotState
+from ..slot_schema import MARITAL_STATUS_KO, PREGNANCY_STATUS_KO
 
 # N3의 _SLOT_ASK_ITEMS(llm_gateway.py)는 하드 게이트 슬롯만 다룬다. 여기서
 # 다루는 슬롯은 전부 소프트 슬롯(slot_schema.SOFT_SLOTS)이라 그 표에 없으므로
@@ -85,6 +86,74 @@ _CALC_SKIP_NOTICE = (
     "모르시거나 말씀하기 어려우면 '모름'이라고 답하셔도 됩니다. "
     "이 경우 정확한 금액 대신 안내만 드려요."
 )
+
+_CALC_SELECT_OPTIONS = {
+    "marital_status": MARITAL_STATUS_KO,
+    "pregnancy_status": PREGNANCY_STATUS_KO,
+}
+_CALC_NUMBER_BOUNDS = {
+    "children_count": (0, _LLM_MAX_CHILDREN_COUNT),
+    "household_size": (1, _LLM_MAX_HOUSEHOLD_SIZE),
+}
+
+
+class CalculationInputError(ValueError):
+    """현재 계산 질문과 맞지 않는 구조화 답변 (HTTP 400 매핑)."""
+
+
+def calculation_input_fields(state: GraphState) -> dict:
+    """기존 N10의 슬롯/정책별 선택지를 입력 위젯에 필요한 정보와 함께 반환한다."""
+    fields = list(state.get("calc_missing_slots") or [])
+    inputs = []
+    for field in fields:
+        item = {"slot": field, "label": _CALC_SLOT_LABELS[field], "minimum": None, "maximum": None}
+        if field in _CALC_NUMBER_BOUNDS:
+            minimum, maximum = _CALC_NUMBER_BOUNDS[field]
+            item.update(input_type="number", minimum=minimum, maximum=maximum, options=[])
+        else:
+            item.update(input_type="select", options=[
+                {"value": value, "label": label}
+                for value, label in _CALC_SELECT_OPTIONS[field].items()
+            ])
+        inputs.append(item)
+    titles = _policy_titles(state)
+    return {
+        "calc_missing_slots": fields,
+        "calc_slot_inputs": inputs,
+        "calc_missing_choices": [
+            {"policy_id": choice["policy_id"], "labels": list(choice["labels"]),
+             "policy_title": titles.get(choice["policy_id"], choice["policy_id"])}
+            for choice in state.get("calc_missing_choices") or []
+        ],
+    }
+
+
+def merge_structured_calc_answer(state: GraphState, answer: dict) -> dict:
+    """검증 후 복사본에만 병합한다. 일부만 유효한 답변도 전체를 거절한다."""
+    if set(answer) - {"interrupt_id", "slots", "choices"}:
+        raise CalculationInputError("알 수 없는 계산 답변 필드입니다.")
+    slots, choices = answer.get("slots", {}), answer.get("choices", {})
+    if not isinstance(slots, dict) or not isinstance(choices, dict) or not (slots or choices):
+        raise CalculationInputError("계산에 필요한 답변을 입력해주세요.")
+    missing = state.get("calc_missing_slots") or []
+    for field, value in slots.items():
+        if field not in missing:
+            raise CalculationInputError("현재 질문에 없는 슬롯입니다.")
+        if field in _CALC_NUMBER_BOUNDS:
+            minimum, maximum = _CALC_NUMBER_BOUNDS[field]
+            valid = type(value) is int and minimum <= value <= maximum
+        else:
+            valid = isinstance(value, str) and value in _CALC_SELECT_OPTIONS.get(field, {})
+        if not valid:
+            raise CalculationInputError("계산 슬롯 값이 올바르지 않습니다.")
+    options = {c["policy_id"]: c["labels"] for c in state.get("calc_missing_choices") or []}
+    for policy_id, label in choices.items():
+        if not isinstance(label, str) or policy_id not in options or label not in options[policy_id]:
+            raise CalculationInputError("현재 정책의 선택지에 없는 답변입니다.")
+    return {
+        "slots": {**(state.get("slots") or {}), **slots},
+        "calc_choice_answers": {**(state.get("calc_choice_answers") or {}), **choices},
+    }
 
 
 def _policy_titles(state: GraphState) -> dict[str, str]:

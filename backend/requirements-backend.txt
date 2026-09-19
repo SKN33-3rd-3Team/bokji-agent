@@ -1,0 +1,12 @@
+# FastAPI 백엔드 전용 의존성. src/rag_chatbot 쪽 의존성(langgraph, chromadb,
+# bcrypt 등)은 레포 루트의 requirements-graph.txt/requirements-embedding.txt/
+# requirements-auth.txt가 이미 담당하므로 여기서 다시 선언하지 않는다 -
+# requirements-streamlit.txt와 같은 관례로 그 세 파일을 include한다.
+-r ../requirements-graph.txt
+-r ../requirements-embedding.txt
+-r ../requirements-auth.txt
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic-settings>=2.4,<3.0
+httpx>=0.27  # backend/tests/의 TestClient 왕복 테스트용

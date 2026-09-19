@@ -18,7 +18,7 @@
   원격 DB 를 팀이 공유할 땐 이 키도 **같은 값으로 공유**해야 서로의 PII
   (표시이름·관심조건)를 복호화할 수 있다.
 - ``AUTH_DB_URL`` (환경변수): 있으면 원격 MySQL/MariaDB 로 붙는다
-  (``mysql://user:pass@host:port/dbname``). RunPod Pod 배포는
+  (``mysql://user:pass@host:port/dbname``). 원격 DB 배포 절차는
   ``docs/AUTH_REMOTE_DB.md`` 참고.
 - ``AUTH_DB_PATH`` (환경변수): ``AUTH_DB_URL`` 이 없을 때 쓰는 SQLite 경로.
   이것도 없으면 ``.runtime/auth.db``.

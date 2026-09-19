@@ -19,7 +19,7 @@ N1(추출)·N2(게이트)·N3(재질문)가 같은 어휘를 쓰게 하려고 �
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Mapping, TypedDict
 
@@ -325,8 +325,14 @@ def calculate_ages(birth_date: date, reference_date: date) -> tuple[int, int]:
     return year_age - (0 if had_birthday else 1), year_age
 
 
+def korea_today() -> date:
+    """현재 한국 날짜. 토큰 만료 등 UTC 시각 계약과 분리한다."""
+
+    return datetime.now(timezone(timedelta(hours=9))).date()
+
+
 def parse_birth_date(value: str | None, reference_date: date | None = None) -> date | None:
-    """ISO 문자열을 실제 날짜로 바꾼다. 미래·비현실적 날짜는 거부한다.
+    """YYYY-MM-DD를 실제 날짜로 바꾼다. 미래·만 120세 초과는 거부한다.
 
     검증을 여기 한 곳에 모은 이유는, 같은 판정을 추출(N1)과 게이트(N2)가
     따로 하면 서로 어긋나기 때문이다. 게이트는 "값이 있다"로 통과시켰는데
@@ -344,8 +350,10 @@ def parse_birth_date(value: str | None, reference_date: date | None = None) -> d
         parsed = date.fromisoformat(value)
     except ValueError:
         return None
+    if parsed.isoformat() != value:
+        return None
 
-    today = reference_date or date.today()
+    today = reference_date or korea_today()
     if parsed > today:
         return None
     if calculate_ages(parsed, today)[0] > MAX_PLAUSIBLE_AGE:
