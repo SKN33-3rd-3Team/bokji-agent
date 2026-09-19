@@ -644,6 +644,21 @@ def test_to_chat_response_needs_input_shape():
     assert "| 상태 | 추가 질문 | 부족한 정보 |" in response["output_markdown"]
 
 
+def test_to_chat_response_needs_input_combines_calc_slots_and_choices():
+    class _Interrupt:
+        def __init__(self, value):
+            self.value = value
+
+    result = {
+        "__interrupt__": (_Interrupt("추가 정보를 알려주세요"),),
+        "calc_missing_slots": ["household_size"],
+        "calc_missing_choices": [{"policy_id": "policy-a", "labels": ["정규직", "자영업"]}],
+    }
+    response = _to_chat_response(result, session_id="s1", store=FakeDetailStore({}))
+
+    assert response["missing_slots"] == ["household_size", "choice:policy-a"]
+
+
 def test_to_chat_response_answered_shape_with_no_policies():
     result = {
         "answer_status": "abstained",
@@ -727,9 +742,11 @@ def test_recording_client_records_failures_without_swallowing_them():
             pass
     summary = recorder.summary()
     assert summary["calls"] == 2 and summary["successes"] == 0
-    # 같은 원인이 노드마다 반복되므로 중복은 한 번만 남긴다.
-    assert summary["failures"] == 1
-    assert "토큰 만료" in summary["messages"][0]
+    # failures는 실제 실패 "건수"(calls - successes)라서 같은 원인이어도
+    # 2로 센다 - 실패율 계산이 이 값을 쓰기 때문이다. messages(진단 메시지
+    # 목록)만 같은 원인이 노드마다 반복될 때 읽기 편하도록 중복 제거한다.
+    assert summary["failures"] == 2
+    assert summary["messages"] == ["토큰 만료"]
 
 
 def test_recording_client_reset_clears_previous_request():

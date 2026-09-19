@@ -264,6 +264,7 @@ def build_graph(
                 store=store,
                 support_conditions=support_conditions,
                 user_types=user_types,
+                llm_client=llm_client,
             ),
         ),
     )

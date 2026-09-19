@@ -89,9 +89,6 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
             "application_method": "..." | None,    # 신청방법
             "application_period": "..." | None,    # 신청기한
             "legal_basis": "..." | None,           # 근거법령
-            "required_documents": "..." | None,           # 구비서류
-            "required_documents_official": "..." | None,  # 공무원 확인 구비서류
-            "required_documents_self": "..." | None,      # 본인확인 필요 구비서류
             "region_names": [...] | None,
             "region_scope": "national"|"regional"|"unknown" | None,
             "age_start": int | None,
@@ -348,13 +345,33 @@ def build_llm_client() -> RecordingLLMClient | None:
     if os.environ.get("LLM_DISABLE_THINKING") == "1":
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
+    # LLM_PROVIDER로 provider를 고정한다. 비우면 예전처럼 huggingface_hub의
+    # auto 라우팅에 맡긴다.
+    #
+    # 왜 고정이 필요한가(2026-09-14 실측): HF는 같은 모델을 여러 provider로
+    # 동적 라우팅하는데 위 extra_body(chat_template_kwargs) 지원 여부가
+    # provider마다 다르다. Qwen3.5-9B는 Together/OVHcloud/DeepInfra를 오갔고,
+    # 뒤의 둘로 라우팅되는 동안 **모든 LLM 호출이 HTTP 400**을 받았다. 노드는
+    # 규칙 기반으로 조용히 폴백하므로 100문항 평가가 정상 완료되고 지표까지
+    # 찍혔지만 전부 폴백 성능이었다. 코드를 한 줄도 안 고쳤는데 어제 되던 게
+    # 오늘 깨지는 종류의 문제라, 재현 가능한 실험을 하려면 고정해야 한다.
+    #
+    # 같은 실측의 provider별 결과(사고 끄기 + 동일 프롬프트/예산):
+    #   featherless-ai  3.7s 성공   <- 가장 빠름
+    #   together        7.8s 성공
+    #   auto(고정 안 함) 28~33s 후 finish_reason='length'로 잘림
+    provider = (os.environ.get("LLM_PROVIDER") or "").strip() or None
+
     # RecordingLLMClient로 감싼다. 노드들은 LLM 호출이 실패해도 규칙 기반으로
     # 조용히 폴백하기 때문에, 감싸지 않으면 "LLM이 한 번도 안 돌았는데 결과는
     # 멀쩡히 나오는" 상태를 아무도 모른다. 여기 모인 실패 사유를
     # ChatResponse["llm_status"]로 화면까지 올린다.
     return RecordingLLMClient(
         HuggingFaceInferenceClient(
-            model=model, max_new_tokens=max_new_tokens, extra_body=extra_body
+            model=model,
+            max_new_tokens=max_new_tokens,
+            extra_body=extra_body,
+            provider=provider,
         )
     )
 
@@ -1067,7 +1084,35 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         # graph.invoke()는 리스트, graph.stream()은 튜플로 준다 - 둘 다 첫
         # 원소의 .value가 질문 문자열이다.
         question = interrupt_payload[0].value
-        missing_slots = result.get("missing_slots", [])
+        # 되묻기 경로가 셋인데 부족한 항목을 담는 state 키가 서로 다르다.
+        # 전부 같은 needs_input 응답으로 나가므로 여기서 세 키를 다 본다.
+        #
+        #   N3  request_missing_slots : state["missing_slots"]        (프로필 슬롯)
+        #   N10a request_calc_info    : state["calc_missing_slots"]   (계산용 슬롯)
+        #   N10a request_calc_info    : state["calc_missing_choices"] (정책별 선택지)
+        #
+        # 마지막 경로는 슬롯 이름이 아니라 {policy_id, labels} dict 목록이라
+        # 별도 키에 담긴다. builder.py가 셋 중 하나만 차 있어도 N10a로 보내므로
+        # (``if state.get("calc_missing_slots") or state.get("calc_missing_choices")``)
+        # "선택지만 있고 슬롯은 빈" 상태가 실제로 도달 가능하다. 이걸 빼먹으면
+        # 되묻는 질문은 띄우면서 missing_slots=[]로 나가고, 화면에는 "부족한
+        # 정보: 없음"이 뜨며 validation_runner는 InvalidNeedsInput으로 잡는다
+        # (2026-09-15 실측: dev-child-variant-041 1건이 이것 때문에 실패해
+        # 100문항 전체의 headline 지표가 게시 불가가 됐다).
+        #
+        # 선택지는 benefit_calculator/request_calc_info가 ask_counts에 쓰는 것과
+        # 같은 ``choice:<policy_id>`` 규약으로 이름을 만든다. calc_missing_slots와
+        # calc_missing_choices는 N10a 한 경로에서 동시에 채워질 수 있으므로(예:
+        # 계산용 슬롯과 정책별 선택지가 같은 턴에 함께 부족한 경우) 서로
+        # 배타적으로 취급하지 않고 둘 다 합쳐야 한다.
+        missing_slots = result.get("missing_slots")
+        if not missing_slots:
+            missing_slots = list(result.get("calc_missing_slots") or [])
+            missing_slots += [
+                f"choice:{choice.get('policy_id', '')}"
+                for choice in (result.get("calc_missing_choices") or [])
+                if isinstance(choice, Mapping)
+            ]
         return {
             "status": "needs_input",
             "question": question,

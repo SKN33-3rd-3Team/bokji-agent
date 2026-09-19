@@ -61,7 +61,9 @@ def test_evidence_chain_through_citations(mode, record_property):
     final = verify_final_answer(state)
     expected_citation = {"policy_id": matching.metadata["source_id"],
         "chunk_id": matching.chunk_id, "source_url": matching.metadata["source_url"],
-        "label": "근거 문서"}
+        # 2026-09-17: answer_generation.py의 citation label이 사실 유형별로
+        # 바뀌었다(Citation Precision 개선) - 이 claim은 eligibility 타입이다.
+        "label": "지원자격 근거"}
     isolated_final = verify_final_answer({**state, "citations": [expected_citation]})
     observed = {"gate": gate["evidence_gate_verdict"], "citations": state["citations"],
                 "final_citations": final["final_citations"],

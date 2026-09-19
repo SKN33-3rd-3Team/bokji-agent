@@ -234,3 +234,63 @@ def test_prefetch_workers_keep_the_request_recording_context(monkeypatch) -> Non
     assert summary["successes"] == 2
     assert summary["failures"] == 0
     assert recorder.summary()["calls"] == 0
+
+
+class _CapturingClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def complete(self, prompt, *, system=None, max_tokens=None):
+        self.calls.append({"prompt": prompt, "max_tokens": max_tokens})
+        return '{"claims": []}'
+
+
+def test_llm_extractor_sends_output_format_hint_and_node_token_budget(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", raising=False)
+    client = _CapturingClient()
+
+    LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
+
+    assert "[출력 형식]" in client.calls[0]["prompt"]
+    assert client.calls[0]["max_tokens"] == 2048
+
+
+def test_claim_extract_token_budget_is_read_at_call_time(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", "512")
+    client = _CapturingClient()
+
+    LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
+
+    assert client.calls[0]["max_tokens"] == 512
+
+
+def test_invalid_token_budget_env_falls_back_to_default(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", "2k")
+    client = _CapturingClient()
+
+    LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
+
+    assert client.calls[0]["max_tokens"] == 2048
+
+
+def test_response_in_hinted_format_passes_validation() -> None:
+    text = "나이 65세 이상 대상자에게 월 10만원을 지급한다."
+    response = json.dumps(
+        {
+            "claims": [
+                {
+                    "claim_type": "eligibility",
+                    "law_check_required": False,
+                    "reasons": ["나이 65세 이상 대상자에게 월 10만원을 지급한다."],
+                    "required_aspects": [],
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    claims = LLMClaimExtractor(FakeLLMClient(response=response)).extract(
+        policy_id="policy-a", text=text
+    )
+
+    assert [c["claim_type"] for c in claims] == ["eligibility"]

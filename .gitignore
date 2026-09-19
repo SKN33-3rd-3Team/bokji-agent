@@ -54,6 +54,8 @@ data/vector_db/
 .runtime/vector_db/
 .runtime/vector_db-smoke/
 
+# 평가결과 ignore제외
+artifacts/evaluation/*
 # LLM 비교: 공유 대상으로 검토해 추적한 파일 외 실행 산출물은 로컬에 보존
 /experiments/model_evaluation/local_20260915/
 /experiments/model_evaluation/local_300_20260916/
