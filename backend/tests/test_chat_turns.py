@@ -124,6 +124,59 @@ def test_completed_turn_discards_non_self_birth_date(turn_graph, monkeypatch, me
     assert slots["age"] is slots["age_year_based"] is slots["age_ref_date"] is None
 
 
+@pytest.mark.parametrize("replace_with_child_dob", [False, True])
+def test_completed_turn_preserves_only_unchanged_profile_birth_date(client, monkeypatch, replace_with_child_dob):
+    reference_date = date(2026, 9, 19)
+    store = Mock(search=Mock(return_value=[]))
+    graph = builder.build_graph(store)
+    monkeypatch.setattr(service, "_runtime_cache", {
+        "graph": graph, "store": store, "llm_client": None,
+    })
+    monkeypatch.setattr(service, "korea_today", lambda: reference_date)
+    monkeypatch.setattr(builder, "korea_today", lambda: reference_date)
+    assert client.post("/api/v1/auth/signup", json={
+        "email": "profile-turns@example.com", "name": "Tester", "password": "Passw0rd!123",
+        "password_confirm": "Passw0rd!123", "terms_agreed": True, "privacy_agreed": True,
+        "birth_date": "1990-01-01", "gender": "female", "region": "서울특별시",
+        "income_bracket": "under_30", "disability_status": "not_registered",
+    }).status_code == 201
+    defaults = client.get("/api/v1/users/me/chat-defaults")
+    assert defaults.status_code == 200
+    known = defaults.json()
+    known.pop("employment_status_available")
+    assert known["known_birth_date"] == "1990-01-01"
+    message = "우리 아이 지원 제도를 알려주세요. 재직 중입니다."
+    if replace_with_child_dob:
+        message += " 우리 아이는 2015-01-01생입니다."
+    result = service.ask(message, "profile-turn", **known)
+    config = {"configurable": {"thread_id": "profile-turn"}}
+    if replace_with_child_dob:
+        conflicted = graph.get_state(config).values
+        assert result["status"] == "needs_input"
+        assert conflicted["slot_conflicts"]["birth_date"] == {
+            "profile": "1990-01-01", "chat": "2015-01-01",
+        }
+        assert "birth_date" not in conflicted["slots"]["profile_sourced"]
+        result = service.answer_followup("profile-turn", "2015-01-01생입니다")
+    before = graph.get_state(config)
+    assert result["status"] == "answered" and not before.next
+    assert before.values["slots"]["age_subject"] == "child"
+    assert before.values["slots"]["birth_date"] == ("2015-01-01" if replace_with_child_dob else "1990-01-01")
+    assert ("birth_date" in before.values["slots"]["profile_sourced"]) is not replace_with_child_dob
+
+    result = service.answer_followup("profile-turn", "본인 청년 지원을 알려주세요")
+    after = graph.get_state(config).values
+    slots = after["slots"]
+    assert slots["age_subject"] == "self"
+    age_filter = resolve_filter_slots(slots, reference_date=reference_date)["hard"].get("birth_date")
+    if replace_with_child_dob:
+        assert result["status"] == "needs_input" and result["missing_slots"] == ["birth_date"]
+        assert not slots.get("birth_date") and age_filter is None
+    else:
+        assert result["status"] == "answered" and after["missing_slots"] == []
+        assert slots["birth_date"] == "1990-01-01" and age_filter["age"] == 36
+
+
 def test_interrupted_turn_resumes_before_starting_new_turn(turn_graph):
     graph, seen = turn_graph
     first = builder.run_graph(graph, user_input="collect", session_id="same")

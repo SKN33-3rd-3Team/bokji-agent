@@ -536,8 +536,11 @@ def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict
     ):
         raise ValueError("No completed or interrupted chat checkpoint")
     slots = dict(snapshot.values.get("slots") or {})
-    # 타인/불명확 주체의 생년월일을 새 턴에서 본인 것으로 재해석하지 않는다.
-    if slots.get("age_subject") in ("child", "household_member", "unknown"):
+    # 본인 프로필에서 온 날짜는 보존하고, 타인 상담에서 확인한 날짜만 버린다.
+    if (
+        slots.get("age_subject") in ("child", "household_member", "unknown")
+        and "birth_date" not in (slots.get("profile_sourced") or [])
+    ):
         slots.pop("birth_date", None)
     for field in ("interests", "age_subject", "age_self_reported", "age", "age_year_based", "age_ref_date"):
         slots.pop(field, None)
