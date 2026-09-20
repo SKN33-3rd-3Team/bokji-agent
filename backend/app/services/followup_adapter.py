@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from fastapi import status
 
-from src.rag_chatbot.light_followup import respond_to_policy_question
-from src.rag_chatbot.service import get_llm_client
+from src.rag_chatbot.light_followup import REASON_MESSAGES, respond_to_policy_question
+from src.rag_chatbot.service import get_llm_client, llm_request_scope, llm_status
 
 from ..core.errors import ApiError
 from ..schemas.chat import PolicyQuestionResponse
@@ -37,12 +37,18 @@ def ask_policy_question(
             "이 세션에서 추천된 정책이 아닙니다.",
         )
     try:
-        result = respond_to_policy_question(
-            policy,
-            question,
-            llm_client=get_llm_client(),
-            user_profile=record.last_profile,
-        )
+        # 이번 문의에서 LLM이 실제로 돌았는지(호출 수·실패 사유)를 상담 응답과
+        # 같은 방식으로 기록한다 - API-12만 이 정보가 없어서, 안내 문구가
+        # 반복될 때 "LLM이 안 붙은 건지 붙었는데 실패한 건지"를 화면에서
+        # 구분할 수 없었다.
+        with llm_request_scope():
+            result = respond_to_policy_question(
+                policy,
+                question,
+                llm_client=get_llm_client(),
+                user_profile=record.last_profile,
+            )
+            status_snapshot = llm_status()
     except SystemExit as exc:
         # get_llm_client()도 내부적으로 get_graph()를 거쳐 vectorDB에 연결한다
         # (service.py 참고) - chat_adapter._run()과 동일한 이유로 변환한다.
@@ -57,4 +63,9 @@ def ask_policy_question(
             "INTERNAL_ERROR",
             "일시적인 오류가 발생했습니다. 다시 시도해주세요.",
         ) from exc
-    return PolicyQuestionResponse(**result)
+    reason = result.get("reason")
+    return PolicyQuestionResponse(
+        **result,
+        reason_message=REASON_MESSAGES.get(reason) if reason else None,
+        llm_status=status_snapshot,
+    )

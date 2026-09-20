@@ -974,6 +974,14 @@ def _llm_request_scope():
     return nullcontext()
 
 
+# API-12(정책 상세 문의)도 "이번 요청에서 LLM이 실제로 돌았는지"를 같은
+# 방식으로 실어 보낸다. 서비스 밖(backend 어댑터)에서 부를 수 있게 공개
+# 이름을 둔다 - 내부 호출은 밑줄 이름을 그대로 쓴다(이미 그 이름을
+# monkeypatch하는 테스트가 있어 옮기면 깨진다).
+llm_request_scope = _llm_request_scope
+llm_status = _llm_status
+
+
 def _timing_report() -> dict:
     """이번 요청에서 어디에 시간이 들었는지.
 
@@ -1473,6 +1481,11 @@ def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
 __all__ = [
     "ask",
     "answer_followup",
+    "is_awaiting_input",
+    "llm_request_scope",
+    "llm_status",
+    "warm_up",
+    "warmup_state",
     "connect_store",
     "build_embedding_provider",
     "build_llm_client",

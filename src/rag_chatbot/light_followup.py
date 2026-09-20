@@ -39,6 +39,12 @@ from .llm import LLMCallError, LLMClient, loads_json_object
 # 재시도하면 같은 버스트에 또 걸리므로 한 박자 쉬고 재시도한다.
 _RETRY_BACKOFF_SECONDS = 1.5
 
+# 근거 발췌가 원문과 글자 단위로 안 맞아 검증에 걸렸을 때 다시 생성해 볼
+# 횟수. 검증 자체를 느슨하게 하지 않으면서(원칙 유지) "답할 수 있는 질문인데
+# 표현을 다듬어서 버려지는" 경우만 건져낸다. 한 번이면 대부분 잡히고, 더
+# 늘리면 사용자 대기 시간만 길어진다.
+_UNVERIFIED_RETRIES = 1
+
 _WS_RE = re.compile(r"\s+")
 
 # policies[i]["detail"]의 섹션 키 -> 사람이 읽는 라벨. service._DETAIL_SECTION_TYPES와
@@ -159,10 +165,13 @@ def answer_light_followup(
         "않는 별개의 주제(예: 다른 정책, 이 정보에 없는 절차·중복수급 여부)일 "
         "때만 answerable을 false로 하라 - '자세히는 안 나와 있어서 애매하다'는 "
         "이유로 false로 두지 마라. '사용자 정보 -'로 시작하는 줄은 질문자 본인의 "
-        "상황이니 자격·지역 관련 질문에 활용해도 된다. answer는 '~합니다.', "
+        "상황이니 자격·지역 관련 질문에 활용해도 되고, 그 줄도 evidence_quotes에 "
+        "그대로 복사해 담을 수 있다. answer는 '~합니다.', "
         "'~입니다.'처럼 정중한 격식체 종결어미와 마침표로 끝맺어라. "
-        "evidence_quotes에는 답의 근거가 된 문장을 정보 원문에서 그대로 복사해 "
-        "담아라(의역·요약 금지, 짧아도 된다).\n\n"
+        "evidence_quotes에는 답의 근거가 된 문장을 **정보에 적힌 글자 그대로** "
+        "복사해 담아라 - 한 글자도 바꾸지 말고, 줄 앞의 '지원내용: ' 같은 라벨까지 "
+        "포함해 그대로 옮겨라(의역·요약·문장 합치기 금지, 짧아도 된다). 원문에 "
+        "없는 문장을 근거로 적으면 답변 전체가 버려진다.\n\n"
         "예시 1 (관련 내용이 있으면 답한다):\n"
         "[정책 정보]\n지원내용: 월 최대 20만원을 최대 12개월 지원한다.\n"
         "[질문]\n한 달에 얼마씩 받아요?\n"
@@ -196,6 +205,30 @@ _GUIDANCE_TEMPLATE = (
     "이 채팅은 '{title}' 정책에 대한 질문만 답할 수 있어요. "
     "다른 정책이나 새로운 검색은 메인 화면에서 다시 물어봐 주세요."
 )
+
+# 안내(guidance)로 물러난 이유. 화면 문구는 어느 경우든 같지만, 원인은 전혀
+# 다르다 - LLM이 아예 안 붙었을 수도, 붙었는데 호출이 실패했을 수도, 정상
+# 동작하면서 "이 정보로는 답할 수 없다"고 판단했을 수도, 검증에서 걸렸을
+# 수도 있다. 이 값을 응답에 함께 실어 보내지 않으면 "계속 응답 불가"만
+# 반복될 때 어디를 봐야 하는지 알 수 없다(2026-09-20 추가).
+REASON_OK = "ok"
+REASON_LLM_MISSING = "llm_missing"            # LLM 클라이언트 자체가 없음(토큰 미설정)
+REASON_NO_CONTEXT = "no_context"              # 정책 상세 섹션이 비어 컨텍스트를 못 만듦
+REASON_LLM_FAILED = "llm_failed"              # 호출/파싱/형식 실패(재시도까지 소진)
+REASON_NOT_ANSWERABLE = "not_answerable"      # LLM이 "이 정보로는 못 답한다"고 판단
+REASON_EVIDENCE_NOT_FOUND = "evidence_not_found"  # 제시한 발췌가 원문에 없음
+REASON_INCONSISTENT = "inconsistent"          # 답변이 근거와 어긋남(또는 검증 호출 실패)
+
+# 화면(개발자·QA)이 그대로 보여줄 수 있는 한 줄 설명.
+REASON_MESSAGES: dict[str, str] = {
+    REASON_OK: "근거 검증까지 통과했습니다.",
+    REASON_LLM_MISSING: "LLM이 연결되지 않아 답변을 생성하지 못했습니다(토큰/백엔드 설정 확인).",
+    REASON_NO_CONTEXT: "이 정책의 상세 섹션이 비어 있어 답변 근거를 만들 수 없었습니다.",
+    REASON_LLM_FAILED: "LLM 호출이 실패했거나 형식에 맞지 않는 응답이 와서 답변하지 못했습니다.",
+    REASON_NOT_ANSWERABLE: "LLM이 이 정책 정보만으로는 답할 수 없다고 판단했습니다.",
+    REASON_EVIDENCE_NOT_FOUND: "LLM이 제시한 근거 발췌가 정책 원문에 없어 답변을 버렸습니다.",
+    REASON_INCONSISTENT: "답변이 근거와 일치하는지 확인하지 못해 답변을 버렸습니다.",
+}
 
 
 # 이 키는 "사용자 정보"(확정된 사실)로 프롬프트에 넣지 않는다. interests는
@@ -242,10 +275,15 @@ def respond_to_policy_question(
     """정책 상세 채팅의 한 턴 - 컨텍스트 조립(B) → 생성(B) → 검증(C)을 묶어
     화면에 그대로 쓸 결과를 돌려준다.
 
-    반환: ``{"kind": "answer" | "guidance", "text": str, "evidence_quotes": list[str]}``
-    - ``"answer"``: 검증까지 통과한 경량 답변
+    반환: ``{"kind": "answer" | "guidance", "text": str,
+    "evidence_quotes": list[str], "reason": str}``
+    - ``"answer"``: 검증까지 통과한 경량 답변 (``reason="ok"``)
     - ``"guidance"``: 답할 수 없거나(``answerable=false``), LLM이 없거나 실패,
       또는 근거 검증 실패 - 지어내지 않고 안내 문구로 대체
+
+    ``reason``은 **안내로 물러난 이유**다(위 ``REASON_*``). 화면 문구는 어느
+    경우든 같아서, 이 값이 없으면 "계속 응답 불가"가 LLM 미연결 때문인지
+    호출 실패인지 검증 탈락인지 구분할 방법이 없다.
 
     ``policy``는 ChatResponse의 ``policies`` 항목(PolicyView) 하나다.
     ``user_profile``은 세션의 "파악한 정보"(지역·나이·소득 등) - 자격 관련
@@ -253,13 +291,17 @@ def respond_to_policy_question(
     """
 
     title = str(policy.get("title") or policy.get("policy_id") or "이 정책")
-    guidance = {
-        "kind": "guidance",
-        "text": _GUIDANCE_TEMPLATE.format(title=title),
-        "evidence_quotes": [],
-    }
+
+    def guidance(reason: str) -> dict:
+        return {
+            "kind": "guidance",
+            "text": _GUIDANCE_TEMPLATE.format(title=title),
+            "evidence_quotes": [],
+            "reason": reason,
+        }
+
     if llm_client is None:
-        return guidance
+        return guidance(REASON_LLM_MISSING)
 
     reasons = [
         f"자격 판정 근거: {reason}"
@@ -270,21 +312,36 @@ def respond_to_policy_question(
         policy, extra_facts=[*_profile_facts(user_profile), *reasons]
     )
     if not context:
-        return guidance
+        return guidance(REASON_NO_CONTEXT)
 
-    light = answer_light_followup(context, question, llm_client=llm_client)
-    if light is None or not light["answerable"]:
-        return guidance
-    if not verify_light_answer(light["evidence_quotes"], context):
-        return guidance
+    # 근거 검증(verify_light_answer)은 발췌가 원문에 **글자 그대로** 있는지만
+    # 본다. 모델이 뜻은 맞게 쓰면서 표현을 조금 다듬으면 그것만으로 답변이
+    # 통째로 버려진다 - 실제로 답할 수 있는 질문인데 "응답 불가"가 반복되는
+    # 원인이 대부분 여기다(2026-09-20 실제 경로로 확인). 그래서 같은 질문을
+    # 한 번 더 생성시켜 본다. **검증 기준은 그대로다** - 통과 못 하면 여전히
+    # 안내로 물러난다. 판정을 느슨하게 푸는 게 아니라 기회를 한 번 더 주는
+    # 것이라 "검증된 근거만 답한다" 원칙에는 영향이 없다.
+    for attempt in range(_UNVERIFIED_RETRIES + 1):
+        light = answer_light_followup(context, question, llm_client=llm_client)
+        if light is None:
+            return guidance(REASON_LLM_FAILED)
+        if not light["answerable"]:
+            return guidance(REASON_NOT_ANSWERABLE)
+        if verify_light_answer(light["evidence_quotes"], context):
+            break
+        if attempt == _UNVERIFIED_RETRIES:
+            return guidance(REASON_EVIDENCE_NOT_FOUND)
+        time.sleep(_RETRY_BACKOFF_SECONDS)
+
     if not verify_answer_consistency(
         light["answer"], light["evidence_quotes"], llm_client=llm_client
     ):
-        return guidance
+        return guidance(REASON_INCONSISTENT)
     return {
         "kind": "answer",
         "text": light["answer"],
         "evidence_quotes": light["evidence_quotes"],
+        "reason": REASON_OK,
     }
 
 

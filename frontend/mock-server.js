@@ -689,6 +689,23 @@ const routes = [
     handler: async (_req, res) => sendJson(res, 200, SEARCH_OPTIONS),
   },
   {
+    // 실제 백엔드는 구동 직후 임베딩 모델을 백그라운드로 로드한다 - mock은
+    // 로드할 모델이 없으니 항상 준비 완료.
+    method: "GET",
+    pattern: /^\/api\/v1\/config\/status$/,
+    handler: async (_req, res) =>
+      sendJson(res, 200, { status: "ready", message: "준비가 끝났습니다.", seconds: 0 }),
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/v1\/chat\/progress\/([^/]+)$/,
+    handler: async (req, res, [token]) => {
+      const user = getCurrentUser(req);
+      if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
+      sendJson(res, 200, progressSnapshot(decodeURIComponent(token)));
+    },
+  },
+  {
     method: "POST",
     pattern: /^\/api\/v1\/chat\/messages$/,
     handler: async (req, res) => {
@@ -775,10 +792,26 @@ const routes = [
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
       await delay(QA_DELAY_MS);
       const body = await readBody(req);
+      // "응답 불가"가 반복될 때 화면이 이유를 보여주는지 QA에서 확인할 수
+      // 있도록, 질문에 "모름"/"왜"가 들어가면 안내(guidance) 경로를 재현한다.
+      const asksWhy = /모름|왜|안 ?돼|안돼/.test(body.question ?? "");
+      if (asksWhy) {
+        return sendJson(res, 200, {
+          kind: "guidance",
+          text: `이 채팅은 '${policyId}' 정책에 대한 질문만 답할 수 있어요. 다른 정책이나 새로운 검색은 메인 화면에서 다시 물어봐 주세요.`,
+          evidence_quotes: [],
+          reason: "evidence_not_found",
+          reason_message: "LLM이 제시한 근거 발췌가 정책 원문에 없어 답변을 버렸습니다.",
+          llm_status: mockLlmStatus(),
+        });
+      }
       sendJson(res, 200, {
         kind: "answer",
         text: `"${body.question ?? ""}"에 대한 답변입니다 (mock). 정책 ${policyId}의 지원 조건은 상세 화면의 안내를 참고해 주세요.`,
         evidence_quotes: ["관련 법령 제3조에 따라 소득 기준을 충족하는 가구가 대상입니다."],
+        reason: "ok",
+        reason_message: "근거 검증까지 통과했습니다.",
+        llm_status: mockLlmStatus(),
       });
     },
   },

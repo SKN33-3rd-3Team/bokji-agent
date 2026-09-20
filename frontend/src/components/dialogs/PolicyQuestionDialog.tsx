@@ -3,7 +3,7 @@ import { usePolicyQuestion } from "@/features/chat/usePolicyQuestion";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
 import { ApiError } from "@/api/client";
-import type { PolicyView } from "@/types/chat";
+import type { LlmStatus, PolicyView } from "@/types/chat";
 
 interface PolicyQuestionDialogProps {
   sessionId: string | null;
@@ -22,6 +22,12 @@ export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuest
   const [confirmingClose, setConfirmingClose] = useState(false);
 
   const errorMessage = error ? (error instanceof ApiError ? error.message : "일시적인 오류가 발생했습니다. 다시 시도해주세요.") : null;
+
+  // "응답 불가"가 반복될 때 어디를 봐야 하는지 알려주는 진단 줄에 쓴다.
+  const lastAssistantTurn = [...history].reverse().find((turn) => turn.role === "assistant");
+  const rawStatus = lastAssistantTurn?.llmStatus;
+  const lastLlmStatus =
+    rawStatus && "enabled" in rawStatus ? (rawStatus as LlmStatus) : null;
 
   const submit = () => {
     const question = input.trim();
@@ -100,6 +106,27 @@ export function PolicyQuestionDialog({ sessionId, policy, onClose }: PolicyQuest
                   </div>
                 </div>
               ))
+            )}
+            {/* 마지막 답변이 안내로 물러났다면 그 이유를 함께 보여준다.
+                문구만 보면 LLM이 안 붙은 건지, 붙었는데 실패한 건지, 근거
+                검증에서 걸린 건지 구분할 수 없다(light_followup.REASON_*). */}
+            {lastAssistantTurn?.kind === "guidance" && lastAssistantTurn.reasonMessage && (
+              <p className="policy-question-reason">
+                <span aria-hidden>ⓘ</span> {lastAssistantTurn.reasonMessage}
+                {lastLlmStatus && (
+                  <>
+                    {" · "}
+                    {lastLlmStatus.enabled
+                      ? `LLM ${lastLlmStatus.model ?? "모델 미확인"} · 호출 ${lastLlmStatus.calls ?? 0}회 (실패 ${lastLlmStatus.failures ?? 0}회)`
+                      : "LLM 미연결"}
+                  </>
+                )}
+                {(lastLlmStatus?.messages?.length ?? 0) > 0 && (
+                  <span style={{ display: "block", marginTop: 4 }}>
+                    {lastLlmStatus?.messages?.join(" / ")}
+                  </span>
+                )}
+              </p>
             )}
             {/* S08-02: 응답 대기 중 로딩 표시 */}
             {isAsking && <TypingIndicator />}

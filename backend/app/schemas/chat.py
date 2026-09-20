@@ -148,11 +148,21 @@ class PolicyQuestionRequest(BaseModel):
 
 
 class PolicyQuestionResponse(BaseModel):
-    """API-12 응답."""
+    """API-12 응답.
+
+    ``reason``/``reason_message``/``llm_status``는 2026-09-20 추가된 진단용
+    필드다. ``kind="guidance"``(안내로 물러남)일 때 화면 문구는 어느 경우든
+    같아서, 이 값들이 없으면 "계속 응답 불가"가 LLM 미연결 때문인지, 호출
+    실패인지, 근거 검증 탈락인지 구분할 방법이 없었다
+    (``light_followup.REASON_*`` 참고).
+    """
 
     kind: Literal["answer", "guidance"]
     text: str
     evidence_quotes: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    reason_message: str | None = None
+    llm_status: dict[str, Any] = Field(default_factory=dict)
 
 
 class PolicyDetail(BaseModel):

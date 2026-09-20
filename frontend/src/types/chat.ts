@@ -215,11 +215,29 @@ export interface ChatResponse {
   timing: Timing;
 }
 
-/** API-12 응답 */
+/**
+ * API-12 응답.
+ *
+ * reason/reason_message/llm_status는 진단용이다 — kind="guidance"(답변 대신
+ * 안내)일 때 화면 문구는 어느 경우든 같아서, 이 값들이 없으면 LLM 미연결인지
+ * 호출 실패인지 근거 검증 탈락인지 구분할 수 없다
+ * (src/rag_chatbot/light_followup.py의 REASON_* 참고).
+ */
 export interface PolicyQuestionResponse {
   kind: "answer" | "guidance";
   text: string;
   evidence_quotes: string[];
+  reason:
+    | "ok"
+    | "llm_missing"
+    | "no_context"
+    | "llm_failed"
+    | "not_answerable"
+    | "evidence_not_found"
+    | "inconsistent"
+    | null;
+  reason_message: string | null;
+  llm_status: LlmStatus | Record<string, never>;
 }
 
 /** API-13 응답 */
@@ -264,6 +282,9 @@ export interface PolicyQuestionTurn {
   text: string;
   kind?: "answer" | "guidance";
   evidenceQuotes?: string[];
+  /** 안내로 물러난 이유(진단용) — 사용자 말풍선에는 없다 */
+  reasonMessage?: string | null;
+  llmStatus?: LlmStatus | Record<string, never>;
 }
 
 /** ChatPage 로컬 메시지 이력 아이템 */
