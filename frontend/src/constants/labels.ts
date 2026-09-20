@@ -166,4 +166,34 @@ export const GUIDANCE_OFFICIAL =
  * API-14가 생기면서 그 트릭은 더 이상 필요 없다.
  */
 export const HOME_CAPTION = "마이페이지에 저장된 정보로 맞춤 지원 제도를 자동으로 찾아드려요.";
-export const HOME_LOADING_MESSAGE = "마이페이지 정보로 맞춤 지원 제도를 찾고 있어요...";
+// HOME_LOADING_MESSAGE("...찾고 있어요...")는 없앴다 — 자동 추천 대기 화면도
+// ChatProgressBar가 실제 진행 단계를 문장으로 보여주므로, 고정 문구를 함께
+// 띄우면 같은 자리에 서로 다른 말이 두 줄 나온다.
+
+/** S03-06 확장: 진행 막대(ChatProgressBar) 문구 */
+export const PROGRESS_FALLBACK_MESSAGE = "요청을 처리하고 있어요";
+export const PROGRESS_WARMUP_MESSAGE =
+  "검색 엔진을 준비하고 있어요 (서버를 켠 뒤 처음 한 번만 더 걸려요)";
+
+/**
+ * S05-03: 지원금 계산 되묻기 폼(CalcFollowupForm) 문구.
+ * 되묻는 슬롯은 자격 판정이 아니라 금액 계산에만 쓰이므로(N10a
+ * request_calc_info.py), 건너뛰어도 안내 자체는 그대로 나온다.
+ */
+export const CALC_FORM_SKIP_ALL_LABEL = "전부 모르겠어요 / 건너뛸게요";
+export const CALC_FORM_SKIP_NOTICE =
+  "모름으로 두면 그 항목은 정확한 금액 대신 안내만 드려요. 자격 판정 결과는 그대로예요.";
+export const CALC_FORM_SUBMIT_LABEL = "이 정보로 계산하기";
+
+/**
+ * 되묻기 폼 공통 "모름" 문구.
+ *
+ * 전송 방식은 폼마다 다르다 — 계산 되묻기는 구조화 필드
+ * (calc_answers.unknown_slots / unknown_choices)에 **항목 이름**을 담고,
+ * 슬롯 되묻기·충돌 재확인은 문장("거주 지역: 모름")을 보낸다. 후자는
+ * "모름"이라는 낱말 자체가 계약이다(llm_gateway._DONT_KNOW_MARKERS).
+ * 어느 쪽이든 그래프 내부 센티넬 문자열("unknown")을 프론트가 직접 보내지는
+ * 않는다 — 공개 API는 열거형 계약에 있는 값만 받는다.
+ */
+export const UNKNOWN_CHOICE_LABEL = "모름 / 해당 없음";
+export const UNKNOWN_FIELD_NOTE = "이 항목 없이 진행할게요.";

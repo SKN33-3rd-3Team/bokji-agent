@@ -14,9 +14,11 @@ from fastapi import status
 
 from rag_design.embeddings import EmbeddingProviderError
 from rag_design.vector_store import VectorStoreError
-from src.rag_chatbot.service import answer_followup, ask, get_graph
+from src.rag_chatbot.service import answer_followup, ask, get_graph, is_awaiting_input
 from src.rag_chatbot.graph.builder import FailedCheckpointError
 from src.rag_chatbot.graph.nodes.request_calc_info import CalculationInputError
+from src.rag_chatbot.progress import PROGRESS
+from src.rag_chatbot.timing import EXPECTED_NODE_COUNT, EXPECTED_RESUME_NODE_COUNT
 
 from ..core.document_parsing import split_document_items
 from ..core.errors import ApiError
@@ -94,9 +96,9 @@ def _cache_last_response(session_id: str, raw: dict) -> None:
         )
 
 
-def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
+def start_chat(payload: ChatRequest, *, user_id: int, progress_token: str | None = None) -> ChatResponse:
     return _start_chat(
-        payload.message, user_id=user_id,
+        payload.message, user_id=user_id, progress_token=progress_token,
         top_k=payload.top_k if payload.top_k is not None else 5,
         extra_interests=payload.extra_interests or None,
         known_household_types=payload.known_household_types or None,
@@ -107,9 +109,11 @@ def start_chat(payload: ChatRequest, *, user_id: int) -> ChatResponse:
     )
 
 
-def start_recommendations(profile: UserProfile, *, user_id: int) -> ChatResponse:
+def start_recommendations(
+    profile: UserProfile, *, user_id: int, progress_token: str | None = None
+) -> ChatResponse:
     return _start_chat(
-        "", user_id=user_id, automatic_recommendation=True,
+        "", user_id=user_id, progress_token=progress_token, automatic_recommendation=True,
         extra_interests=profile.interests or None,
         **{f"known_{field}": getattr(profile, field) for field in (
             "region", "gender", "birth_date", "disability_status", "income_bracket",
@@ -118,7 +122,38 @@ def start_recommendations(profile: UserProfile, *, user_id: int) -> ChatResponse
     )
 
 
-def _start_chat(message: str, *, user_id: int, **kwargs) -> ChatResponse:
+def _begin_progress(
+    session_id: str, *, user_id: int, progress_token: str | None, resuming: bool = False
+) -> None:
+    """진행률 추적을 켠다(``GET /api/v1/chat/progress/{token}``가 읽는다).
+
+    추적 키는 ``session_id``다 - 그래프 노드가 자기 state의 ``query_id``로
+    진행 상황을 기록하고, 그 값이 곧 ``session_id``이기 때문이다(progress.py).
+    첫 상담(API-10/14)에서는 이 ``session_id``를 서버가 방금 만들어 클라이언트가
+    아직 모르므로, 클라이언트가 보낸 토큰을 같은 기록의 별칭으로 걸어 둔다.
+    ``owner``로 다른 회원이 남의 진행 상황을 조회하는 것을 막는다.
+
+    ``resuming``이면(되묻기에 답해 재개하는 요청) 이전 턴에서 끝낸 단계 수를
+    물려받아 막대를 **이어서** 그린다. 그래프도 처음부터 다시 돌지 않고 멈춘
+    자리에서 이어가므로(N10a -> N9, builder.py E18b), 0부터 다시 그리면
+    "답했더니 처음부터 다시 하네"로 보인다. 분모도 그만큼 키운다 - 남은
+    구간이 실제로는 몇 노드 안 되는데 분모가 14 그대로면 막대가 거의 안
+    움직인다.
+    """
+
+    carried = PROGRESS.completed_steps(session_id) if resuming else 0
+    PROGRESS.start(
+        session_id,
+        total_steps=carried + (EXPECTED_RESUME_NODE_COUNT if resuming else EXPECTED_NODE_COUNT),
+        owner=user_id,
+        aliases=(progress_token,) if progress_token else (),
+        carried_steps=carried,
+    )
+
+
+def _start_chat(
+    message: str, *, user_id: int, progress_token: str | None = None, **kwargs
+) -> ChatResponse:
     session_id = str(uuid.uuid4())
     graph = None
 
@@ -126,6 +161,7 @@ def _start_chat(message: str, *, user_id: int, **kwargs) -> ChatResponse:
         nonlocal graph
         graph = instance
 
+    _begin_progress(session_id, user_id=user_id, progress_token=progress_token)
     try:
         raw = _run(
             ask,
@@ -138,8 +174,10 @@ def _start_chat(message: str, *, user_id: int, **kwargs) -> ChatResponse:
         response = ChatResponse.model_validate(raw)
         chat_session_store.create(session_id, user_id=user_id)
         _cache_last_response(session_id, raw)
+        PROGRESS.finish(session_id)
         return response
     except Exception:
+        PROGRESS.finish(session_id, failed=True)
         # 초기화 실패 때 get_graph()를 다시 호출하면 다른 그래프를 만들 수 있다.
         # 두 정리는 독립적으로 시도하고 원래 HTTP 오류는 그대로 전달한다.
         try:
@@ -154,7 +192,9 @@ def _start_chat(message: str, *, user_id: int, **kwargs) -> ChatResponse:
         raise
 
 
-def continue_chat(session_id: str, message: str | dict, *, user_id: int) -> ChatResponse:
+def continue_chat(
+    session_id: str, message: str | dict, *, user_id: int, progress_token: str | None = None
+) -> ChatResponse:
     with chat_session_store.locked(session_id, user_id=user_id) as record:
         if record is None:
             raise ApiError(
@@ -162,10 +202,26 @@ def continue_chat(session_id: str, message: str | dict, *, user_id: int) -> Chat
                 "SESSION_NOT_FOUND",
                 "세션이 만료되었거나 존재하지 않습니다. 새로 상담을 시작해주세요.",
             )
-        raw = _run(answer_followup, session_id, message)
-        raw = _augment_required_documents(raw)
-        _cache_last_response(session_id, raw)
-        return ChatResponse.model_validate(raw)
+        # 소유권을 확인한 뒤에 켠다 - 남의 session_id를 찍어보는 요청이
+        # 진행률 기록만 남기고 가지 않게 한다. 되묻기 재개인지 여부는
+        # answer_followup()을 부르기 **전에** 봐야 안다 - 부르고 나면 이미
+        # 재개가 끝나 interrupt가 사라진다.
+        _begin_progress(
+            session_id,
+            user_id=user_id,
+            progress_token=progress_token,
+            resuming=is_awaiting_input(session_id),
+        )
+        try:
+            raw = _run(answer_followup, session_id, message)
+            raw = _augment_required_documents(raw)
+            _cache_last_response(session_id, raw)
+            response = ChatResponse.model_validate(raw)
+        except Exception:
+            PROGRESS.finish(session_id, failed=True)
+            raise
+        PROGRESS.finish(session_id)
+        return response
 
 
 def delete_chat_session(session_id: str, *, user_id: int) -> None:
@@ -177,6 +233,7 @@ def delete_chat_session(session_id: str, *, user_id: int) -> None:
         if graph.checkpointer is not None:
             graph.checkpointer.delete_thread(session_id)
         chat_session_store.delete(session_id)
+        PROGRESS.discard(session_id)
 
 
 def delete_all_chat_sessions(*, user_id: int) -> None:

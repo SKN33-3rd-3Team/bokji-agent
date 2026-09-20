@@ -1431,6 +1431,27 @@ def ask(
             return _to_chat_response(result, session_id=session_id, store=store)
 
 
+def is_awaiting_input(session_id: str) -> bool:
+    """이 세션이 지금 되묻기(interrupt)로 멈춰 있는지.
+
+    ``answer_followup()``은 두 가지를 겸한다 - 멈춰 있던 되묻기를 **재개**하거나
+    (이어서 몇 노드만 더 돈다), 이미 끝난 상담에 **새 질문**을 던지거나(처음부터
+    다시 돈다, ``resume_graph`` 참고). 진행 막대를 이어 그릴지 0부터 다시
+    그릴지는 이 구분에 달려 있어서, 호출 전에 체크포인트를 한 번 들여다본다.
+
+    판단에만 쓰는 값이라 실패는 삼키고 ``False``(= 이어붙이지 않음)로 본다 -
+    진행률 표시가 보수적으로 나올 뿐 상담 자체에는 영향이 없다.
+    """
+
+    try:
+        graph = get_graph()
+        snapshot = graph.get_state({"configurable": {"thread_id": session_id}})
+        return any(task.interrupts for task in snapshot.tasks)
+    except (Exception, SystemExit):  # noqa: BLE001 - 진행률 표시용 부가 정보일 뿐이다
+        _log.debug("되묻기 상태 확인 실패 - 진행률을 이어붙이지 않습니다.", exc_info=True)
+        return False
+
+
 def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
     """되묻기에는 답을 전달하고, 완료된 상담에는 같은 세션으로 새 질문을 실행한다.
 

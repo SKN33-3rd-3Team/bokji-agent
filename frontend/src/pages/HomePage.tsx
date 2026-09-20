@@ -8,20 +8,22 @@ import { ErrorBanner } from "@/components/common/ErrorBanner";
 import { Toast } from "@/components/common/Toast";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
 import { SlotConflictForm } from "@/components/chat/SlotConflictForm";
+import { CalcFollowupForm } from "@/components/chat/CalcFollowupForm";
 import { PolicySummaryStats } from "@/components/chat/PolicySummaryStats";
 import { PolicyCard } from "@/components/chat/PolicyCard";
 import { PolicyDetailView } from "@/components/chat/PolicyDetailView";
 import { PolicyCompareTable } from "@/components/chat/PolicyCompareTable";
 import { LlmDebugPanel } from "@/components/chat/LlmDebugPanel";
-import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { ChatProgressBar } from "@/components/chat/ChatProgressBar";
 import { PolicyQuestionDialog } from "@/components/dialogs/PolicyQuestionDialog";
-import { useChatSession } from "@/features/chat/useChatSession";
+import { newProgressToken, useChatSession } from "@/features/chat/useChatSession";
 import { usePolicySelection } from "@/features/chat/usePolicySelection";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { getAutoRecommendations } from "@/api/chatApi";
 import { ApiError, toErrorMessage } from "@/api/client";
-import { FALLBACK_DEFAULT_TOP_K, GUIDANCE_OFFICIAL, HOME_CAPTION, HOME_LOADING_MESSAGE } from "@/constants/labels";
-import type { PolicyView } from "@/types/chat";
+import { FALLBACK_DEFAULT_TOP_K, GUIDANCE_OFFICIAL, HOME_CAPTION } from "@/constants/labels";
+import { followupKindOf } from "@/utils/chatQuestion";
+import type { CalculationAnswers, PolicyView } from "@/types/chat";
 
 /**
  * 홈 화면 — API-14(자동추천_API_정의서_v1.0.xlsx) POST
@@ -174,13 +176,8 @@ export function HomePage() {
       <div className="app-content">
         <p className="text-faint" style={{ fontSize: 12.5, margin: "0 0 16px" }}>{HOME_CAPTION}</p>
 
-        {autoRecoMutation.isPending && (
-          <div className="card" style={{ marginBottom: 20 }}>
-            <TypingIndicator />
-            <p className="text-muted" style={{ fontSize: 13, margin: "8px 0 0" }}>{HOME_LOADING_MESSAGE}</p>
-          </div>
-        )}
-        {chat.isSending && <TypingIndicator />}
+        {/* 자동 추천(API-14)도, 이어지는 상담(API-10/11)도 같은 진행 막대를 쓴다. */}
+        <ChatProgressBar token={chat.progressToken} active={isBusy} />
 
         {autoRecoErrorMessage && (
           <ErrorBanner>

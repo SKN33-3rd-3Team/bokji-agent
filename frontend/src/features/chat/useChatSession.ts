@@ -1,9 +1,26 @@
 import { useCallback, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { resetSession as resetSessionApi, sendMessage as sendMessageApi, submitFollowup } from "@/api/chatApi";
-import type { ChatMessageRequest, ChatResponse, ChatTurn } from "@/types/chat";
+import type { CalculationAnswers, ChatMessageRequest, ChatResponse, ChatTurn } from "@/types/chat";
 
 export type PolicyViewMode = "list" | "detail" | "compare";
+
+/** 요청 한 건을 가리키는 진행률 조회 토큰. crypto.randomUUID가 없는 환경(구형
+ *  브라우저, http 원격 접속)에서도 막대가 사라지지 않게 폴백을 둔다. */
+export function newProgressToken(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return uuid ?? `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** sendMutation 입력 — 서버로 보낼 내용과, 화면 이력에 남길 사용자 발화. */
+interface SendVariables {
+  /** API-10/11 본문(되묻기 턴에서는 message만 뽑아 쓴다) */
+  payload: ChatMessageRequest;
+  /** 구조화 계산 답변(API-11 calc_answers). 있으면 message 대신 이걸 보낸다. */
+  calcAnswers?: CalculationAnswers;
+  /** 말풍선에 남길 사용자 쪽 문장 */
+  userText: string;
+}
 
 /**
  * PROJECT_STRUCTURE.md 3.4 — ChatPage 로컬 상태 하나로 S-03~S-07/S-10을
@@ -15,6 +32,10 @@ export function useChatSession() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [policyView, setPolicyView] = useState<PolicyViewMode>("list");
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  // 진행률 폴링(useChatProgress)이 읽는 "지금 도는 요청"의 토큰. 요청마다 새로
+  // 만들어 헤더로 함께 보내고, 같은 값으로 진행 상황을 조회한다 — 첫 상담은
+  // session_id를 서버가 만들기 때문에 응답 전에는 조회할 이름이 없다.
+  const [progressToken, setProgressToken] = useState<string | null>(null);
   // 최초 턴(API-10)에 보낸 top_k/extra_interests/known_*를 기억해뒀다가
   // 되묻기(API-11) 요청에도 그대로 실어 보낸다. 백엔드가 지금 당장은 이
   // 값들을 안 쓰더라도(top_k는 체크포인터가 보존, 나머지는 아직 파라미터가
@@ -32,20 +53,33 @@ export function useChatSession() {
   const latestResponse = [...messages].reverse().find((m) => m.response)?.response ?? null;
 
   const sendMutation = useMutation({
-    mutationFn: async (payload: ChatMessageRequest): Promise<ChatResponse> => {
+    mutationFn: async ({ payload, calcAnswers }: SendVariables): Promise<ChatResponse> => {
+      const token = newProgressToken();
+      setProgressToken(token);
       // session_id 보유 여부로 API-10(최초)/API-11(진행 중)을 분기 호출한다
       // (S03-06 요구사항).
       if (sessionIdRef.current) {
-        return submitFollowup(sessionIdRef.current, { message: payload.message, ...initialContextRef.current });
+        // message와 calc_answers는 둘 중 하나만 보낸다(백엔드
+        // FollowupRequest.require_one_answer) — 계산 답변일 때는 message를 뺀다.
+        const body = calcAnswers
+          ? { calc_answers: calcAnswers, ...initialContextRef.current }
+          : { message: payload.message, ...initialContextRef.current };
+        return submitFollowup(sessionIdRef.current, body, token);
       }
       const { message: _message, ...context } = payload;
       initialContextRef.current = context;
-      return sendMessageApi(payload);
+      return sendMessageApi(payload, token);
     },
-    onSuccess: (response, variables) => {
+    // 보낸 말은 서버 응답을 기다리지 않고 바로 화면에 올린다. 상담 한 번이
+    // 수십 초~수 분 걸리는데 그동안 자기가 뭘 보냈는지 화면에 없으면
+    // "전송이 안 된 건가" 싶어 같은 말을 다시 보내게 된다
+    // (usePolicyQuestion이 이미 쓰는 것과 같은 낙관적 갱신).
+    onMutate: ({ userText }: SendVariables) => {
+      setMessages((prev) => [...prev, { role: "user", text: userText }]);
+    },
+    onSuccess: (response) => {
       setMessages((prev) => [
         ...prev,
-        { role: "user", text: variables.message },
         { role: "assistant", text: response.final_answer ?? response.question ?? "", response },
       ]);
       if (response.session_id) {
@@ -92,6 +126,7 @@ export function useChatSession() {
       setSessionId(null);
       setPolicyView("list");
       setSelectedPolicyId(null);
+      setProgressToken(null);
       initialContextRef.current = null;
     },
   });
@@ -114,7 +149,10 @@ export function useChatSession() {
     policyView,
     selectedPolicyId,
     latestResponse,
+    progressToken,
+    setProgressToken,
     send,
+    sendCalcAnswers,
     hydrate,
     isSending: sendMutation.isPending,
     sendError: sendMutation.error,

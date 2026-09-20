@@ -8,12 +8,13 @@ import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ExamplePrompts } from "@/components/chat/ExamplePrompts";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
 import { SlotConflictForm } from "@/components/chat/SlotConflictForm";
+import { CalcFollowupForm } from "@/components/chat/CalcFollowupForm";
 import { PolicySummaryStats } from "@/components/chat/PolicySummaryStats";
 import { PolicyCard } from "@/components/chat/PolicyCard";
 import { PolicyDetailView } from "@/components/chat/PolicyDetailView";
 import { PolicyCompareTable } from "@/components/chat/PolicyCompareTable";
 import { LlmDebugPanel } from "@/components/chat/LlmDebugPanel";
-import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { ChatProgressBar } from "@/components/chat/ChatProgressBar";
 import { PolicyQuestionDialog } from "@/components/dialogs/PolicyQuestionDialog";
 import { useChatSession } from "@/features/chat/useChatSession";
 import { usePolicySelection } from "@/features/chat/usePolicySelection";
@@ -141,8 +142,9 @@ export function ChatPage() {
           <ChatBubble key={i} role={turn.role} text={turn.text} />
         ))}
 
-        {/* S03-06: 응답 대기 중 로딩 인디케이터 */}
-        {chat.isSending && <TypingIndicator />}
+        {/* S03-06: 응답 대기 중 진행 막대 — 지금 어느 단계인지까지 보여준다
+            (예전에는 점 세 개만 떠 있어 멈춘 건지 도는 건지 알 수 없었다). */}
+        <ChatProgressBar token={chat.progressToken} active={chat.isSending} />
 
         {response && !showFollowupUi && !showPolicyUi && (
           <p className="text-faint" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>{GUIDANCE_OFFICIAL}</p>

@@ -217,6 +217,23 @@ class CalculationChoice(BaseModel):
     policy_title: str
 
 
+class ChatProgressResponse(BaseModel):
+    """``GET /api/v1/chat/progress/{token}`` - 진행 막대 한 칸의 상태.
+
+    ``src/rag_chatbot/progress.py``의 ``snapshot()`` 반환값을 그대로 받는다
+    (``status="unknown"``만 라우터가 직접 만든다 - 기록이 없을 때).
+    ``fraction``은 **어림값**이다: 실제 노드 수는 조건부 분기 때문에 끝나봐야
+    알 수 있어서, 끝나기 전에는 0.95를 넘지 않는다.
+    """
+
+    status: Literal["running", "done", "failed", "unknown"]
+    fraction: float = 0.0
+    message: str | None = None
+    completed_steps: int = 0
+    total_steps: int = 0
+    elapsed_seconds: float = 0.0
+
+
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 

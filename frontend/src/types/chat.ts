@@ -204,6 +204,28 @@ export interface SessionResetResponse {
   message: string;
 }
 
+/**
+ * GET /api/v1/chat/progress/{token} 응답 — 상담이 지금 어느 단계인지.
+ * fraction은 어림값이라 끝나기 전에는 0.95를 넘지 않는다(백엔드
+ * src/rag_chatbot/progress.py). status가 "unknown"이면 아직 서버에 기록이
+ * 없다는 뜻이지 오류가 아니다.
+ */
+export interface ChatProgress {
+  status: "running" | "done" | "failed" | "unknown";
+  fraction: number;
+  message: string | null;
+  completed_steps: number;
+  total_steps: number;
+  elapsed_seconds: number;
+}
+
+/** GET /api/v1/config/status 응답 — 서버 구동 워밍업(임베딩 모델 로드) 상태 */
+export interface ServerStatus {
+  status: "pending" | "running" | "ready" | "failed";
+  message: string;
+  seconds: number | null;
+}
+
 /** S-05 되묻기용 하드 게이트 슬롯 코드 — request_missing_slots.py 순서 기준 */
 export type HardGateSlot =
   | "region"

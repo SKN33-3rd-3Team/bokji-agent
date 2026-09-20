@@ -27,9 +27,11 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 
 from .deadline import run_node
+from .progress import PROGRESS
 
 
 class PhaseTimer:
@@ -177,6 +179,14 @@ NODE_LABELS = {
 # 위한 분모일 뿐, "몇 %가 끝났다"를 정확히 아는 값이 아니다(끝나봐야 안다).
 EXPECTED_NODE_COUNT = 14
 
+# 되묻기에 답해 **재개**하는 요청이 더 도는 노드 수(어림값).
+# 계산 되묻기(N10a)는 그래프를 처음부터 다시 돌지 않고 N9(자격 판정)로 바로
+# 돌아가 N9~N14만 다시 탄다(builder.py의 E18b와 request_calc_info.py 모듈
+# docstring "재입력 라우팅"). 슬롯 되묻기(N3)는 N1로 돌아가 더 많이 돌지만,
+# 진행률 분모는 어차피 어림값이라 둘을 나누지 않는다 - 중요한 건 "이어서
+# 올라간다"는 것이지 정확한 분모가 아니다.
+EXPECTED_RESUME_NODE_COUNT = 6
+
 
 def node_title(name: str) -> str:
     """``N9 eligibility_verdict - 자격 충족/미충족/미확인 판정`` 형태."""
@@ -189,6 +199,23 @@ def node_title(name: str) -> str:
 LLM_NODE_TIMEOUT_SECONDS = 90.0
 
 
+def _progress_key(args) -> str | None:
+    """이 노드 호출이 어느 요청의 것인지 알아낸다.
+
+    LangGraph가 노드에 넘기는 첫 인자가 ``GraphState``이고, 거기 ``query_id``
+    (== ``session_id``)가 항상 들어 있다(builder.run_graph의 initial_state).
+    contextvars 대신 state에서 꺼내는 이유는 progress.py 모듈 docstring 참고 -
+    노드가 어느 스레드에서 돌든 같은 키가 나와야 하기 때문이다.
+    """
+
+    state = args[0] if args else None
+    if isinstance(state, Mapping):
+        query_id = state.get("query_id")
+        if isinstance(query_id, str):
+            return query_id
+    return None
+
+
 def timed_node(name: str, func, *, llm: bool = False):
     """LangGraph 노드를 감싸 실행 시간과 실행 순서를 기록한다.
 
@@ -198,11 +225,16 @@ def timed_node(name: str, func, *, llm: bool = False):
     ``BOKJI_TRACE=1``이면 노드가 도는 즉시 한 줄씩 찍는다. 어디서 멈춰
     있는지 실시간으로 보려는 용도다(느린 노드를 기다리는 동안 화면이
     조용하면 멈춘 건지 도는 건지 알 수 없다).
+
+    같은 시작/종료 시점에 ``PROGRESS``(progress.py)에도 알린다 - 위 로그는
+    서버 콘솔에만 남아서 사용자는 진행 상황을 볼 수 없기 때문이다.
     """
 
     def _wrapped(*args, **kwargs):
         started = time.perf_counter()
+        key = _progress_key(args)
         TIMER.begin(name)
+        PROGRESS.node_started(key, name)
         if os.environ.get("BOKJI_TRACE") == "1":
             print(f"  -> {node_title(name)} ...", flush=True)
         try:
@@ -212,6 +244,7 @@ def timed_node(name: str, func, *, llm: bool = False):
             TIMER.record(f"node:{name}", elapsed)
             TIMER.trace(name, elapsed)
             TIMER.finish()
+            PROGRESS.node_finished(key, name)
             if os.environ.get("BOKJI_TRACE") == "1":
                 print(f"     {node_title(name)} 완료 ({elapsed:.2f}초)", flush=True)
 
@@ -222,6 +255,7 @@ __all__ = [
     "TIMER",
     "PhaseTimer",
     "EXPECTED_NODE_COUNT",
+    "EXPECTED_RESUME_NODE_COUNT",
     "timed_node",
     "node_title",
     "NODE_NUMBERS",
