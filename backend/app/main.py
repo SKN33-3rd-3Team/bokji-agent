@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 import threading
+import logging
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,6 +16,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 for _path in (_REPO_ROOT, _REPO_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
+
+_LOG_DIR = _REPO_ROOT / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        RotatingFileHandler(_LOG_DIR / "backend.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8"),
+    ],
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

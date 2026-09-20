@@ -16,6 +16,7 @@ venv/
 coverage.xml
 htmlcov/
 /reports/api-tests/
+/logs/
 
 # Build artifacts
 build/

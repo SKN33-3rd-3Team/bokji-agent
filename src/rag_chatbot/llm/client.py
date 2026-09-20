@@ -786,6 +786,14 @@ class HuggingFaceInferenceClient:
             raise
         except (HfHubHTTPError, Exception) as exc:
             check_deadline()
+            status_code = _extract_http_status(exc)
+            logging.getLogger(__name__).error(
+                "HuggingFace inference failed model=%r status_code=%s error=%s",
+                self.model,
+                status_code if status_code is not None else "unknown",
+                diagnose_hf_error(exc, self.model),
+                exc_info=True,
+            )
             # 상태코드별로 "무엇을 확인하면 되는지"까지 담아 던진다.
             # HfHubHTTPError를 따로 잡지 않는 이유: provider 라우팅 경로에서는
             # requests의 HTTPError 등 다른 예외가 그대로 올라오는 경우가 있어
