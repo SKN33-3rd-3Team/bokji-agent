@@ -110,12 +110,22 @@ export function ChatPage() {
 
   const isEmpty = chat.messages.length === 0;
   const response = chat.latestResponse;
-  // S05-01/02: 마지막 응답이 needs_input이면 폼을, answered면 정책 화면을 그린다.
-  const showFollowupUi = response?.status === "needs_input";
+  // S05-01/02/03: 마지막 응답이 needs_input이면 종류에 맞는 폼을, answered면
+  // 정책 화면을 그린다. 되묻기 종류를 구분하지 않으면 계산 되묻기(N10a)가
+  // 슬롯 폼으로 떨어져 필드 0개짜리 폼에 갇힌다(followupKindOf 주석 참고).
+  const followupKind = followupKindOf(response);
+  // 답을 보내는 중에는 폼을 내린다 - 방금 고른 값은 바로 위 사용자 말풍선에
+  // 이미 보이고, 그 아래 같은 질문 폼이 그대로 떠 있으면 "보낸 건가?" 싶다.
+  const showFollowupUi = followupKind !== "none" && !chat.isSending;
   const showPolicyUi = response?.status === "answered" && response.policies.length > 0;
 
-  // 마지막 assistant 메시지는 폼/정책 화면이 대신 보여주므로 버블 목록에서는 뺀다.
-  const bubbleMessages = showFollowupUi || showPolicyUi ? chat.messages.slice(0, -1) : chat.messages;
+  // 폼/정책 화면이 대신 보여주는 **그** assistant 턴만 버블 목록에서 뺀다.
+  // 예전에는 "마지막 한 개"를 잘랐는데, 보낸 말을 기다리지 않고 바로 화면에
+  // 올리면서부터는 마지막이 사용자 말풍선이라 방금 보낸 말이 잘려 나갔다.
+  const bubbleMessages =
+    showFollowupUi || showPolicyUi
+      ? chat.messages.filter((turn) => turn.response !== response)
+      : chat.messages;
 
   const selectedPolicies = response?.policies.filter((p) => compare.selectedIds.includes(p.policy_id)) ?? [];
   const activePolicy = response?.policies.find((p) => p.policy_id === chat.selectedPolicyId) ?? null;

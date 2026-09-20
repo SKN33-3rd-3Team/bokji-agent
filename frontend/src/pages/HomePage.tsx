@@ -78,8 +78,14 @@ export function HomePage() {
   const { data: searchOptions } = useSearchOptions();
   const topK = topKOverride ?? searchOptions?.default_top_k ?? FALLBACK_DEFAULT_TOP_K;
 
+  // API-14도 진행 막대를 그린다 — 프로필만으로 도는 자동 추천이라 사용자가
+  // 아무것도 입력하지 않았을 뿐, 그래프는 상담과 똑같이 N1~N14를 돈다.
   const autoRecoMutation = useMutation({
-    mutationFn: getAutoRecommendations,
+    mutationFn: () => {
+      const token = newProgressToken();
+      chat.setProgressToken(token);
+      return getAutoRecommendations(token);
+    },
     onSuccess: (response) => chat.hydrate(response),
   });
 
@@ -115,11 +121,15 @@ export function HomePage() {
   };
 
   const response = chat.latestResponse;
-  const showFollowupUi = response?.status === "needs_input";
+  const followupKind = followupKindOf(response);
+  // ChatPage와 같은 이유로 전송 중에는 폼을 내린다(진행 막대가 대신한다).
+  const isBusy = chat.isSending || autoRecoMutation.isPending;
+  const showFollowupUi = followupKind !== "none" && !isBusy;
   const showPolicyUi = response?.status === "answered" && response.policies.length > 0;
   // 정책이 0건이거나(정상 0건) 그 외 판정 불가 상태 — final_answer 카드와
-  // 공식 확인 안내 문구를 함께 보여준다.
-  const showEmptyState = !showFollowupUi && !showPolicyUi;
+  // 공식 확인 안내 문구를 함께 보여준다. 전송 중에는 직전 턴의 final_answer가
+  // 비어 있을 수 있어(되묻기 응답) 빈 카드가 뜨므로 같이 막는다.
+  const showEmptyState = !showFollowupUi && !showPolicyUi && !isBusy && Boolean(response?.final_answer);
 
   const handleCompareClick = () => {
     if (compare.count >= 2) chat.openCompare();
