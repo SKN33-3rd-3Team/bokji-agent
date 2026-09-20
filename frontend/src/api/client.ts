@@ -4,9 +4,7 @@ import type { ApiErrorBody } from "@/types/auth";
 /**
  * 공용 axios 인스턴스. PROJECT_STRUCTURE.md 3.1 트리의 api/client.ts 명세
  * 그대로: withCredentials:true(세션 쿠키 포함), baseURL은 VITE_API_BASE_URL.
- * 백엔드(backend/)는 이번 작업 범위가 아니라 아직 없다 — 호출 자체는
- * API_정의서.xlsx 계약대로 실제 엔드포인트를 부르도록 작성하고, 실행 시에는
- * 네트워크 에러/로딩 상태로만 나타난다.
+ * backend/의 FastAPI 엔드포인트를 호출한다.
  */
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000",

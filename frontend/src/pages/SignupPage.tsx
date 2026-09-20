@@ -43,7 +43,6 @@ export function SignupPage() {
   const [veteranStatus, setVeteranStatus] = useState<VeteranStatus | "">("");
   const [householdTypes, setHouseholdTypes] = useState<string[]>([]);
   const [incomeBracket, setIncomeBracket] = useState<IncomeBracket | "">("");
-  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState(false);
 
@@ -90,7 +89,6 @@ export function SignupPage() {
         veteran_status: (veteranStatus || undefined) as VeteranStatus | undefined,
         income_bracket: (incomeBracket || undefined) as IncomeBracket | undefined,
         household_types: householdTypes.length ? (householdTypes as HouseholdType[]) : undefined,
-        marketing_opt_in: marketingOptIn,
         terms_agreed: termsAgreed,
         privacy_agreed: privacyAgreed,
       });
@@ -293,10 +291,6 @@ export function SignupPage() {
           <div className="check-row">
             <input type="checkbox" checked={privacyAgreed} onChange={(e) => setPrivacyAgreed(e.target.checked)} />
             <label><span className="tag-req">[필수]</span> 개인정보 수집&middot;이용에 동의합니다.</label>
-          </div>
-          <div className="check-row">
-            <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} />
-            <label><span className="tag-opt">[선택]</span> 혜택&middot;안내 정보 수신에 동의합니다.</label>
           </div>
         </div>
 

@@ -2,9 +2,8 @@
 
 `docs/PROJECT_STRUCTURE.md`, `docs/API_정의서.xlsx`, `docs/요구사항_정의서.xlsx`,
 `docs/복지에이전트_디자인시안.html` 기준으로 구현한 React 프론트엔드입니다.
-`backend/`(FastAPI)는 이번 작업 범위가 아니며 아직 없습니다 — API 호출은
-`API_정의서.xlsx` 계약대로 실제 엔드포인트를 부르도록 작성되어 있어, 백엔드가
-없는 상태에서 실행하면 네트워크 에러/로딩 상태로만 나타납니다.
+`backend/`의 FastAPI 엔드포인트와 연동합니다. 백엔드 설치·실행 방법은
+[백엔드 안내](../backend/README.md)를 참고하세요.
 
 ## 실행
 

@@ -41,7 +41,6 @@ export interface UserSummary {
   income_bracket: string;
   household_types: string[];
   interests: string[];
-  marketing_opt_in: boolean;
 }
 
 /** API-04 응답(마이페이지 조회) — UserSummary와 필드가 같되 id 없이 옴 */
@@ -58,7 +57,6 @@ export interface UserProfile {
   income_bracket: string;
   household_types: string[];
   interests: string[];
-  marketing_opt_in: boolean;
 }
 
 /** API-01 Request Body */
@@ -75,7 +73,6 @@ export interface SignupRequest {
   veteran_status?: VeteranStatus;
   income_bracket?: IncomeBracket;
   household_types?: HouseholdType[];
-  marketing_opt_in?: boolean;
   terms_agreed: boolean;
   privacy_agreed: boolean;
 }
