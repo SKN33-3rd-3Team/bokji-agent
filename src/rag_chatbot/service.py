@@ -89,6 +89,9 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
             "application_method": "..." | None,    # 신청방법
             "application_period": "..." | None,    # 신청기한
             "legal_basis": "..." | None,           # 근거법령
+            "required_documents": "..." | None,           # 구비서류
+            "required_documents_official": "..." | None,  # 공무원 확인 구비서류
+            "required_documents_self": "..." | None,      # 본인확인 필요 구비서류
             "region_names": [...] | None,
             "region_scope": "national"|"regional"|"unknown" | None,
             "age_start": int | None,
@@ -142,7 +145,7 @@ N1 slot_parser·N7 evidence_gate는애초에 llm_client 인자 자체가 없다)
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, nullcontext
 from datetime import date
 import sys
@@ -176,6 +179,7 @@ from rag_design.vector_store import (
 
 from .graph import build_graph, resume_graph, run_graph
 from .graph.nodes.slot_parser import normalize_region_input
+from .graph.nodes.request_calc_info import calculation_input_fields
 from .graph.slot_schema import (
     UNKNOWN,
     DISABILITY_STATUS_KO,
@@ -188,14 +192,17 @@ from .graph.slot_schema import (
     VETERAN_STATUS_KO,
     HouseholdType,
     is_valid_slot_value,
+    korea_today,
     parse_birth_date,
 )
 from .graph.policy_conditions import load_policy_user_types, load_support_conditions
 from .graph.slot_schema import UNKNOWN
 from .llm import (
+    FallbackLLMClient,
     OllamaClient,
     HuggingFaceInferenceClient,
     RecordingLLMClient,
+    RunPodPodClient,
     RunPodServerlessClient,
 )
 from .timing import TIMER, node_title
@@ -281,20 +288,65 @@ def connect_store() -> ChromaVectorStore:
     )
 
 
-def build_llm_client() -> RecordingLLMClient | None:
-    """선택한 백엔드로 N1/N5/N9/N10/N13에 실제로 붙일 LLM 클라이언트를
-    만든다. HF/RunPod 인증정보가 없으면 ``None``을 반환하여 기존 규칙 기반/
-    템플릿 경로를 유지한다. Ollama를 선택하면 명시적인 모델 이름이 필요하다.
+def _build_hf_client(token: str) -> HuggingFaceInferenceClient:
+    """``HF_TOKEN``으로 ``HuggingFaceInferenceClient``를 만든다.
 
-    백엔드 선택(``LLM_BACKEND`` 환경변수):
-    - ``ollama``: 로컬 Ollama. ``LLM_MODEL_NAME`` 필수, HF 토큰 불필요.
-      ``OLLAMA_BASE_URL``은 loopback만 허용한다. ``LLM_DISABLE_THINKING=1``은
-      /api/show capabilities에 thinking이 있을 때만 think=False를 보낸다.
-    - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
-      ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
-    - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
-      모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
+    ``build_llm_client()``의 기본 ``hf`` 경로와, RunPod Pod 실패 시 폴백
+    경로(``RUNPOD_POD_ID`` + HF 토큰이 함께 있는 경우) 양쪽에서 같은 모델
+    선택/토큰 예산 로직을 재사용하려고 뽑아냈다.
     """
+
+    model = (
+        os.environ.get("LLM_MODEL_NAME")
+        or os.environ.get("LLM_HF_MODEL")
+        or _DEFAULT_HF_MODEL
+    )
+    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
+    extra_body = None
+    if os.environ.get("LLM_DISABLE_THINKING") == "1":
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    return HuggingFaceInferenceClient(
+        model=model, token=token, max_new_tokens=max_new_tokens, extra_body=extra_body
+    )
+
+
+def build_llm_client() -> RecordingLLMClient | None:
+    """Pod 우선, 미설정 시 명시한 백엔드(기본 HF)의 클라이언트를 만든다.
+    클라이언트가 없으면 기존 규칙/템플릿 경로를 유지한다. Ollama는 명시적으로
+    선택할 때만 사용하며, 다른 제공자의 실패 시 로컬로 자동 전환하지 않는다.
+
+    백엔드 선택 우선순위:
+    - ``RUNPOD_POD_ID``가 있으면(영구 GPU Pod, ``PROJECT_STRUCTURE.md`` 2.4절)
+      **``LLM_BACKEND`` 값과 무관하게 최우선**으로 RunPod Pod를 쓴다
+      (2026-09-16 팀 결정: RunPod 1순위, HuggingFace 2순위). 이때 ``HF_TOKEN``도
+      있으면 ``FallbackLLMClient``로 감싸, RunPod Pod 호출이 실패(연결 장애
+      등)할 때 같은 노드 실행의 남은 시간 안에서 HuggingFace로 전환한다. HF
+      토큰이 없으면 RunPod Pod 단독으로 동작한다(폴백 불가).
+    - ``RUNPOD_POD_ID``가 없으면 기존 ``LLM_BACKEND`` 환경변수로 분기한다:
+      - ``ollama``: 명시적인 ``LLM_MODEL_NAME`` 필수, HF 토큰 불필요.
+        ``OLLAMA_BASE_URL``은 loopback만 허용한다. ``LLM_DISABLE_THINKING=1``은
+        /api/show capabilities에 thinking이 있을 때만 think=False를 보낸다.
+      - ``runpod``: 파인튜닝 checkpoint를 서빙하는 RunPod Serverless 엔드포인트.
+        ``RUNPOD_ENDPOINT_ID`` / ``RUNPOD_API_KEY`` 필요.
+      - ``hf`` (기본): HuggingFace Inference Providers. ``HF_TOKEN`` 필요.
+        모델은 ``LLM_MODEL_NAME`` → 옛 이름 ``LLM_HF_MODEL`` → ``_DEFAULT_HF_MODEL``.
+    """
+
+    pod_id = os.environ.get("RUNPOD_POD_ID")
+    if pod_id:
+        primary = RunPodPodClient(
+            pod_id=pod_id,
+            timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS") or 120.0),
+        )
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+        if not hf_token:
+            return RecordingLLMClient(primary)
+        secondary = _build_hf_client(hf_token)
+        return RecordingLLMClient(
+            FallbackLLMClient(
+                primary, secondary, primary_name="runpod-pod", secondary_name="huggingface"
+            )
+        )
 
     backend = (os.environ.get("LLM_BACKEND") or "hf").strip().lower()
 
@@ -322,28 +374,6 @@ def build_llm_client() -> RecordingLLMClient | None:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
         return None
-    model = (
-        os.environ.get("LLM_MODEL_NAME")
-        or os.environ.get("LLM_HF_MODEL")
-        or _DEFAULT_HF_MODEL
-    )
-    # 토큰 예산과 "생각 끄기"를 환경변수로 조절할 수 있게 한다.
-    #
-    # 왜: 추론형 모델(Qwen3.5 계열)은 답을 쓰기 전에 내부 사고에 토큰을 크게
-    # 써서 호출 하나가 수십 초씩 걸린다(실측: N1 한 번에 50초). 기본
-    # max_new_tokens=8192는 그 사고 길이를 감당하려고 올려둔 값이라,
-    # 비추론형 모델을 쓰면 훨씬 낮춰도 되고 그만큼 빨라진다.
-    max_new_tokens = int(os.environ.get("LLM_MAX_NEW_TOKENS") or 8192)
-
-    # LLM_DISABLE_THINKING=1이면 provider에 "사고 과정을 끄라"고 요청한다.
-    # Qwen3 계열 chat template이 지원한다고 알려진 파라미터인데, 이
-    # HuggingFace Inference Providers 라우팅 경로에서 실제로 먹히는지는
-    # 검증하지 못했다(샌드박스에서 huggingface.co에 접속할 수 없음).
-    # 안 먹히면 조용히 무시되거나 에러가 나므로, 켠 뒤 체감 속도와
-    # llm_status의 평균 호출 시간을 비교해서 판단할 것.
-    extra_body = None
-    if os.environ.get("LLM_DISABLE_THINKING") == "1":
-        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
     # LLM_PROVIDER로 provider를 고정한다. 비우면 예전처럼 huggingface_hub의
     # auto 라우팅에 맡긴다.
@@ -366,14 +396,7 @@ def build_llm_client() -> RecordingLLMClient | None:
     # 조용히 폴백하기 때문에, 감싸지 않으면 "LLM이 한 번도 안 돌았는데 결과는
     # 멀쩡히 나오는" 상태를 아무도 모른다. 여기 모인 실패 사유를
     # ChatResponse["llm_status"]로 화면까지 올린다.
-    return RecordingLLMClient(
-        HuggingFaceInferenceClient(
-            model=model,
-            max_new_tokens=max_new_tokens,
-            extra_body=extra_body,
-            provider=provider,
-        )
-    )
+    return RecordingLLMClient(_build_hf_client(token))
 
 
 # 그래프/store/llm_client는 만드는 비용이 크다(vectorDB 연결, LLM 클라이언트
@@ -507,6 +530,10 @@ class ChatResponse(TypedDict, total=False):
     session_id: str
     question: str
     missing_slots: list[str]
+    interrupt_id: str | None
+    calc_missing_slots: list[str]
+    calc_missing_choices: list[dict]
+    calc_slot_inputs: list[dict]
     # 회원 프로필 값과 이번 대화에서 말한 값이 달라 되묻는 슬롯이 있을
     # 때만 채워진다(슬롯 이름 -> {"profile": "...", "chat": "..."}, 예:
     # {"region": {"profile": "경기도", "chat": "서울특별시"}}). 프론트엔드는
@@ -1010,7 +1037,7 @@ def _markdown_cell(value: object) -> str:
     )
 
 
-def _build_output_markdown(policies: list[PolicyView]) -> str:
+def _build_output_markdown(policies: list[PolicyView], *, automatic: bool = False) -> str:
     """최종 정책 목록을 렌더링 가능한 Markdown 표로 만든다."""
 
     counts = _build_summary(policies)
@@ -1040,7 +1067,7 @@ def _build_output_markdown(policies: list[PolicyView]) -> str:
                     policy.get("rank"),
                     policy.get("title"),
                     policy.get("eligibility_status"),
-                    policy.get("amount_label"),
+                    (policy.get("amount_label") or "") if automatic else policy.get("amount_label"),
                     policy.get("duplicate_status"),
                     source,
                 )
@@ -1051,7 +1078,7 @@ def _build_output_markdown(policies: list[PolicyView]) -> str:
 
 
 def _build_output_text(
-    policies: list[PolicyView], final_answer: str | None = None
+    policies: list[PolicyView], final_answer: str | None = None, *, automatic: bool = False
 ) -> str:
     """최종 답변과 정책 비교 결과를 일반 문자열로 만든다."""
 
@@ -1064,13 +1091,19 @@ def _build_output_text(
         for policy in policies:
             detail = policy.get("detail") or {}
             source_url = detail.get("source_url") or "출처 없음"
+            amount_text = f" | 지원금: {policy.get('amount_label', '지원금액 확인 필요')}"
+            if automatic and policy.get("amount_label") is None:
+                amount_text = ""
             lines.append(
                 f"[{policy.get('rank', '-')}] {policy.get('title') or policy.get('policy_id')}"
                 f" | 자격: {policy.get('eligibility_status', '미확인')}"
+                f"{amount_text}"
                 f" | 지원금: {policy.get('amount_label', '지원금액 확인 필요')}"
                 f" | 중복수급: {policy.get('duplicate_status', '미확인')}"
                 f" | 출처: {source_url}"
             )
+            if automatic and policy.get("verification_note"):
+                lines.append(policy["verification_note"])
         sections.append("\n".join(lines))
     elif not sections:
         sections.append("확인된 정책이 없습니다.")
@@ -1078,34 +1111,33 @@ def _build_output_text(
     return "\n\n".join(sections)
 
 
+def _auto_amount(view: PolicyView) -> None:
+    """금액 0/범위/단가/총액을 보존하고, 산정되지 않은 표시만 제거한다."""
+    numeric = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool)
+    has_range = lambda low, high: numeric(low) and numeric(high) and low <= high
+    if numeric(view.get("amount")) or has_range(view.get("amount_min"), view.get("amount_max")):
+        return
+    if numeric(view.get("amount_total")):
+        view["amount_label"] = f"총 {_won(view['amount_total'])}"
+        return
+    if has_range(view.get("total_amount_min"), view.get("total_amount_max")):
+        view["amount_label"] = f"총 {_won(view['total_amount_min'])}~{_won(view['total_amount_max'])}"
+        return
+    for field in ("amount", "amount_label", "amount_period", "amount_is_maximum", "amount_per_unit",
+                  "amount_total", "amount_min", "amount_max", "total_amount_min", "total_amount_max"):
+        view[field] = None
+
+
 def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatResponse:
+    automatic = bool(result.get("automatic_recommendation"))
     if "__interrupt__" in result:
+        if automatic:
+            raise RuntimeError("Automatic recommendation must not interrupt")
         interrupt_payload = result["__interrupt__"]
         # graph.invoke()는 리스트, graph.stream()은 튜플로 준다 - 둘 다 첫
         # 원소의 .value가 질문 문자열이다.
         question = interrupt_payload[0].value
-        # 되묻기 경로가 셋인데 부족한 항목을 담는 state 키가 서로 다르다.
-        # 전부 같은 needs_input 응답으로 나가므로 여기서 세 키를 다 본다.
-        #
-        #   N3  request_missing_slots : state["missing_slots"]        (프로필 슬롯)
-        #   N10a request_calc_info    : state["calc_missing_slots"]   (계산용 슬롯)
-        #   N10a request_calc_info    : state["calc_missing_choices"] (정책별 선택지)
-        #
-        # 마지막 경로는 슬롯 이름이 아니라 {policy_id, labels} dict 목록이라
-        # 별도 키에 담긴다. builder.py가 셋 중 하나만 차 있어도 N10a로 보내므로
-        # (``if state.get("calc_missing_slots") or state.get("calc_missing_choices")``)
-        # "선택지만 있고 슬롯은 빈" 상태가 실제로 도달 가능하다. 이걸 빼먹으면
-        # 되묻는 질문은 띄우면서 missing_slots=[]로 나가고, 화면에는 "부족한
-        # 정보: 없음"이 뜨며 validation_runner는 InvalidNeedsInput으로 잡는다
-        # (2026-09-15 실측: dev-child-variant-041 1건이 이것 때문에 실패해
-        # 100문항 전체의 headline 지표가 게시 불가가 됐다).
-        #
-        # 선택지는 benefit_calculator/request_calc_info가 ask_counts에 쓰는 것과
-        # 같은 ``choice:<policy_id>`` 규약으로 이름을 만든다. calc_missing_slots와
-        # calc_missing_choices는 N10a 한 경로에서 동시에 채워질 수 있으므로(예:
-        # 계산용 슬롯과 정책별 선택지가 같은 턴에 함께 부족한 경우) 서로
-        # 배타적으로 취급하지 않고 둘 다 합쳐야 한다.
-        missing_slots = result.get("missing_slots")
+        missing_slots = result.get("missing_slots", [])
         if not missing_slots:
             missing_slots = list(result.get("calc_missing_slots") or [])
             missing_slots += [
@@ -1113,13 +1145,17 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
                 for choice in (result.get("calc_missing_choices") or [])
                 if isinstance(choice, Mapping)
             ]
+        calculation = calculation_input_fields(result)
+        calculation["interrupt_id"] = getattr(interrupt_payload[0], "id", None)
         return {
+            **calculation,
             "status": "needs_input",
             "question": question,
             "session_id": session_id,
             "missing_slots": missing_slots,
             "slot_conflicts": result.get("slot_conflicts"),
             "output_json": {
+                **calculation,
                 "status": "needs_input",
                 "session_id": session_id,
                 "question": question,
@@ -1142,6 +1178,10 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         }
 
     policies_raw = (result.get("assembled_result") or {}).get("policies", {})
+    if automatic:
+        policies_raw = {pid: entry for pid, entry in policies_raw.items()
+                        if result.get("answer_status") != "abstained"
+                        and (entry.get("eligibility") or {}).get("verdict") == "충족"}
     query_id = result.get("query_id", session_id)
     ranked = _rank_policies(policies_raw)
     policy_views = [
@@ -1150,9 +1190,19 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         )
         for i, (policy_id, entry) in enumerate(ranked)
     ]
+    if automatic:
+        for view in policy_views:
+            _auto_amount(view)
+            view["duplicate_conflicts"] = [item for item in view["duplicate_conflicts"]
+                                           if item["policy_id"] in policies_raw]
     _attach_duplicate_conflicts(policy_views)
 
     citations = result.get("final_citations", [])
+    final_answer = result.get("final_answer")
+    if automatic:
+        citations = [item for item in citations if item.get("policy_id") in policies_raw]
+        final_answer = (_build_output_text(policy_views, automatic=True) if policy_views
+                        else "현재 정보로 추천할 정책이 없습니다")
     # 화면(첨부 이미지)에 보이는 항목을 그대로 담는다:
     #   summary  -> 상단 요약 카드 3개(확인한 제도 / 자격 충족 / 미충족·미확인)
     #   profile  -> 사이드바 "파악한 정보"
@@ -1162,7 +1212,7 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "status": "answered",
         "session_id": session_id,
         "answer_status": result.get("answer_status"),
-        "final_answer": result.get("final_answer"),
+        "final_answer": final_answer,
         "summary": _build_summary(policy_views),
         "profile": _build_profile(result.get("slots")),
         "evidence_count": len(citations),
@@ -1179,8 +1229,9 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "final_citations": citations,
         "policies": policy_views,
         "output_json": output_json,
-        "output_text": _build_output_text(policy_views, final_answer),
-        "output_markdown": _build_output_markdown(policy_views),
+        "output_text": final_answer if automatic else _build_output_text(policy_views, final_answer),
+        "output_markdown": (final_answer if automatic and not policy_views
+                            else _build_output_markdown(policy_views, automatic=automatic)),
         "llm_status": _llm_status(),
         "timing": _timing_report(),
     }
@@ -1202,6 +1253,8 @@ def ask(
     known_income_bracket: str | None = None,
     known_household_types: list[str] | None = None,
     known_veteran_status: str | None = None,
+    automatic_recommendation: bool = False,
+    _on_graph_ready: Callable[[Any], None] | None = None,
 ) -> ChatResponse:
     """새 대화를 시작한다(N1 진입점). Streamlit에서 사용자가 채팅창에 처음
     질문을 입력했을 때 호출한다.
@@ -1264,8 +1317,12 @@ def ask(
     with ExitStack() as request_timer:
         request_timer.enter_context(TIMER.measure("request_total"))
         graph = get_graph()
+        # HTTP 어댑터가 실패한 첫 요청의 실제 그래프만 정리할 수 있게 전달한다.
+        if _on_graph_ready is not None:
+            _on_graph_ready(graph)
         store = get_store()
         with _llm_request_scope():
+            reference_date = korea_today()
             interests = [str(item) for item in (extra_interests or []) if item]
             initial_slots: dict = {}
             if interests:
@@ -1287,7 +1344,7 @@ def ask(
             if known_gender and is_valid_slot_value("gender", known_gender):
                 initial_slots["gender"] = known_gender
                 profile_sourced.append("gender")
-            if known_birth_date and parse_birth_date(known_birth_date, date.today()):
+            if known_birth_date and parse_birth_date(known_birth_date, reference_date):
                 initial_slots["birth_date"] = known_birth_date
                 profile_sourced.append("birth_date")
             if known_disability_status and is_valid_slot_value(
@@ -1318,23 +1375,28 @@ def ask(
                 if _VETERAN_INTEREST_KEYWORD not in interests:
                     interests.append(_VETERAN_INTEREST_KEYWORD)
                 initial_slots["interests"] = interests
+            if automatic_recommendation and known_veteran_status and is_valid_slot_value("veteran_status", known_veteran_status):
+                initial_slots["veteran_status"] = known_veteran_status
             result = run_graph(
                 graph,
                 user_input=user_input,
                 session_id=session_id,
                 top_k=top_k,
                 slots=initial_slots or None,
+                as_of=reference_date,
+                **({"automatic_recommendation": True} if automatic_recommendation else {}),
             )
             # llm_status는 request scope 안에서, timing은 측정 종료 뒤 읽는다.
             request_timer.close()
             return _to_chat_response(result, session_id=session_id, store=store)
 
 
-def answer_followup(session_id: str, user_input: str) -> ChatResponse:
-    """직전 ``ask()``(또는 ``answer_followup()``)가 ``status="needs_input"``을
-    돌려준 세션을, 사용자의 답변으로 재개한다(N3 interrupt 재개). ``ask()``와
-    같은 ``session_id``로만 호출할 수 있다 - 체크포인터에 해당 세션의 이전
-    진행 상태가 없으면 LangGraph가 에러를 낸다."""
+def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
+    """되묻기에는 답을 전달하고, 완료된 상담에는 같은 세션으로 새 질문을 실행한다.
+
+    새 질문은 알려진 프로필을 이어받지만 이전 문답을 메시지 이력으로 전달하지
+    않는다. 존재하지 않거나 실패한 체크포인트는 재개할 수 없다.
+    """
 
     TIMER.reset()
     with ExitStack() as request_timer:
