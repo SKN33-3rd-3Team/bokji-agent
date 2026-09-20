@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { createElement } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { login as loginApi, logout as logoutApi, signup as signupApi } from "@/api/authApi";
 import { getMyProfile } from "@/api/userApi";
 import { ApiError } from "@/api/client";
@@ -34,6 +35,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let cancelled = false;
@@ -52,19 +54,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // 계정이 바뀌면 앞 사람의 캐시(프로필·known_*·홈 자동 추천)는 한 줄도
+  // 남기지 않는다. 홈 자동 추천은 오래 살도록 캐시하므로(gcTime: Infinity)
+  // 안 비우면 같은 탭에서 다음 사람이 그대로 보게 된다.
   const login = useCallback(async (payload: LoginRequest) => {
+    queryClient.clear();
     const summary = await loginApi(payload);
     const profile = await getMyProfile();
     setUser(profile);
     return profile ?? (summary as unknown as UserProfile);
-  }, []);
+  }, [queryClient]);
 
   const signup = useCallback(async (payload: SignupRequest) => {
+    queryClient.clear();
     await signupApi(payload);
     const profile = await getMyProfile();
     setUser(profile);
     return profile;
-  }, []);
+  }, [queryClient]);
 
   const logout = useCallback(async () => {
     try {
@@ -73,8 +80,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // API-03 비고: 이미 만료된 세션 재호출은 실패해도 프론트 상태는 정리한다.
       if (!(err instanceof ApiError)) throw err;
     }
+    queryClient.clear();
     setUser(null);
-  }, []);
+  }, [queryClient]);
 
   const value = useMemo<AuthContextValue>(
     () => ({ user, isLoading, login, signup, logout, setUser }),

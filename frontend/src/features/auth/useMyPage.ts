@@ -5,6 +5,7 @@ import {
   getMyProfile,
   updateMyProfile,
 } from "@/api/userApi";
+import { AUTO_RECOMMENDATION_QUERY_KEY } from "@/features/chat/useAutoRecommendations";
 import { useAuth } from "./useAuth";
 import type { ChangePasswordRequest, DeleteAccountRequest, UpdateProfileRequest } from "@/types/auth";
 
@@ -32,6 +33,10 @@ export function useUpdateProfile() {
       // 마이페이지에서 정보를 바꿔도 이미 홈/채팅을 한 번이라도 방문한
       // 세션에서는 다음에 또 방문했을 때 예전 known_*로 검색된다.
       queryClient.invalidateQueries({ queryKey: ["chat-defaults"] });
+      // 홈 자동 추천(API-14)은 저장된 프로필로만 판단하므로, 프로필이
+      // 바뀌면 캐시된 추천은 낡은 것이다. invalidate가 아니라 제거하는
+      // 이유는 useAutoRecommendations 주석 참고(refetchOnMount: false).
+      queryClient.removeQueries({ queryKey: AUTO_RECOMMENDATION_QUERY_KEY });
     },
   });
 }
