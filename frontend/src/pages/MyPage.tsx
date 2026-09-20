@@ -92,6 +92,7 @@ export function MyPage() {
   const [deleteAgree, setDeleteAgree] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteSuccess, setDeleteSuccess] = useState(false);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
 
   const householdTypeOptions = options?.household_type_options ?? FALLBACK_HOUSEHOLD_TYPE_OPTIONS;
   const householdOptions = householdTypeOptions.map((o) => o.label);
@@ -257,7 +258,6 @@ export function MyPage() {
               ["장애 등록 여부", labelOrUnset(profile.disability_status, DISABILITY_LABELS_KO)],
               ["보훈대상자 여부", labelOrUnset(profile.veteran_status, VETERAN_LABELS_KO)],
               ["소득 수준", labelOrUnset(profile.income_bracket, INCOME_BRACKET_LABELS_KO)],
-              ["마케팅 수신", profile.marketing_opt_in ? "동의" : "미동의"],
             ].map(([label, value]) => (
               <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "13px 2px", borderBottom: "1px solid var(--border)" }}>
                 <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>{label}</span>
@@ -432,7 +432,7 @@ export function MyPage() {
         </div>
 
         <div style={{ display: "flex", gap: 10 }}>
-          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={async () => { await logout(); navigate("/login"); }}>
+          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={() => setLogoutModalOpen(true)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
             로그아웃
           </button>
@@ -442,6 +442,16 @@ export function MyPage() {
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={logoutModalOpen}
+        title="로그아웃할까요?"
+        description="현재 로그인된 계정에서 로그아웃합니다."
+        confirmLabel="로그아웃"
+        cancelLabel="취소"
+        onConfirm={async () => { await logout(); setLogoutModalOpen(false); navigate("/login"); }}
+        onCancel={() => setLogoutModalOpen(false)}
+      />
 
       <ConfirmModal
         open={deleteModalOpen}
