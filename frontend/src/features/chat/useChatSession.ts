@@ -94,7 +94,19 @@ export function useChatSession() {
   });
 
   const send = useCallback(
-    (payload: ChatMessageRequest) => sendMutation.mutateAsync(payload),
+    (payload: ChatMessageRequest) =>
+      sendMutation.mutateAsync({ payload, userText: payload.message }),
+    [sendMutation],
+  );
+
+  /**
+   * S05-03: 지원금 계산 되묻기(N10a)에 구조화 답변으로 응답한다.
+   * 자유 문장으로 보내면 백엔드가 다시 파싱해야 해서 값이 어긋날 수 있는데,
+   * calc_answers는 interrupt_id와 선택지까지 서버가 직접 검증한다.
+   */
+  const sendCalcAnswers = useCallback(
+    (answers: CalculationAnswers, userText: string) =>
+      sendMutation.mutateAsync({ payload: { message: userText }, calcAnswers: answers, userText }),
     [sendMutation],
   );
 

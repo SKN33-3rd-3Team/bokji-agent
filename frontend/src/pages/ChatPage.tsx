@@ -22,8 +22,19 @@ import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { useAuth } from "@/features/auth/useAuth";
 import { getChatDefaults } from "@/api/userApi";
 import { ApiError, toErrorMessage } from "@/api/client";
-import { CHAT_INPUT_PLACEHOLDER, GUIDANCE_OFFICIAL, INTRO_GREETING_BODY, INTRO_GREETING_HINT, INTRO_GREETING_TITLE } from "@/constants/labels";
-import type { PolicyView } from "@/types/chat";
+import {
+  CHAT_INPUT_PLACEHOLDER,
+  GUIDANCE_OFFICIAL,
+  INTRO_GREETING_BODY,
+  INTRO_GREETING_HINT,
+  INTRO_GREETING_TITLE,
+  INTRO_REQUIRED_HINT,
+  INTRO_REQUIRED_SLOTS,
+  INTRO_REQUIRED_TITLE,
+  SLOT_LABELS_KO,
+} from "@/constants/labels";
+import { followupKindOf } from "@/utils/chatQuestion";
+import type { CalculationAnswers, PolicyView } from "@/types/chat";
 import { FALLBACK_DEFAULT_TOP_K } from "@/constants/labels";
 
 export function ChatPage() {
@@ -71,6 +82,10 @@ export function ChatPage() {
       known_household_types: chatDefaults?.known_household_types,
       known_veteran_status: chatDefaults?.known_veteran_status ?? undefined,
     });
+  };
+
+  const submitCalcAnswers = (answers: CalculationAnswers) => {
+    void chat.sendCalcAnswers(answers, "지원금 계산에 필요한 정보를 입력했어요.");
   };
 
   const handleNewChat = async () => {
@@ -127,8 +142,21 @@ export function ChatPage() {
         {isEmpty && (
           <div className="card" style={{ marginBottom: 20 }}>
             <p style={{ fontSize: 15, fontWeight: 700, margin: "0 0 8px" }}>{INTRO_GREETING_TITLE}</p>
-            <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: "0 0 10px" }}>{INTRO_GREETING_BODY}</p>
-            <p className="text-faint" style={{ fontSize: 12, margin: 0 }}>{INTRO_GREETING_HINT}</p>
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: "0 0 12px" }}>{INTRO_GREETING_BODY}</p>
+
+            {/* 하드 게이트 슬롯(N2)은 다 차기 전에는 정책 검색으로 넘어가지
+                않는다 — 무엇을 알려줘야 하는지 처음부터 밝혀 되묻기 왕복을 줄인다. */}
+            <div className="intro-required">
+              <p className="intro-required-title">{INTRO_REQUIRED_TITLE}</p>
+              <ul className="intro-required-list">
+                {INTRO_REQUIRED_SLOTS.map((slot) => (
+                  <li key={slot}>{SLOT_LABELS_KO[slot]}</li>
+                ))}
+              </ul>
+              <p className="intro-required-hint text-muted">{INTRO_REQUIRED_HINT}</p>
+            </div>
+
+            <p className="text-faint" style={{ fontSize: 12, margin: "12px 0 0" }}>{INTRO_GREETING_HINT}</p>
           </div>
         )}
 
@@ -152,7 +180,14 @@ export function ChatPage() {
 
         <div className="view-fade" key={`${chat.messages.length}-${chat.policyView}`}>
         {showFollowupUi && response && (
-          response.slot_conflicts ? (
+          followupKind === "calc" ? (
+            <CalcFollowupForm
+              response={response}
+              onSubmit={submitCalcAnswers}
+              onSkip={submitMessage}
+              isSubmitting={chat.isSending}
+            />
+          ) : followupKind === "conflict" ? (
             <SlotConflictForm response={response} onSubmit={submitMessage} isSubmitting={chat.isSending} />
           ) : (
             <SlotFollowupForm

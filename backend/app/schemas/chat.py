@@ -105,13 +105,27 @@ class ChatRequest(BaseModel):
     known_veteran_status: _KnownVeteranStatus = None
 
 
+_CalcSlotName = Literal["marital_status", "pregnancy_status", "children_count", "household_size"]
+
+
 class CalculationAnswers(BaseModel):
+    """API-11 계산 되묻기 답변.
+
+    ``unknown_slots``/``unknown_choices``는 "이 항목은 모름/해당 없음"이다.
+    그래프 내부 센티넬(``slot_schema.UNKNOWN``) 문자열을 ``slots``/``choices``
+    값으로 받지 않고 별도 목록으로 받는 이유는, 공개 API에서는 열거형 계약에
+    있는 값만 받는다는 기존 원칙 때문이다(``_validate_public_choice``의
+    "그래프 내부 unknown은 공개 코드가 아니다"와 같은 이유). 센티넬 변환은
+    ``request_calc_info.merge_structured_calc_answer``가 한다.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     interrupt_id: _NonBlankStr
-    slots: dict[Literal["marital_status", "pregnancy_status", "children_count", "household_size"],
-                StrictStr | StrictInt] = Field(default_factory=dict)
+    slots: dict[_CalcSlotName, StrictStr | StrictInt] = Field(default_factory=dict)
     choices: dict[str, StrictStr] = Field(default_factory=dict)
+    unknown_slots: list[_CalcSlotName] = Field(default_factory=list)
+    unknown_choices: list[StrictStr] = Field(default_factory=list)
 
 
 class FollowupRequest(BaseModel):

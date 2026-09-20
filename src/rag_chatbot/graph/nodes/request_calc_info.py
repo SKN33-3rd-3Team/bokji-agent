@@ -129,11 +129,32 @@ def calculation_input_fields(state: GraphState) -> dict:
 
 
 def merge_structured_calc_answer(state: GraphState, answer: dict) -> dict:
-    """검증 후 복사본에만 병합한다. 일부만 유효한 답변도 전체를 거절한다."""
-    if set(answer) - {"interrupt_id", "slots", "choices"}:
+    """검증 후 복사본에만 병합한다. 일부만 유효한 답변도 전체를 거절한다.
+
+    항목별 "모름"(2026-09-20 추가): ``unknown_slots``/``unknown_choices``에
+    항목 이름을 담으면 그 항목만 UNKNOWN 센티넬로 확정된다. 자유 문장 경로는
+    원래 이걸 표현할 수 있었지만("혼인 상태는 기혼이고 나머지는 모르겠어요"
+    -> ``apply_calc_skip``이 답한 슬롯은 두고 남은 것만 UNKNOWN으로 확정),
+    구조화 경로에는 자리가 없어 폼에서는 "전부 답하거나 전부 건너뛰거나"
+    둘뿐이었다 - 아는 값까지 같이 버려야 했다.
+
+    센티넬 문자열 자체를 ``slots``/``choices`` 값으로 받지는 **않는다**.
+    ``UNKNOWN``은 그래프 내부 값이지 공개 코드가 아니고(같은 이유로
+    ``app/core/options.py``의 공개 선택지에도 없다), 값 자리에 섞어 받으면
+    "열거형 계약에 있는 값만 받는다"는 아래 검사가 헐거워진다. 대신 "모름"을
+    별도 목록으로 받아, 센티넬 변환은 이 함수 안에서만 한다. 결과 state
+    모양은 ``apply_calc_skip``이 만드는 것과 같다.
+    """
+    if set(answer) - {"interrupt_id", "slots", "choices", "unknown_slots", "unknown_choices"}:
         raise CalculationInputError("알 수 없는 계산 답변 필드입니다.")
     slots, choices = answer.get("slots", {}), answer.get("choices", {})
-    if not isinstance(slots, dict) or not isinstance(choices, dict) or not (slots or choices):
+    unknown_slots = answer.get("unknown_slots", []) or []
+    unknown_choices = answer.get("unknown_choices", []) or []
+    if not isinstance(slots, dict) or not isinstance(choices, dict):
+        raise CalculationInputError("계산에 필요한 답변을 입력해주세요.")
+    if not isinstance(unknown_slots, list) or not isinstance(unknown_choices, list):
+        raise CalculationInputError("계산에 필요한 답변을 입력해주세요.")
+    if not (slots or choices or unknown_slots or unknown_choices):
         raise CalculationInputError("계산에 필요한 답변을 입력해주세요.")
     missing = state.get("calc_missing_slots") or []
     for field, value in slots.items():
@@ -150,9 +171,29 @@ def merge_structured_calc_answer(state: GraphState, answer: dict) -> dict:
     for policy_id, label in choices.items():
         if not isinstance(label, str) or policy_id not in options or label not in options[policy_id]:
             raise CalculationInputError("현재 정책의 선택지에 없는 답변입니다.")
+    # 같은 항목을 값으로도 주고 "모름"으로도 표시하면 어느 쪽이 사용자의 뜻인지
+    # 알 수 없다 - 임의로 하나를 고르지 않고 전체를 거절한다.
+    for field in unknown_slots:
+        if field not in missing:
+            raise CalculationInputError("현재 질문에 없는 슬롯입니다.")
+        if field in slots:
+            raise CalculationInputError("같은 항목에 값과 '모름'을 함께 보낼 수 없습니다.")
+    for policy_id in unknown_choices:
+        if policy_id not in options:
+            raise CalculationInputError("현재 정책의 선택지에 없는 답변입니다.")
+        if policy_id in choices:
+            raise CalculationInputError("같은 항목에 값과 '모름'을 함께 보낼 수 없습니다.")
     return {
-        "slots": {**(state.get("slots") or {}), **slots},
-        "calc_choice_answers": {**(state.get("calc_choice_answers") or {}), **choices},
+        "slots": {
+            **(state.get("slots") or {}),
+            **slots,
+            **{field: UNKNOWN for field in unknown_slots},
+        },
+        "calc_choice_answers": {
+            **(state.get("calc_choice_answers") or {}),
+            **choices,
+            **{policy_id: UNKNOWN for policy_id in unknown_choices},
+        },
     }
 
 

@@ -465,6 +465,55 @@ function chatResponseNeedsRegion(sessionId) {
   };
 }
 
+/** N10a(request_calc_info) 계산 되묻기 — 슬롯 위젯 + 정책별 선택형 */
+function chatResponseNeedsCalcInfo(sessionId) {
+  return {
+    status: "needs_input",
+    session_id: sessionId,
+    question:
+      "정확한 지원금액을 계산하려면 아래 정보가 필요해요.\n1. 혼인 상태 (미혼/기혼/이혼/사별)\n2. 가구원 수\n3. [첫만남이용권] 어떤 방식에 해당하시나요? (자연분만 / 제왕절개 중 선택)\n모르시거나 말씀하기 어려우면 '모름'이라고 답하셔도 됩니다. 이 경우 정확한 금액 대신 안내만 드려요.",
+    missing_slots: [],
+    interrupt_id: "mock-interrupt-1",
+    calc_missing_slots: ["marital_status", "household_size"],
+    calc_missing_choices: [
+      { policy_id: "policy-2", labels: ["자연분만", "제왕절개"], policy_title: "첫만남이용권" },
+    ],
+    calc_slot_inputs: [
+      {
+        slot: "marital_status",
+        label: "혼인 상태 (미혼/기혼/이혼/사별)",
+        input_type: "select",
+        options: [
+          { value: "single", label: "미혼" },
+          { value: "married", label: "기혼" },
+          { value: "divorced", label: "이혼" },
+          { value: "bereaved", label: "사별" },
+        ],
+        minimum: null,
+        maximum: null,
+      },
+      {
+        slot: "household_size",
+        label: "가구원 수",
+        input_type: "number",
+        options: [],
+        minimum: 1,
+        maximum: 10,
+      },
+    ],
+    slot_conflicts: null,
+    answer_status: null,
+    final_answer: null,
+    final_citations: [],
+    policies: [],
+    output_json: {},
+    output_text: "",
+    output_markdown: "",
+    llm_status: mockLlmStatus(),
+    timing: emptyTiming(),
+  };
+}
+
 function chatResponseConflict(sessionId) {
   return {
     status: "needs_input",

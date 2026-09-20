@@ -1,6 +1,7 @@
 import { apiClient } from "./client";
 import type {
   ChatMessageRequest,
+  ChatProgress,
   ChatResponse,
   FollowupRequest,
   PolicyQuestionRequest,

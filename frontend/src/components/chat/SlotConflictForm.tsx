@@ -3,6 +3,7 @@ import { ChatBubble } from "./ChatBubble";
 import { LlmDebugPanel } from "./LlmDebugPanel";
 import { PillMultiSelect } from "@/components/common/PillMultiSelect";
 import { BirthDateSelect } from "@/components/common/BirthDateSelect";
+import { UnknownToggle } from "@/components/common/UnknownToggle";
 import { stripNumberedSlotList } from "@/utils/chatQuestion";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import {
@@ -12,6 +13,7 @@ import {
   GENDER_LABELS_KO,
   INCOME_BRACKET_LABELS_KO,
   SLOT_LABELS_KO,
+  UNKNOWN_FIELD_NOTE,
 } from "@/constants/labels";
 import type { ChatResponse, HardGateSlot } from "@/types/chat";
 
@@ -21,6 +23,10 @@ import type { ChatResponse, HardGateSlot } from "@/types/chat";
 const EXTRA_SLOT_LABELS_KO: Record<string, string> = {
   household_types: "가구 유형",
 };
+
+// SlotFollowupForm과 같은 문구를 쓴다 - 백엔드(llm_gateway._DONT_KNOW_MARKERS)는
+// 어느 폼에서 왔는지 모르고 문장만 본다.
+const SKIP_VALUE = "모름";
 
 const CODE_WIDGET_SLOTS = ["region", "gender", "disability_status", "birth_date", "income_bracket", "employment_status", "household_types"];
 
@@ -62,13 +68,24 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
     return init;
   });
 
-  const setValue = (slot: string, value: string) => setValues((prev) => ({ ...prev, [slot]: value }));
+  // 회원 정보 값도 채팅 값도 아니고 "지금은 모르겠다"는 답. 값을 비운 채
+  // 넘기면 N2가 다시 물어보므로(그러다 상한에 닿으면 조용히 미확인 처리),
+  // 사용자가 그 뜻을 명시적으로 고를 수 있어야 한다 — SlotFollowupForm의
+  // "모름"과 같은 토글·같은 전송 문구("...: 모름")를 쓴다.
+  const [skipped, setSkipped] = useState<Record<string, boolean>>({});
+
+  const setValue = (slot: string, value: string) => {
+    setValues((prev) => ({ ...prev, [slot]: value }));
+    setSkipped((prev) => (prev[slot] ? { ...prev, [slot]: false } : prev));
+  };
+  const toggleSkip = (slot: string) => setSkipped((prev) => ({ ...prev, [slot]: !prev[slot] }));
 
   const submit = () => {
     const parts = slots.map((slot) => {
       const raw = values[slot] ?? "";
       let label = raw;
-      if (slot === "gender") label = GENDER_LABELS_KO[raw] ?? raw;
+      if (skipped[slot]) label = SKIP_VALUE;
+      else if (slot === "gender") label = GENDER_LABELS_KO[raw] ?? raw;
       else if (slot === "disability_status") label = DISABILITY_LABELS_KO[raw] ?? raw;
       else if (slot === "income_bracket") label = INCOME_BRACKET_LABELS_KO[raw] ?? raw;
       return `${slotLabel(slot)}: ${label}`;
@@ -76,7 +93,7 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
     onSubmit(parts.join(", "));
   };
 
-  const allFilled = slots.every((slot) => values[slot]);
+  const allFilled = slots.every((slot) => skipped[slot] || values[slot]);
   const incomeBracketLabelMap =
     options?.income_bracket_options?.reduce<Record<string, string>>((acc, o) => ({ ...acc, [o.code]: o.label }), {}) ??
     INCOME_BRACKET_LABELS_KO;
@@ -89,11 +106,20 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
       <div className="card" style={{ padding: "18px 20px", marginTop: 10 }}>
         {slots.map((slot) => {
           const value = values[slot] ?? "";
+          const isSkipped = Boolean(skipped[slot]);
           return (
             <div className="field" key={slot}>
-              <label>{slotLabel(slot)}</label>
+              <div className="field-head">
+                <label>{slotLabel(slot)}</label>
+                <UnknownToggle
+                  active={isSkipped}
+                  onToggle={() => toggleSkip(slot)}
+                  fieldLabel={slotLabel(slot)}
+                />
+              </div>
+              {isSkipped && <p className="field-unknown-note">{UNKNOWN_FIELD_NOTE}</p>}
 
-              {slot === "region" && (
+              {!isSkipped && slot === "region" && (
                 <div className="select-shell">
                   <select value={value} onChange={(e) => setValue(slot, e.target.value)}>
                     {(options?.sido_options ?? FALLBACK_SIDO_OPTIONS).map((sido) => (
@@ -106,7 +132,7 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
                 </div>
               )}
 
-              {slot === "gender" && (
+              {!isSkipped && slot === "gender" && (
                 <div className="radio-group">
                   {Object.entries(GENDER_LABELS_KO).map(([code, koLabel]) => (
                     <label key={code} className={`radio-opt${value === code ? " sel" : ""}`}>
@@ -118,7 +144,7 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
                 </div>
               )}
 
-              {slot === "disability_status" && (
+              {!isSkipped && slot === "disability_status" && (
                 <div className="radio-group">
                   {Object.entries(DISABILITY_LABELS_KO).map(([code, koLabel]) => (
                     <label key={code} className={`radio-opt${value === code ? " sel" : ""}`}>
@@ -130,11 +156,11 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
                 </div>
               )}
 
-              {slot === "birth_date" && (
+              {!isSkipped && slot === "birth_date" && (
                 <BirthDateSelect value={value} onChange={(v) => setValue(slot, v)} />
               )}
 
-              {slot === "income_bracket" && (
+              {!isSkipped && slot === "income_bracket" && (
                 <div className="select-shell">
                   <select value={value} onChange={(e) => setValue(slot, e.target.value)}>
                     {Object.entries(incomeBracketLabelMap).map(([code, koLabel]) => (
@@ -147,13 +173,13 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
                 </div>
               )}
 
-              {slot === "employment_status" && (
+              {!isSkipped && slot === "employment_status" && (
                 <div className="input-shell">
                   <input type="text" value={value} onChange={(e) => setValue(slot, e.target.value)} />
                 </div>
               )}
 
-              {slot === "household_types" && (
+              {!isSkipped && slot === "household_types" && (
                 <PillMultiSelect
                   options={householdTypeLabels}
                   selected={value ? value.split(/,\s*/).filter(Boolean) : []}
@@ -161,7 +187,7 @@ export function SlotConflictForm({ response, onSubmit, isSubmitting }: SlotConfl
                 />
               )}
 
-              {!CODE_WIDGET_SLOTS.includes(slot) && (
+              {!isSkipped && !CODE_WIDGET_SLOTS.includes(slot) && (
                 <div className="input-shell">
                   <input type="text" value={value} onChange={(e) => setValue(slot, e.target.value)} />
                 </div>

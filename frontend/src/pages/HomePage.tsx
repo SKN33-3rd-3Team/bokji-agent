@@ -153,6 +153,8 @@ export function HomePage() {
   // 자동 추천 완료 뒤 같은 세션에 새 메시지를 보내면 API-14 자동 모드를
   // 끝내고 일반 상담 새 턴으로 넘어간다(API-14 시트 "후속 질문 D4/D5").
   const submitFollowup = (message: string) => void chat.send({ message });
+  const submitCalcAnswers = (answers: CalculationAnswers) =>
+    void chat.sendCalcAnswers(answers, "지원금 계산에 필요한 정보를 입력했어요.");
 
   const autoRecoErrorMessage = autoRecoMutation.error ? toErrorMessage(autoRecoMutation.error) : null;
   const sendErrorMessage = chat.sendError ? toErrorMessage(chat.sendError) : null;
@@ -208,7 +210,14 @@ export function HomePage() {
 
         <div className="view-fade" key={`${chat.messages.length}-${chat.policyView}`}>
           {showFollowupUi && response && (
-            response.slot_conflicts ? (
+            followupKind === "calc" ? (
+              <CalcFollowupForm
+                response={response}
+                onSubmit={submitCalcAnswers}
+                onSkip={submitFollowup}
+                isSubmitting={chat.isSending}
+              />
+            ) : followupKind === "conflict" ? (
               <SlotConflictForm response={response} onSubmit={submitFollowup} isSubmitting={chat.isSending} />
             ) : (
               <SlotFollowupForm response={response} onSubmit={submitFollowup} isSubmitting={chat.isSending} />
