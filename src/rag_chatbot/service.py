@@ -305,8 +305,28 @@ def _build_hf_client(token: str) -> HuggingFaceInferenceClient:
     extra_body = None
     if os.environ.get("LLM_DISABLE_THINKING") == "1":
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    # LLM_PROVIDER로 provider를 고정한다. 비우면 예전처럼 huggingface_hub의
+    # auto 라우팅에 맡긴다.
+    #
+    # 왜 고정이 필요한가(2026-09-14 실측): HF는 같은 모델을 여러 provider로
+    # 동적 라우팅하는데 위 extra_body(chat_template_kwargs) 지원 여부가
+    # provider마다 다르다. Qwen3.5-9B는 Together/OVHcloud/DeepInfra를 오갔고,
+    # 뒤의 둘로 라우팅되는 동안 **모든 LLM 호출이 HTTP 400**을 받았다. 노드는
+    # 규칙 기반으로 조용히 폴백하므로 100문항 평가가 정상 완료되고 지표까지
+    # 찍혔지만 전부 폴백 성능이었다. 코드를 한 줄도 안 고쳤는데 어제 되던 게
+    # 오늘 깨지는 종류의 문제라, 재현 가능한 실험을 하려면 고정해야 한다.
+    #
+    # 같은 실측의 provider별 결과(사고 끄기 + 동일 프롬프트/예산):
+    #   featherless-ai  3.7s 성공   <- 가장 빠름
+    #   together        7.8s 성공
+    #   auto(고정 안 함) 28~33s 후 finish_reason='length'로 잘림
+    provider = (os.environ.get("LLM_PROVIDER") or "").strip() or None
     return HuggingFaceInferenceClient(
-        model=model, token=token, max_new_tokens=max_new_tokens, extra_body=extra_body
+        model=model,
+        token=token,
+        provider=provider,
+        max_new_tokens=max_new_tokens,
+        extra_body=extra_body,
     )
 
 
@@ -374,23 +394,6 @@ def build_llm_client() -> RecordingLLMClient | None:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     if not token:
         return None
-
-    # LLM_PROVIDER로 provider를 고정한다. 비우면 예전처럼 huggingface_hub의
-    # auto 라우팅에 맡긴다.
-    #
-    # 왜 고정이 필요한가(2026-09-14 실측): HF는 같은 모델을 여러 provider로
-    # 동적 라우팅하는데 위 extra_body(chat_template_kwargs) 지원 여부가
-    # provider마다 다르다. Qwen3.5-9B는 Together/OVHcloud/DeepInfra를 오갔고,
-    # 뒤의 둘로 라우팅되는 동안 **모든 LLM 호출이 HTTP 400**을 받았다. 노드는
-    # 규칙 기반으로 조용히 폴백하므로 100문항 평가가 정상 완료되고 지표까지
-    # 찍혔지만 전부 폴백 성능이었다. 코드를 한 줄도 안 고쳤는데 어제 되던 게
-    # 오늘 깨지는 종류의 문제라, 재현 가능한 실험을 하려면 고정해야 한다.
-    #
-    # 같은 실측의 provider별 결과(사고 끄기 + 동일 프롬프트/예산):
-    #   featherless-ai  3.7s 성공   <- 가장 빠름
-    #   together        7.8s 성공
-    #   auto(고정 안 함) 28~33s 후 finish_reason='length'로 잘림
-    provider = (os.environ.get("LLM_PROVIDER") or "").strip() or None
 
     # RecordingLLMClient로 감싼다. 노드들은 LLM 호출이 실패해도 규칙 기반으로
     # 조용히 폴백하기 때문에, 감싸지 않으면 "LLM이 한 번도 안 돌았는데 결과는
@@ -1098,7 +1101,6 @@ def _build_output_text(
                 f"[{policy.get('rank', '-')}] {policy.get('title') or policy.get('policy_id')}"
                 f" | 자격: {policy.get('eligibility_status', '미확인')}"
                 f"{amount_text}"
-                f" | 지원금: {policy.get('amount_label', '지원금액 확인 필요')}"
                 f" | 중복수급: {policy.get('duplicate_status', '미확인')}"
                 f" | 출처: {source_url}"
             )
@@ -1219,7 +1221,6 @@ def _to_chat_response(result: dict, *, session_id: str, store: Any) -> ChatRespo
         "final_citations": citations,
         "policies": policy_views,
     }
-    final_answer = result.get("final_answer")
 
     return {
         "status": "answered",
