@@ -422,7 +422,15 @@ class RecordingLLMClient:
             "model": self.model,
             "calls": call_count,
             "successes": success_count,
-            "failures": len(failures),
+            # 실패 "건수"는 call_count - success_count로 실제 실패한 호출
+            # 수를 그대로 센다. messages(진단 메시지 목록)는 같은 원인이
+            # 노드마다 반복될 때 읽기 편하도록 따로 중복 제거하지만, 그
+            # 중복 제거된 개수를 실패율 계산에 쓰면 안 된다 - 예를 들어
+            # provider 라우팅 문제로 10번 중 9번이 같은 메시지로 실패해도
+            # messages는 1개뿐이라, len(messages)를 실패 건수로 쓰면 90%가
+            # 아니라 10%로 잘못 보고된다(실제로 평가 스크립트의 "LLM 호출
+            # 실패율" 지표가 이렇게 계산하고 있었다).
+            "failures": call_count - success_count,
             "messages": failures,
             # 호출 하나가 얼마나 걸리는지. 추론형 모델은 내부 사고에 토큰을
             # 크게 써서 호출당 수십 초가 나오기도 한다 - 체감 지연의 주범

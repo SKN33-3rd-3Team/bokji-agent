@@ -165,13 +165,10 @@ def answer_light_followup(
         "않는 별개의 주제(예: 다른 정책, 이 정보에 없는 절차·중복수급 여부)일 "
         "때만 answerable을 false로 하라 - '자세히는 안 나와 있어서 애매하다'는 "
         "이유로 false로 두지 마라. '사용자 정보 -'로 시작하는 줄은 질문자 본인의 "
-        "상황이니 자격·지역 관련 질문에 활용해도 되고, 그 줄도 evidence_quotes에 "
-        "그대로 복사해 담을 수 있다. answer는 '~합니다.', "
+        "상황이니 자격·지역 관련 질문에 활용해도 된다. answer는 '~합니다.', "
         "'~입니다.'처럼 정중한 격식체 종결어미와 마침표로 끝맺어라. "
-        "evidence_quotes에는 답의 근거가 된 문장을 **정보에 적힌 글자 그대로** "
-        "복사해 담아라 - 한 글자도 바꾸지 말고, 줄 앞의 '지원내용: ' 같은 라벨까지 "
-        "포함해 그대로 옮겨라(의역·요약·문장 합치기 금지, 짧아도 된다). 원문에 "
-        "없는 문장을 근거로 적으면 답변 전체가 버려진다.\n\n"
+        "evidence_quotes에는 답의 근거가 된 문장을 정보 원문에서 그대로 복사해 "
+        "담아라(의역·요약 금지, 짧아도 된다).\n\n"
         "예시 1 (관련 내용이 있으면 답한다):\n"
         "[정책 정보]\n지원내용: 월 최대 20만원을 최대 12개월 지원한다.\n"
         "[질문]\n한 달에 얼마씩 받아요?\n"
@@ -211,22 +208,45 @@ _GUIDANCE_TEMPLATE = (
 # 동작하면서 "이 정보로는 답할 수 없다"고 판단했을 수도, 검증에서 걸렸을
 # 수도 있다. 이 값을 응답에 함께 실어 보내지 않으면 "계속 응답 불가"만
 # 반복될 때 어디를 봐야 하는지 알 수 없다(2026-09-20 추가).
-REASON_OK = "ok"
-REASON_LLM_MISSING = "llm_missing"            # LLM 클라이언트 자체가 없음(토큰 미설정)
+# ``respond_to_policy_question``이 guidance로 떨어질 수 있는 경로. 평가·로그가
+# 이 값으로 "진짜 거절"과 "실패 폴백"을 갈라 볼 수 있게 이름을 고정한다.
+#
+#   not_answerable  : 모델이 근거 없음으로 판단 (의도한 정상 동작)
+#   quote_not_found : 근거 발췌가 컨텍스트에 없음 (지어냄)
+#   inconsistent    : 답변이 자기가 든 근거와 어긋남
+#   llm_failed      : 호출 실패 또는 응답이 JSON 계약에 안 맞음
+#   no_llm          : LLM 클라이언트 없음
+#   no_context      : 정책 컨텍스트가 비어 있음
+GUIDANCE_REASONS: tuple[str, ...] = (
+    "not_answerable",
+    "quote_not_found",
+    "inconsistent",
+    "llm_failed",
+    "no_llm",
+    "no_context",
+)
+# 이 중 "모델이 제대로 판단해서" 거절한 것으로 볼 수 있는 경로. 나머지는
+# 거절이 아니라 사고이므로 거절 정확도에 같이 세면 안 된다.
+DELIBERATE_GUIDANCE_REASONS: frozenset[str] = frozenset({"not_answerable"})
+
+# 아래 이름은 backend/프론트가 참조하고, 값은 위 ``GUIDANCE_REASONS``와
+# 같아야 한다 - 평가 스크립트(scripts/eval_light_followup.py)가 그 값으로
+# "진짜 거절"과 "실패 폴백"을 가른다.
+REASON_LLM_MISSING = "no_llm"                 # LLM 클라이언트 자체가 없음(토큰 미설정)
 REASON_NO_CONTEXT = "no_context"              # 정책 상세 섹션이 비어 컨텍스트를 못 만듦
 REASON_LLM_FAILED = "llm_failed"              # 호출/파싱/형식 실패(재시도까지 소진)
 REASON_NOT_ANSWERABLE = "not_answerable"      # LLM이 "이 정보로는 못 답한다"고 판단
-REASON_EVIDENCE_NOT_FOUND = "evidence_not_found"  # 제시한 발췌가 원문에 없음
+REASON_QUOTE_NOT_FOUND = "quote_not_found"    # 제시한 발췌가 원문에 없음(지어냄)
 REASON_INCONSISTENT = "inconsistent"          # 답변이 근거와 어긋남(또는 검증 호출 실패)
 
-# 화면(개발자·QA)이 그대로 보여줄 수 있는 한 줄 설명.
+# 화면(개발자·QA)이 그대로 보여줄 수 있는 한 줄 설명. 답변이 나간 경우
+# (``reason=None``)는 보여줄 것이 없으므로 여기 없다.
 REASON_MESSAGES: dict[str, str] = {
-    REASON_OK: "근거 검증까지 통과했습니다.",
     REASON_LLM_MISSING: "LLM이 연결되지 않아 답변을 생성하지 못했습니다(토큰/백엔드 설정 확인).",
     REASON_NO_CONTEXT: "이 정책의 상세 섹션이 비어 있어 답변 근거를 만들 수 없었습니다.",
     REASON_LLM_FAILED: "LLM 호출이 실패했거나 형식에 맞지 않는 응답이 와서 답변하지 못했습니다.",
     REASON_NOT_ANSWERABLE: "LLM이 이 정책 정보만으로는 답할 수 없다고 판단했습니다.",
-    REASON_EVIDENCE_NOT_FOUND: "LLM이 제시한 근거 발췌가 정책 원문에 없어 답변을 버렸습니다.",
+    REASON_QUOTE_NOT_FOUND: "LLM이 제시한 근거 발췌가 정책 원문에 없어 답변을 버렸습니다.",
     REASON_INCONSISTENT: "답변이 근거와 일치하는지 확인하지 못해 답변을 버렸습니다.",
 }
 
@@ -237,6 +257,7 @@ REASON_MESSAGES: dict[str, str] = {
 # 참고) - "사용자 정보 - 관심 분야: 청년"처럼 다른 슬롯(나이·소득 등)과
 # 같은 형식으로 넣으면 LLM이 "이 사용자는 청년이다"를 확정된 사실로
 # 오해해 답변에 반영할 수 있다(2026-09-15, PR #59 리뷰 피드백 반영).
+
 _PROFILE_FACT_EXCLUDE_KEYS = frozenset({"interests"})
 
 
@@ -276,14 +297,17 @@ def respond_to_policy_question(
     화면에 그대로 쓸 결과를 돌려준다.
 
     반환: ``{"kind": "answer" | "guidance", "text": str,
-    "evidence_quotes": list[str], "reason": str}``
-    - ``"answer"``: 검증까지 통과한 경량 답변 (``reason="ok"``)
+             "evidence_quotes": list[str], "reason": str | None}``
+    - ``"answer"``: 검증까지 통과한 경량 답변 (``reason``은 ``None``)
     - ``"guidance"``: 답할 수 없거나(``answerable=false``), LLM이 없거나 실패,
       또는 근거 검증 실패 - 지어내지 않고 안내 문구로 대체
 
-    ``reason``은 **안내로 물러난 이유**다(위 ``REASON_*``). 화면 문구는 어느
-    경우든 같아서, 이 값이 없으면 "계속 응답 불가"가 LLM 미연결 때문인지
-    호출 실패인지 검증 탈락인지 구분할 방법이 없다.
+    ``reason``은 guidance로 떨어진 **경로**를 남긴다(``GUIDANCE_REASONS``).
+    화면에는 어느 쪽이든 같은 안내 문구가 나가지만, 품질로는 정반대이기
+    때문이다: ``not_answerable``은 "근거가 없다는 걸 제대로 알아봤다"이고
+    ``quote_not_found``는 "답하려다 없는 문장을 지어내서 걸렸다"이다. 이걸
+    구분하지 않으면 평가에서 후자가 전자로 집계돼 거절 정확도가 부풀려진다
+    (2026-09-16 light_followup 평가셋 리뷰).
 
     ``policy``는 ChatResponse의 ``policies`` 항목(PolicyView) 하나다.
     ``user_profile``은 세션의 "파악한 정보"(지역·나이·소득 등) - 자격 관련
@@ -292,7 +316,7 @@ def respond_to_policy_question(
 
     title = str(policy.get("title") or policy.get("policy_id") or "이 정책")
 
-    def guidance(reason: str) -> dict:
+    def _guidance(reason: str) -> dict:
         return {
             "kind": "guidance",
             "text": _GUIDANCE_TEMPLATE.format(title=title),
@@ -301,7 +325,7 @@ def respond_to_policy_question(
         }
 
     if llm_client is None:
-        return guidance(REASON_LLM_MISSING)
+        return _guidance(REASON_LLM_MISSING)
 
     reasons = [
         f"자격 판정 근거: {reason}"
@@ -312,7 +336,7 @@ def respond_to_policy_question(
         policy, extra_facts=[*_profile_facts(user_profile), *reasons]
     )
     if not context:
-        return guidance(REASON_NO_CONTEXT)
+        return _guidance(REASON_NO_CONTEXT)
 
     # 근거 검증(verify_light_answer)은 발췌가 원문에 **글자 그대로** 있는지만
     # 본다. 모델이 뜻은 맞게 쓰면서 표현을 조금 다듬으면 그것만으로 답변이
@@ -324,24 +348,24 @@ def respond_to_policy_question(
     for attempt in range(_UNVERIFIED_RETRIES + 1):
         light = answer_light_followup(context, question, llm_client=llm_client)
         if light is None:
-            return guidance(REASON_LLM_FAILED)
+            return _guidance(REASON_LLM_FAILED)
         if not light["answerable"]:
-            return guidance(REASON_NOT_ANSWERABLE)
+            return _guidance(REASON_NOT_ANSWERABLE)
         if verify_light_answer(light["evidence_quotes"], context):
             break
         if attempt == _UNVERIFIED_RETRIES:
-            return guidance(REASON_EVIDENCE_NOT_FOUND)
+            return _guidance(REASON_QUOTE_NOT_FOUND)
         time.sleep(_RETRY_BACKOFF_SECONDS)
 
     if not verify_answer_consistency(
         light["answer"], light["evidence_quotes"], llm_client=llm_client
     ):
-        return guidance(REASON_INCONSISTENT)
+        return _guidance(REASON_INCONSISTENT)
     return {
         "kind": "answer",
         "text": light["answer"],
         "evidence_quotes": light["evidence_quotes"],
-        "reason": REASON_OK,
+        "reason": None,
     }
 
 

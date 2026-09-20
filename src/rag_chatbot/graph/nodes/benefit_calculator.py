@@ -104,9 +104,17 @@ _AMOUNT_METADATA_KEYS = ("amount", "benefit_amount")
 # 노드(N1/N5/N9/N13)의 속도는 그대로 유지하면서 이 두 호출만 별도로
 # 더 넉넉한 토큰 예산을 쓰도록 전용 환경변수를 둔다 - 전역 값을
 # 올리면 사용자가 명시적으로 원치 않는 전체 응답 지연이 재발한다.
-_BENEFIT_CALC_MAX_NEW_TOKENS = int(
-    os.environ.get("LLM_MAX_NEW_TOKENS_BENEFIT_CALC") or 8192
-)
+#
+# 여기서 바로(모듈 import 시점에) 읽지 않는다 - service.py는 이 모듈을
+# 담은 .graph 패키지를 load_dotenv()보다 먼저 import하므로, 여기서 즉시
+# 읽으면 process 시작 전 OS 환경변수에만 반응하고 .env 파일 값은 절대
+# 반영되지 않는다(policy_search.py의 _CONFIDENT_DISTANCE_THRESHOLD와 같은
+# 종류의 버그 - 2026-09-19 PR #66 리뷰에서 같은 클래스의 버그로 확인).
+_BENEFIT_CALC_MAX_NEW_TOKENS = 8192
+
+
+def _benefit_calc_max_new_tokens() -> int:
+    return int(os.environ.get("LLM_MAX_NEW_TOKENS_BENEFIT_CALC") or _BENEFIT_CALC_MAX_NEW_TOKENS)
 
 
 def calculate_benefit_amount(
@@ -810,7 +818,7 @@ def _extract_tiered_rule_via_llm(
                 "너는 복지 정책 원문에서 조건부 금액 규칙만 추출하는 도구다. "
                 "절대 계산하거나 추측하지 않고, 원문에 없는 값은 만들지 않는다."
             ),
-            max_tokens=_BENEFIT_CALC_MAX_NEW_TOKENS,
+            max_tokens=_benefit_calc_max_new_tokens(),
         )
     except LLMCallError:
         # 2026-09-11: 원래는 f"LLM 조건부 규칙 추출 호출 실패: {exc}"로
@@ -1275,7 +1283,7 @@ def _extract_amount_via_llm(
         response = llm_client.complete(
             prompt,
             system="너는 복지 정책 원문에서 금액만 추출하는 도구다. 절대 계산하거나 추측하지 않는다.",
-            max_tokens=_BENEFIT_CALC_MAX_NEW_TOKENS,
+            max_tokens=_benefit_calc_max_new_tokens(),
         )
     except LLMCallError:
         # 2026-09-11: 예외 메시지를 그대로 노출하지 않는다 - 사용자 요청.

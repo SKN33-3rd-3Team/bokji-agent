@@ -227,13 +227,17 @@ export interface PolicyQuestionResponse {
   kind: "answer" | "guidance";
   text: string;
   evidence_quotes: string[];
+  /**
+   * guidance로 떨어진 경로. 답변이 나간 경우(kind="answer")는 null이다.
+   * 값은 light_followup.GUIDANCE_REASONS와 같아야 한다 - 평가 스크립트가
+   * 같은 값으로 "진짜 거절(not_answerable)"과 "실패 폴백"을 가른다.
+   */
   reason:
-    | "ok"
-    | "llm_missing"
+    | "no_llm"
     | "no_context"
     | "llm_failed"
     | "not_answerable"
-    | "evidence_not_found"
+    | "quote_not_found"
     | "inconsistent"
     | null;
   reason_message: string | null;

@@ -74,6 +74,25 @@ _STRUCTURED_SYSTEM_PROMPT = (
 )
 
 _NUMBER_PATTERN = re.compile(r"\d[\d,]*")
+# 법령명 환각 탐지용(2026-09-17, 150문항 실측: "관련된 법령은 조세특례제한법
+# 입니다"처럼 원문에 없는 법령명을 지어내는 사례를 확인). "법률/시행령/
+# 시행규칙/조례"는 일반 단어에 잘 안 섞여 안전하다. "법"은 "~하는 법"류
+# 일반 단어("방법", "계산법", "산정법" 등)와 겹치므로 정규식만으로는 못
+# 거르고, 흔히 쓰이는 비법령 "OO법" 단어를 아래 목록으로 따로 제외한다.
+_LAW_NAME_PATTERN = re.compile(
+    r"[가-힣][가-힣ㆍ·\s]*?(?:법률|시행령|시행규칙|조례|법)(?!률|령|규칙)"
+    r"(?:\s*제\s*\d+\s*조(?:\s*의\s*\d+)?)?"
+)
+# "OO법"이지만 법령명이 아닌 흔한 일반 단어("방법"으로 계산하는 방식 등을
+# 가리키는 말). 완전한 목록일 수 없으므로 실측으로 새 오탐이 나오면 추가한다.
+_NON_LAW_METHOD_WORDS = frozenset(
+    {
+        "방법", "계산법", "산정법", "해결법", "치료법", "사용법", "이용법",
+        "신청법", "처리법", "대처법", "요리법", "작성법", "활용법", "운영법",
+        "적용법", "판단법", "분류법", "선택법", "표현법", "서술법", "관리법",
+        "접근법",
+    }
+)
 
 
 def _resolve_source_url(
@@ -97,29 +116,98 @@ def _chunks_by_id(state: GraphState) -> dict[str, RetrievedChunk]:
     return chunks_by_id
 
 
-def _collect_citations(
-    policy_id: str, state: GraphState, chunks_by_id: dict[str, RetrievedChunk]
-) -> list[CitationEntry]:
-    citations: list[CitationEntry] = []
-    seen: set[str] = set()
+_CITATION_LABELS = {
+    "eligibility": "지원자격 근거",
+    "amount": "지원금액 근거",
+    "duplicate": "중복수급 근거",
+}
+
+
+def _claims_by_type(
+    policy_id: str, state: GraphState
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for claim in state.get("claim_plan", []) or []:
         if claim.get("policy_id") != policy_id:
             continue
+        grouped.setdefault(claim.get("claim_type"), []).append(claim)
+    return grouped
+
+
+def _collect_citations(
+    policy_id: str,
+    entry: dict[str, Any],
+    state: GraphState,
+    chunks_by_id: dict[str, RetrievedChunk],
+) -> list[CitationEntry]:
+    """이 정책 섹션에 실제로 나타난 사실(자격/금액/중복수급)마다, 그 사실을
+    직접 뒷받침하는 chunk만 citation으로 잇는다.
+
+    예전에는 이 정책에 걸린 claim_plan claim 전부(자격+금액+중복수급 뒤섞어)의
+    evidence_chunk_ids를 한 통에 모았다. ``RuleBasedClaimExtractor``(LLM 없을
+    때 기본 경로)는 청크 하나당 eligibility/amount/duplicate claim을 전부
+    만들고 reasons를 "그 청크 원문 전체"로 채우므로, "지원대상" 섹션 청크가
+    실제로는 금액 정보가 하나도 없어도 amount claim의 근거로 인용됐다 -
+    화면에 보이는 "- 지원금액: ..." 줄과 무관한 chunk가 citation에 섞여
+    들어간 것이다.
+
+    금액은 이미 ``benefit_calculator.py``가 계산에 실제로 쓴 청크를
+    ``rule_chunk_id``로 정확히 남겨두므로(2026-08-31부터 존재, N13이 그동안
+    안 쓰고 있었다) 그 하나만 citation으로 쓴다. 자격·중복수급은 아직
+    사실 단위 chunk 매핑이 없어서(N9/N11이 판정 문장만 만들고 어느 chunk에서
+    왔는지는 안 남김), claim_type으로만 좁힌다 - 적어도 다른 사실(금액 등)의
+    근거가 섞여 들어오지는 않는다.
+    """
+
+    def _cite(chunk_id: str | None, claim_type: str) -> CitationEntry | None:
+        if not chunk_id:
+            return None
+        source_url = _resolve_source_url(chunk_id, chunks_by_id)
+        if source_url is None:
+            return None
+        return {
+            "policy_id": policy_id,
+            "chunk_id": chunk_id,
+            "source_url": source_url,
+            "label": _CITATION_LABELS.get(claim_type, "근거 문서"),
+        }
+
+    claims_by_type = _claims_by_type(policy_id, state)
+    citations: list[CitationEntry] = []
+    # (chunk_id, claim_type) 단위로 중복을 없앤다. chunk_id만으로 걸러내면
+    # 같은 chunk가 자격과 금액을 동시에 뒷받침하는 흔한 경우(예: "지원대상:
+    # 중위소득 50% 이하, 월 10만원 지급")에 먼저 추가된 claim_type의 citation이
+    # 나중 claim_type의 citation을 가려버린다 - 화면에는 "지원금액: ..." 줄이
+    # 나오는데 그 근거 citation은 하나도 안 달리는 결과가 된다.
+    seen: set[tuple[str, str]] = set()
+
+    def _add(chunk_id: str | None, claim_type: str) -> None:
+        if not chunk_id or (chunk_id, claim_type) in seen:
+            return
+        citation = _cite(chunk_id, claim_type)
+        if citation is None:
+            return
+        seen.add((chunk_id, claim_type))
+        citations.append(citation)
+
+    # 지원자격 줄은 항상 렌더링되므로 항상 시도한다.
+    for claim in claims_by_type.get("eligibility", []):
         for chunk_id in claim.get("evidence_chunk_ids", []) or []:
-            if chunk_id in seen:
-                continue
-            source_url = _resolve_source_url(chunk_id, chunks_by_id)
-            if source_url is None:
-                continue
-            seen.add(chunk_id)
-            citations.append(
-                {
-                    "policy_id": policy_id,
-                    "chunk_id": chunk_id,
-                    "source_url": source_url,
-                    "label": "근거 문서",
-                }
-            )
+            _add(chunk_id, "eligibility")
+
+    # 지원금액 줄이 실제로 금액을 보여줄 때만(= amount가 있고 값이 있을 때만)
+    # 그 계산에 쓰인 chunk 하나만 인용한다. rule_chunk_id가 없으면(옛 테스트
+    # fixture 등) 잘못된 chunk를 추측해서 붙이지 않고 그냥 인용을 건너뛴다.
+    amount = entry.get("benefit_amount")
+    if amount and amount.get("amount") is not None:
+        _add(amount.get("rule_chunk_id"), "amount")
+
+    # 중복수급 줄은 duplicate 판정이 있을 때만 렌더링된다.
+    if entry.get("duplicate"):
+        for claim in claims_by_type.get("duplicate", []):
+            for chunk_id in claim.get("evidence_chunk_ids", []) or []:
+                _add(chunk_id, "duplicate")
+
     return citations
 
 
@@ -186,6 +274,34 @@ def _numbers_in(text: str) -> set[str]:
     return {match.replace(",", "") for match in _NUMBER_PATTERN.findall(text)}
 
 
+_ARTICLE_SUFFIX_PATTERN = re.compile(r"제\d+조(?:의\d+)?$")
+
+
+def _law_names_in(text: str) -> set[str]:
+    """텍스트에 등장하는 법령명(조문 표기 포함)을 뽑는다.
+
+    공백을 지워 비교한다 - "제24조"와 "제 24 조"처럼 원문과 summary의 띄어쓰기가
+    달라도 같은 것으로 본다(숫자·법령명 자체가 다른 실제 환각만 잡고 싶지,
+    같은 이름을 다르게 띄어 썼다는 이유로 정상 summary를 버리지 않기 위함).
+
+    "OO법" 형태지만 법령명이 아닌 흔한 일반 단어(_NON_LAW_METHOD_WORDS)는
+    조문 표기를 뗀 나머지 부분으로 걸러서 제외한다.
+    """
+
+    # 명칭 앞의 안내 문구만 분리한다. 명칭 내부 공백을 먼저 삭제하면
+    # 문장까지 합쳐지고, 끝 단어만 추출하면 서로 다른 법령이 같아진다.
+    text = re.sub(r"(?:관련(?:된)?\s*법령|지원\s*근거)(?:은|는|:)?\s*", ":", text)
+    names = set()
+    for match in _LAW_NAME_PATTERN.findall(text):
+        normalized = re.sub(r"\s+", "", match)
+        base = _ARTICLE_SUFFIX_PATTERN.sub("", normalized)
+        last_word = re.sub(r"\s*제\s*\d+\s*조(?:\s*의\s*\d+)?$", "", match).split()[-1]
+        if base in _NON_LAW_METHOD_WORDS or last_word in _NON_LAW_METHOD_WORDS:
+            continue
+        names.add(normalized)
+    return names
+
+
 def _build_structured_prompt(sections_by_id: dict[str, str]) -> str:
     policy_blocks = "\n\n".join(
         f"policy_id: {policy_id}\n{text}" for policy_id, text in sections_by_id.items()
@@ -207,15 +323,21 @@ def _validate_structured_summaries(
 ) -> dict[str, str]:
     """LLM이 만든 정책별 summary 중 신뢰할 수 있는 것만 걸러서 돌려준다.
 
-    두 가지를 검증한다:
+    세 가지를 검증한다:
     1. policy_id가 실제 후보(sections_by_id)에 있는가 - 없으면 지어낸
        정책이므로 버린다.
     2. summary에 등장하는 숫자가 그 정책의 원문(템플릿 섹션)에 있는
        숫자로만 이루어져 있는가 - 원문에 없는 숫자가 하나라도 있으면
        (rag_eval.ipynb에서 실측된 자릿수 부풀림 환각 패턴) 그 정책의
-       summary는 통째로 버린다. 숫자가 아닌 서술(과장 표현 등)까지는
-       걸러내지 못하지만, 가장 위험한 실패(금액 오기재)는 기계적으로
-       차단한다.
+       summary는 통째로 버린다.
+    3. summary에 등장하는 법령명이 원문에 있는 법령명으로만 이루어져
+       있는가 - 150문항 실측(2026-09-17)에서 "관련된 법령은
+       조세특례제한법입니다"처럼 원문에 없는 법령명을 지어내는 사례가
+       나왔다. 숫자 검증과 같은 원칙(원문에 없는 게 하나라도 있으면
+       그 정책의 summary는 통째로 버린다)을 법령명에도 적용한다.
+       숫자·법령명이 아닌 서술(과장 표현, 조건 왜곡 등)까지는 걸러내지
+       못하지만, 가장 위험한 두 실패(금액 오기재, 법령명 날조)는
+       기계적으로 차단한다.
     """
 
     raw_policies = parsed.get("policies")
@@ -238,6 +360,9 @@ def _validate_structured_summaries(
             continue
         extra_numbers = _numbers_in(summary) - _numbers_in(section_text)
         if extra_numbers:
+            continue
+        extra_law_names = _law_names_in(summary) - _law_names_in(section_text)
+        if extra_law_names:
             continue
         validated[policy_id] = summary
     return validated
@@ -273,7 +398,7 @@ def generate_answer(state: GraphState, llm_client: LLMClient | None = None) -> d
     citations: list[CitationEntry] = []
     for policy_id, entry in policies.items():
         sections_by_id[policy_id] = _template_section(policy_id, entry)
-        citations.extend(_collect_citations(policy_id, state, chunks_by_id))
+        citations.extend(_collect_citations(policy_id, entry, state, chunks_by_id))
 
     template_answer = (
         "\n\n".join(sections_by_id.values())

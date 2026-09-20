@@ -25,9 +25,12 @@ from rag_design.vector_store import ChromaVectorStore, VectorStoreConfig
 
 from rag_chatbot.graph.nodes.policy_search import (
     SEMANTIC_CANDIDATE_LIMIT,
+    _CONFIDENT_DISTANCE_THRESHOLD,
     _build_query,
+    _filter_relevant_candidates,
     search_policies,
 )
+from rag_chatbot.llm import FailingLLMClient, FakeLLMClient, LLMCallError
 
 try:
     import chromadb as _chromadb  # noqa: F401
@@ -187,6 +190,335 @@ class BuildQueryTests(unittest.TestCase):
         self.assertLessEqual(len(query), 220)
 
 
+class StripProfileFromQueryTests(unittest.TestCase):
+    """질의에서 중복 인적사항을 걷어낸다 (2026-09-15 변경).
+
+    지역·성별·소득구간·장애유무는 이미 슬롯으로 뽑혀 VectorSearchFilter와
+    filter_candidates가 처리한다. 같은 정보를 임베딩에도 넣으면 주제어를
+    밀어내는 중복 노이즈다(Dev 100문항: Top-5 적중 62/95 -> 85/95).
+    """
+
+    def test_profile_preamble_is_removed_but_topic_survives(self) -> None:
+        query = _build_query(
+            {"interests": []},
+            "서울 거주 1990년 3월 1일생 남성입니다. 중위소득 50%이고 장애는 "
+            "없으며 근로 중입니다. 근로장려금 지원 내용을 알려주세요.",
+        )
+        self.assertIn("근로장려금", query)
+        for noise in ("서울", "남성", "중위소득", "장애는 없"):
+            self.assertNotIn(noise, query)
+
+    def test_topic_is_kept_when_it_sits_before_a_generic_closing_sentence(self) -> None:
+        """마지막 문장이 일반 문형이어도 주제어를 잃지 않는다.
+
+        "마지막 문장만 남긴다" 식의 규칙이 깨지는 자리다 - 그 규칙은 이
+        질문에서 "관련 지원이 있나요?"만 남겨 상위권 정책을 권외로 보냈다.
+        """
+
+        query = _build_query(
+            {"interests": []},
+            "경남 거주 1980년 4월 18일생 여성입니다. 중위소득 100%, 장애 없음, "
+            "어업에 종사하며 어선 집어등을 고효율 LED로 교체하려 합니다. "
+            "관련 지원이 있나요?",
+        )
+        self.assertIn("집어등", query)
+        self.assertIn("LED", query)
+        # 직업·종사 분야는 주제어와 겹치므로 일부러 남긴다.
+        self.assertIn("어업", query)
+        self.assertNotIn("경남", query)
+
+    def test_second_mention_is_the_question_not_the_profile(self) -> None:
+        """같은 표현이 두 번 나오면 뒤엣것은 자기소개가 아니라 질문이다."""
+
+        query = _build_query(
+            {"interests": []},
+            "울산 거주 2009년 9월 5일생 여성, 중위소득 80%, 비장애, 학생입니다. "
+            "중위소득 60% 이하 대상 기준을 알려주세요.",
+        )
+        self.assertIn("중위소득 60% 이하", query)
+        self.assertNotIn("80%", query)
+
+    def test_disability_as_a_question_topic_is_kept(self) -> None:
+        query = _build_query(
+            {"interests": []},
+            "전남 거주 1967년 6월 30일생 여성, 중위소득 60%, 비장애, 어업 "
+            "종사자입니다. 청각장애가 있을 때 국선 심판변론인을 받을 수 있는지 "
+            "알려주세요.",
+        )
+        self.assertIn("청각장애", query)
+        self.assertIn("국선 심판변론인", query)
+
+    def test_age_condition_in_the_question_is_not_stripped(self) -> None:
+        # "70세 이상"은 신청인의 나이가 아니라 제도의 자격 요건이다.
+        query = _build_query(
+            {"interests": []}, "70세 이상 해양사고관련자의 지원 조건을 알려주세요."
+        )
+        self.assertIn("70세 이상", query)
+
+    def test_profile_only_utterance_falls_back_to_the_original_text(self) -> None:
+        # 전부 걷어내면 빈 질의가 되고, 빈 질의는 _FALLBACK_QUERY로 떨어져
+        # 아무 정책이나 올라온다. 그럴 바엔 원문을 쓴다.
+        query = _build_query({"interests": []}, "서울 거주 여성입니다.")
+        self.assertNotEqual(query, "생활 지원 복지 서비스")
+        self.assertIn("서울", query)
+
+    def test_strip_can_be_disabled_for_before_after_diagnosis(self) -> None:
+        raw = _build_query(
+            {"interests": []}, "부산 거주 남성입니다. 월세보증 알려주세요.",
+            strip_profile=False,
+        )
+        self.assertIn("부산", raw)
+
+    def test_gender_as_a_sole_question_topic_is_kept(self) -> None:
+        """자기소개 없이 성별 자체가 질문의 유일한 주제어면 지우면 안 된다."""
+
+        query = _build_query(
+            {"interests": []}, "여성 1인 가구 주거지원 정책 알려주세요"
+        )
+        self.assertIn("여성", query)
+
+    def test_income_bracket_as_a_sole_question_topic_is_kept(self) -> None:
+        """자기소개 없이 소득구간 자체가 질문의 유일한 주제어면 지우면 안 된다."""
+
+        query = _build_query(
+            {"interests": []}, "중위소득 60% 이하 가구가 받을 수 있는 지원이 뭔가요?"
+        )
+        self.assertIn("중위소득 60% 이하", query)
+
+
+class _SequencedLLMClient:
+    """호출마다 순서대로 다른 응답을 돌려주는 가짜 클라이언트.
+
+    ``FakeLLMClient``는 매번 같은 응답만 돌려줘서, "첫 호출과 재확인 호출이
+    다른 판정을 낸다"는 시나리오(2026-09-17 재확인 로직)를 테스트할 수 없다.
+    목록이 바닥나면 마지막 응답을 계속 돌려준다.
+    """
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.calls: list[dict] = []
+
+    def complete(self, prompt: str, *, system: str | None = None, max_tokens=None) -> str:
+        index = min(len(self.calls), len(self.responses) - 1)
+        self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
+        return self.responses[index]
+
+
+class RelevanceFilterTests(unittest.TestCase):
+    """N4 관련성 게이트 (2026-09-16, measure_retrieval_distance.py 실측 반영).
+
+    top-1 cosine_distance로는 보류 대상과 정상 질문 분포가 겹쳐서
+    (measure_retrieval_distance.py 실측: 정상 질문 142건 중 37건이 보류
+    대상 최저 거리보다 멀다) 거리 임계값을 쓸 수 없다. 대신 LLM에게 직접
+    "이 후보가 질문과 관련 있는가"를 묻는다.
+    """
+
+    @staticmethod
+    def _candidate(source_id: str, rank: int = 1) -> RetrievedChunk:
+        text = f"정책 {source_id} 원문"
+        chunk = Chunk(
+            schema_version=SCHEMA_VERSION,
+            chunk_id=f"chunk-{source_id}",
+            doc_id=f"subsidy:{source_id}:v1",
+            source_type=SourceType.SUBSIDY,
+            text=text,
+            heading_path=("지원대상",),
+            ordinal=0,
+            citation_locator="지원대상",
+            content_hash=compute_content_hash(text),
+            metadata={"source_id": source_id, "source_name": f"{source_id} 지원사업"},
+        )
+        return RetrievedChunk(
+            query_id="q-relevance",
+            chunk=chunk,
+            rank=rank,
+            # _CONFIDENT_DISTANCE_THRESHOLD(0.118)보다 먼 값을 써야 이
+            # 테스트들이 실제로 LLM 판정 경로를 태운다 - 그보다 가까우면
+            # 거리 사전 필터가 LLM을 부르지도 않고 후보를 그대로 통과시킨다.
+            score=0.2 + rank / 100,
+            score_type="cosine_distance",
+            retriever_version="test:fixture",
+            index_name="subsidy",
+        )
+
+    def test_no_llm_client_keeps_all_candidates(self) -> None:
+        candidates = [self._candidate("a"), self._candidate("b")]
+        result = _filter_relevant_candidates(None, "질문", candidates)
+        self.assertEqual(result, candidates)
+
+    def test_confident_top1_distance_skips_llm_entirely(self) -> None:
+        """거리 기반 사전 필터(2026-09-17) - 최상위 후보가 이미 충분히
+        가까우면(측정된 정상 질문 분포의 중앙값 이하) LLM 판정 자체를
+        건너뛴다. 150문항 전체 실측에서 스니펫 확장 뒤에도 남아있던
+        관련성 게이트의 판정 편차(정상 질문 오탐)를, 애초에 판정을
+        태우지 않는 절반가량의 안전 구간을 만들어 줄인다."""
+
+        close = replace(
+            self._candidate("a"), score=_CONFIDENT_DISTANCE_THRESHOLD - 0.01
+        )
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')  # 불렸다면 다 걸러졌을 응답
+        result = _filter_relevant_candidates(llm, "질문", [close])
+        self.assertEqual(result, [close])
+        self.assertEqual(llm.calls, [])
+
+    def test_borderline_top1_distance_still_uses_llm_judgment(self) -> None:
+        far = replace(
+            self._candidate("a"), score=_CONFIDENT_DISTANCE_THRESHOLD + 0.01
+        )
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')
+        result = _filter_relevant_candidates(llm, "정부가 매달 300만원 준다는 정책", [far])
+        self.assertEqual(result, [])
+        self.assertGreater(len(llm.calls), 0)
+
+    def test_confident_threshold_only_confirms_the_single_best_candidate(self) -> None:
+        """1등만 거리로 확정하고, 나머지는 순서와 무관하게 LLM 판정을 거친다
+        (2026-09-18 - 후보 전체를 봐주면 Citation Precision이 떨어지는 걸
+        150+100+준-Holdout 250문항 실측으로 확인한 뒤 1등만으로 좁혔다)."""
+
+        near = replace(self._candidate("a"), score=_CONFIDENT_DISTANCE_THRESHOLD - 0.01)
+        far = replace(self._candidate("b"), score=_CONFIDENT_DISTANCE_THRESHOLD + 0.05)
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')
+        result = _filter_relevant_candidates(llm, "질문", [far, near])
+        # near(1등)는 확정되고, far(2등)는 판정받아 무관하다고 걸러진다.
+        self.assertEqual(result, [near])
+        self.assertEqual(len(llm.calls), 1)
+
+    def test_confident_top1_still_lets_llm_keep_a_relevant_runner_up(self) -> None:
+        """1등이 확정돼도 2등 이하가 실제로 관련 있다고 판정되면 같이 남는다 -
+        1등 확정은 "2등 이하를 무조건 버린다"는 뜻이 아니라 "2등 이하도
+        여전히 판정받는다"는 뜻이다."""
+
+        near = replace(self._candidate("a"), score=_CONFIDENT_DISTANCE_THRESHOLD - 0.01)
+        far = replace(self._candidate("b"), score=_CONFIDENT_DISTANCE_THRESHOLD + 0.05)
+        llm = FakeLLMClient('{"relevant_policy_ids": ["b"]}')
+        result = _filter_relevant_candidates(llm, "질문", [far, near])
+        self.assertEqual([c.chunk.metadata["source_id"] for c in result], ["a", "b"])
+
+    def test_only_candidate_confident_skips_llm_with_nothing_left_to_judge(self) -> None:
+        candidates = [
+            replace(self._candidate("a"), score=_CONFIDENT_DISTANCE_THRESHOLD - 0.01)
+        ]
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')
+        result = _filter_relevant_candidates(llm, "질문", candidates)
+        self.assertEqual(result, candidates)
+        self.assertEqual(llm.calls, [])
+
+    def test_no_question_keeps_all_candidates(self) -> None:
+        candidates = [self._candidate("a")]
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')
+        result = _filter_relevant_candidates(llm, None, candidates)
+        self.assertEqual(result, candidates)
+        self.assertEqual(llm.calls, [])  # 애초에 부르지 않는다
+
+    def test_keeps_only_ids_the_llm_marks_relevant(self) -> None:
+        candidates = [self._candidate("a"), self._candidate("b"), self._candidate("c")]
+        llm = FakeLLMClient('{"relevant_policy_ids": ["a", "c"]}')
+        result = _filter_relevant_candidates(llm, "실제 질문", candidates)
+        self.assertEqual([c.chunk.metadata["source_id"] for c in result], ["a", "c"])
+
+    def test_empty_relevant_ids_drops_every_candidate_after_agreeing_twice(self) -> None:
+        """허위 정책·프롬프트 인젝션처럼 후보가 전부 무관하면 다 걷어낸다 -
+        이 결과가 빈 리스트로 claim_plan까지 이어지면 evidence_gate가 이미
+        검증된 경로로 보류한다(claim_plan == [] -> NO_EVIDENCE).
+
+        0건이라는 판정은 재확인을 한 번 거친다(아래 재확인 테스트들 참고) -
+        두 번 다 무관하다고 해야 확정되므로 호출이 2번 일어난다."""
+
+        candidates = [self._candidate("a"), self._candidate("b")]
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')
+        result = _filter_relevant_candidates(llm, "정부가 매달 300만원 준다는 정책", candidates)
+        self.assertEqual(result, [])
+        self.assertEqual(len(llm.calls), 2)
+
+    def test_llm_naming_unknown_id_is_ignored(self) -> None:
+        candidates = [self._candidate("a")]
+        llm = FakeLLMClient('{"relevant_policy_ids": ["not-a-real-id"]}')
+        result = _filter_relevant_candidates(llm, "질문", candidates)
+        self.assertEqual(result, [])
+
+    def test_disagreement_on_recheck_trusts_the_call_that_kept_a_candidate(self) -> None:
+        """0건이라는 첫 판정과 재확인 판정이 갈리면(자기일관성 없음),
+        후보가 남는 쪽을 믿는다 - 보류가 답변 누락보다 되돌리기 어려운
+        실패라는 우선순위 때문이다(2026-09-17, dev-earned-income-002 실측
+        재현: 같은 코드가 같은 정상 질문에 대해 실행마다 다르게 판단했다)."""
+
+        candidates = [self._candidate("a"), self._candidate("b")]
+        llm = _SequencedLLMClient(
+            [
+                '{"relevant_policy_ids": []}',
+                '{"relevant_policy_ids": ["a"]}',
+            ]
+        )
+        result = _filter_relevant_candidates(llm, "근로장려금 지원 내용을 알려주세요", candidates)
+        self.assertEqual([c.chunk.metadata["source_id"] for c in result], ["a"])
+        self.assertEqual(len(llm.calls), 2)
+
+    def test_agreement_on_recheck_confirms_zero_candidates(self) -> None:
+        """재확인도 0건이면(자기일관성 있음) 그때만 전부 무관을 확정한다."""
+
+        candidates = [self._candidate("a")]
+        llm = _SequencedLLMClient(
+            ['{"relevant_policy_ids": []}', '{"relevant_policy_ids": []}']
+        )
+        result = _filter_relevant_candidates(llm, "허위 정책 질문", candidates)
+        self.assertEqual(result, [])
+        self.assertEqual(len(llm.calls), 2)
+
+    def test_first_call_with_a_kept_candidate_skips_recheck(self) -> None:
+        """이미 후보가 남는 정상 경로는 재확인하지 않는다(비용 절감)."""
+
+        candidates = [self._candidate("a"), self._candidate("b")]
+        llm = FakeLLMClient('{"relevant_policy_ids": ["a", "b"]}')
+        result = _filter_relevant_candidates(llm, "질문", candidates)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(len(llm.calls), 1)
+
+    def test_recheck_call_failure_fails_open(self) -> None:
+        """0건이라 재확인하러 갔는데 그 재확인 호출 자체가 실패하면, 추측하지
+        않고 원래 후보를 그대로 통과시킨다(fail-open)."""
+
+        candidates = [self._candidate("a")]
+        llm = _SequencedLLMClient(["{\"relevant_policy_ids\": []}"])
+        original_complete = llm.complete
+        calls = {"n": 0}
+
+        def flaky_complete(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise LLMCallError("재확인 호출 실패")
+            return original_complete(*args, **kwargs)
+
+        llm.complete = flaky_complete
+        result = _filter_relevant_candidates(llm, "질문", candidates)
+        self.assertEqual(result, candidates)
+
+    def test_call_failure_fails_open(self) -> None:
+        candidates = [self._candidate("a")]
+        result = _filter_relevant_candidates(FailingLLMClient(), "질문", candidates)
+        self.assertEqual(result, candidates)
+
+    def test_malformed_json_fails_open(self) -> None:
+        candidates = [self._candidate("a")]
+        llm = FakeLLMClient("이것은 JSON이 아닙니다")
+        result = _filter_relevant_candidates(llm, "질문", candidates)
+        self.assertEqual(result, candidates)
+
+    def test_wrong_shaped_json_fails_open(self) -> None:
+        candidates = [self._candidate("a")]
+        llm = FakeLLMClient('{"relevant_policy_ids": "a"}')  # 리스트가 아님
+        result = _filter_relevant_candidates(llm, "질문", candidates)
+        self.assertEqual(result, candidates)
+
+    def test_prompt_lists_every_candidate_and_the_question(self) -> None:
+        candidates = [self._candidate("a"), self._candidate("b")]
+        llm = FakeLLMClient('{"relevant_policy_ids": ["a", "b"]}')
+        _filter_relevant_candidates(llm, "근로장려금 신청 조건이 뭔가요?", candidates)
+        prompt = llm.calls[0]["prompt"]
+        self.assertIn("근로장려금 신청 조건이 뭔가요?", prompt)
+        self.assertIn("a", prompt)
+        self.assertIn("b", prompt)
+
+
 class ConfigurableTopKTests(unittest.TestCase):
     class _Store:
         def __init__(self, results=(), exact_chunks=()) -> None:
@@ -241,6 +573,50 @@ class ConfigurableTopKTests(unittest.TestCase):
         for value in (0, 21, True, "5"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 search_policies(self._state(value), self._Store())
+
+    def test_llm_client_drops_irrelevant_candidates_end_to_end(self) -> None:
+        """N4 관련성 게이트가 실제로 search_policies()에 배선돼 있는지 확인한다."""
+
+        # rank 20 -> score 2.0: _CONFIDENT_DISTANCE_THRESHOLD(0.118)보다 멀어야
+        # 거리 사전 필터를 통과해 실제로 LLM 판정 경로를 태운다.
+        store = self._Store((self._candidate("service-1", 20),))
+        state = self._state()
+        state["initial_user_input"] = "정부가 매달 300만원 준다는 정책 알려줘"
+        llm = FakeLLMClient('{"relevant_policy_ids": []}')
+
+        result = search_policies(state, store, llm_client=llm)
+
+        self.assertEqual(result["subsidy_chunks"], [])
+        self.assertEqual(result["subsidy_full_chunks"], [])
+        self.assertEqual(result["subsidy_legal_basis_chunks"], [])
+        # 0건 판정은 재확인을 한 번 더 거친다(2026-09-17 재확인 로직) - 같은
+        # FakeLLMClient가 두 번 다 무관하다고 답해서 최종적으로 0건이 된다.
+        self.assertEqual(len(llm.calls), 2)
+
+    def test_no_llm_client_preserves_previous_behaviour(self) -> None:
+        store = self._Store((self._candidate("service-1", 1),))
+        result = search_policies(self._state(), store)
+        self.assertEqual(len(result["subsidy_chunks"]), 1)
+
+    def test_relevance_gate_prompt_does_not_leak_pii(self) -> None:
+        """관련성 게이트로 가는 질문도 검색 질의(_build_query)와 동일하게
+        PII가 지워져야 한다 - 그러지 않으면 원문의 이메일·전화번호가 그대로
+        LLM 판정 prompt에 실려 provider로 나간다."""
+
+        store = self._Store((self._candidate("service-1", 20),))
+        state = self._state()
+        state["initial_user_input"] = (
+            "제 이메일은 test@example.com이고 전화번호는 010-1234-5678입니다. "
+            "정부가 매달 300만원 준다는 정책 알려줘"
+        )
+        llm = FakeLLMClient('{"relevant_policy_ids": ["service-1"]}')
+
+        search_policies(state, store, llm_client=llm)
+
+        self.assertGreater(len(llm.calls), 0)
+        for call in llm.calls:
+            self.assertNotIn("test@example.com", call["prompt"])
+            self.assertNotIn("010-1234-5678", call["prompt"])
 
     def test_self_international_age_is_connected_to_search_filter(self) -> None:
         store = self._Store()

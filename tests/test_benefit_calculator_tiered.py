@@ -22,7 +22,7 @@ from rag_design.contracts import (
 )
 from src.rag_chatbot.graph.builder import route_after_benefit_calculator
 from src.rag_chatbot.graph.nodes.benefit_calculator import (
-    _BENEFIT_CALC_MAX_NEW_TOKENS,
+    _benefit_calc_max_new_tokens,
     _extract_amount_via_llm,
     _extract_tiered_rule_via_llm,
     _resolve_amount,
@@ -75,14 +75,14 @@ class ExtractTieredRuleViaLLMTests(unittest.TestCase):
         """2026-09-11: 이 호출은 규칙 기반 폴백이 없는 유일한 경로라,
         전역 LLM_MAX_NEW_TOKENS(속도 때문에 1024로 낮춰둠)를 그대로
         쓰면 추론형 모델의 내부 '생각' 토큰 때문에 실패할 수 있다.
-        그래서 별도의 보호된 예산(_BENEFIT_CALC_MAX_NEW_TOKENS)을
+        그래서 별도의 보호된 예산(_benefit_calc_max_new_tokens)을
         써야 한다 - 인스턴스 기본값이 아니라 이 값이 실제로
         전달되는지 FakeLLMClient.calls로 확인한다."""
         response = _tiered_response("income_bracket", [])
         client = FakeLLMClient(response)
         _extract_tiered_rule_via_llm("소득 구간별로 차등 지급", client)
         self.assertEqual(len(client.calls), 1)
-        self.assertEqual(client.calls[0]["max_tokens"], _BENEFIT_CALC_MAX_NEW_TOKENS)
+        self.assertEqual(client.calls[0]["max_tokens"], _benefit_calc_max_new_tokens())
 
     def test_broken_korean_reason_falls_back_to_default(self) -> None:
         """reason에 한자가 섞이면(Qwen 실사용 중 확인) 기본 문구로 대체한다
@@ -155,14 +155,14 @@ class ExtractAmountViaLLMTests(unittest.TestCase):
     def test_uses_protected_max_tokens_budget_not_global_default(self) -> None:
         """_extract_tiered_rule_via_llm과 마찬가지로 규칙 기반 폴백이
         없는 유일한 경로이므로, 전역 LLM_MAX_NEW_TOKENS(1024)가 아니라
-        별도로 보호된 예산(_BENEFIT_CALC_MAX_NEW_TOKENS)을 써야 한다."""
+        별도로 보호된 예산(_benefit_calc_max_new_tokens)을 써야 한다."""
         response = json.dumps(
             {"amount": 200000, "min_amount": None, "max_amount": None, "reason": "테스트"}
         )
         client = FakeLLMClient(response)
         _extract_amount_via_llm("월 20만원 지원", client)
         self.assertEqual(len(client.calls), 1)
-        self.assertEqual(client.calls[0]["max_tokens"], _BENEFIT_CALC_MAX_NEW_TOKENS)
+        self.assertEqual(client.calls[0]["max_tokens"], _benefit_calc_max_new_tokens())
 
 
 def _numeric_tiered_response(variable: str, tiers: list[dict]) -> str:
