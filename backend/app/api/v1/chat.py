@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request, Response
+from starlette.requests import ClientDisconnect
 
 from src.rag_chatbot.progress import PROGRESS
 
@@ -37,7 +38,15 @@ ProgressToken = Annotated[
 
 
 async def _no_recommendation_input(request: Request) -> None:
-    if request.query_params or await request.body():
+    if request.query_params:
+        raise ApiError(400, "VALIDATION_ERROR", "요청 형식이 올바르지 않습니다.")
+    try:
+        body = await request.body()
+    except ClientDisconnect:
+        # 사용자가 홈 검색 중 다른 화면으로 이동하면 브라우저가 요청을
+        # 취소할 수 있다. 이는 서버 오류가 아니므로 traceback을 남기지 않는다.
+        raise ApiError(499, "CLIENT_DISCONNECTED", "요청이 취소되었습니다.") from None
+    if body:
         raise ApiError(400, "VALIDATION_ERROR", "요청 형식이 올바르지 않습니다.")
 
 
