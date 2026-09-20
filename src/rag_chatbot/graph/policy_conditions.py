@@ -67,6 +67,34 @@ _DISABILITY_SLOT_CODES = {
     "registered": frozenset({"JA0328"}),
     "not_registered": frozenset(),
 }
+# 2026-09-14 수정: 위 빈 집합 매핑은 "JA0328만 켜진 장애인 전용 정책"을 막으려고
+# 넣은 것인데, JA0328이 **여러 대상특성 중 하나로** 켜진 정책까지 같이 막고
+# 있었다. 정부24 대상특성은 배타적 구분이 아니라 "해당되는 것 모두 체크"하는
+# 포함 목록이기 때문이다. 실측(Dev 100문항):
+#
+#   105100000001 근로·자녀장려금       JA0101+JA0102(성별 둘 다),
+#                                      JA0201~JA0205(소득 전 구간),
+#                                      JA0313~JA0328(대상특성 12개)  -> 19/19 탈락
+#   116010000001 주택금융공사 월세자금보증  같은 패턴               -> 19/19 탈락
+#
+# 성별 둘 다·소득 전 구간을 켠 정책이 장애인 전용일 수는 없다. 그래서 JA0328
+# 하나만으로 "전용"이라고 단정하지 않고, 다른 대상특성 코드가 같이 켜져 있으면
+# 포함 목록으로 보고 비장애인을 배제하지 않는다. JA0328이 그 블록에서 유일하게
+# 켜진 경우(= tests의 registered_only_policy)에만 전용으로 보고 배제한다 -
+# 2026-09-11이 막으려던 사례는 그대로 막힌다.
+_OTHER_TARGET_TRAIT_CODES = _EMPLOYMENT_CODES | _UNMAPPED_EMPLOYMENT_CODES
+
+
+def _disability_code_means_exclusive(values: "SupportConditionValues") -> bool:
+    """JA0328이 대상특성 블록에서 혼자 켜져 있으면 '장애인 전용'으로 본다.
+
+    ``_active_codes``를 쓰지 않는다 - 그 함수는 코드 집합 중 하나라도 결측이면
+    전체를 ``None``으로 돌리는 전부-아니면-전무 계약이라, 실데이터에 없는
+    JA1101~JA1103 때문에 항상 "전용"으로 오판한다(2026-09-14 실측). 여기서
+    알고 싶은 것은 "다른 대상특성이 하나라도 켜져 있는가"뿐이므로 직접 본다.
+    """
+
+    return not any(values.get(code) == "Y" for code in _OTHER_TARGET_TRAIT_CODES)
 
 # 2026-09-11: 위 두 dict는 JA 코드가 있을 때만 쓴다. 코드가 전부 결측이면
 # (즉 "활성 코드 없음" -> _category_matches가 fail-open) 이 보완
@@ -340,6 +368,10 @@ def evaluate_conditions(
     disability_accepted = (
         _DISABILITY_SLOT_CODES.get(disability) if isinstance(disability, str) else None
     )
+    # 비장애인(accepted=빈 집합)은 JA0328이 "전용"을 뜻할 때만 배제한다.
+    # 장애인(accepted={JA0328})은 이 조건과 무관하게 기존 동작 그대로다.
+    if disability == "not_registered" and not _disability_code_means_exclusive(values):
+        disability_accepted = None
     disability_checked = bool(disability_active) and disability_accepted is not None
     if disability_checked:
         result["disability_status"] = {

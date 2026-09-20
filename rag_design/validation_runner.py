@@ -118,6 +118,7 @@ def run_questions(
         first_turn_status: str | None = None
         first_missing_slots: list[str] = []
         requested_missing_slots: list[str] = []
+        unanswered_slots: list[str] = []
         seen_requests: set[tuple[str, ...]] = set()
 
         def invoke(fn: Callable, *args, **kwargs) -> tuple[dict, str | None]:
@@ -185,24 +186,41 @@ def run_questions(
                 break
 
             slot_answers = item.get("slot_answers")
-            if slot_answers is None:
-                error = "MissingSlotFixture"
-                break
-            if not isinstance(slot_answers, Mapping) or not all(
-                isinstance(slot, str)
-                and slot
-                and isinstance(value, str)
-                and value.strip()
-                for slot, value in slot_answers.items()
+            if slot_answers is not None and (
+                not isinstance(slot_answers, Mapping)
+                or not all(
+                    isinstance(slot, str)
+                    and slot
+                    and isinstance(value, str)
+                    and value.strip()
+                    for slot, value in slot_answers.items()
+                )
             ):
+                # 형식이 깨진 fixture는 빈칸과 다르다 - 이건 고쳐야 할 결함이다.
                 error = "InvalidSlotFixture"
                 break
-            if any(slot not in slot_answers for slot in missing_slots):
-                error = "MissingSlotFixture"
-                break
-            followup_answer = " ".join(
-                str(slot_answers[slot]).strip() for slot in missing_slots
-            )
+
+            # fixture에 답이 없는 슬롯은 실행을 끊지 않고 "모름"으로 답한다.
+            # 서비스가 안내하는 것과 같은 경로다(request_calc_info의
+            # _CALC_SKIP_NOTICE "모르시거나 말씀하기 어려우면 '모름'이라고
+            # 답하셔도 됩니다" → is_calc_skip_response/apply_calc_skip이 남은
+            # 슬롯을 UNKNOWN으로 확정하고 답변까지 진행, 프로필 슬롯은
+            # llm_gateway._DONT_KNOW_MARKERS가 같은 문자열을 잡는다). 실제
+            # 사용자도 가구원 수나 혼인 상태를 모를 수 있고 그때도 답은 나와야
+            # 하므로, 답이 안 나오는 쪽이 오히려 측정하려는 동작이 아니다.
+            # 어떤 슬롯이 이렇게 넘어갔는지는 unanswered_slots로 남긴다
+            # (docs/PROJECT_COMPLIANCE.md - 알려진 한계를 숨기지 않는다).
+            answers = slot_answers if isinstance(slot_answers, Mapping) else {}
+            parts: list[str] = []
+            for slot in missing_slots:
+                value = answers.get(slot)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
+                else:
+                    if slot not in unanswered_slots:
+                        unanswered_slots.append(slot)
+                    parts.append(f"{slot}은(는) 모름입니다.")
+            followup_answer = " ".join(parts)
 
             response, error = invoke(
                 answer_followup_fn, session_id, followup_answer
@@ -240,6 +258,7 @@ def run_questions(
             "last_response_status": response.get("status"),
             "first_missing_slots": first_missing_slots,
             "requested_missing_slots": requested_missing_slots,
+            "unanswered_slots": unanswered_slots,
             "turn_count": turn_count,
             "latency_ms": elapsed_ms,
             "error": error,
@@ -291,6 +310,11 @@ def calculate_summary(records: Sequence[Mapping], *, top_k: int) -> dict:
         for row in records
         for slot in row.get("first_missing_slots", [])
     )
+    # fixture에 답이 없어 "모름"으로 넘긴 슬롯. 실행은 계속되지만 그 질문의
+    # 답변은 해당 슬롯을 UNKNOWN으로 둔 채 나온 것이므로 같이 게시한다.
+    unanswered_slot_counts = Counter(
+        str(slot) for row in records for slot in row.get("unanswered_slots", [])
+    )
     answer_status_counts = Counter(
         str(row["answer_status"])
         for row in completed
@@ -322,6 +346,7 @@ def calculate_summary(records: Sequence[Mapping], *, top_k: int) -> dict:
             "first_missing_slot_counts": dict(
                 sorted(first_missing_slot_counts.items())
             ),
+            "unanswered_slot_counts": dict(sorted(unanswered_slot_counts.items())),
             "quality_eligible_count": len(completed),
             "total_turn_count": sum(turn_counts),
             "max_turn_count": max(turn_counts, default=0),
@@ -380,10 +405,19 @@ def write_report(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_hash = hashlib.sha256(question_path.read_bytes()).hexdigest()
+    # question_set_sha256은 파일 전체의 해시라, --question-ids/--max-questions로
+    # 같은 파일에서 서로 다른 부분집합을 같은 개수만큼 고르면 파일 해시와
+    # question_count가 둘 다 같아진다 - compare_evaluation_runs.py가 이 둘만
+    # 보고 있어 부분집합이 바뀐 걸 못 잡는다(재현 확인). 실제로 실행한
+    # question_id 집합 자체의 해시를 따로 남겨 그 경우도 잡을 수 있게 한다.
+    executed_ids_sha256 = hashlib.sha256(
+        "\n".join(sorted(str(row["question_id"]) for row in records)).encode("utf-8")
+    ).hexdigest()
     metadata = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "question_set": str(question_path),
         "question_set_sha256": dataset_hash,
+        "executed_question_ids_sha256": executed_ids_sha256,
         "top_k": top_k,
         "workers": workers,
         "max_turns": max_turns,
@@ -398,16 +432,36 @@ def write_report(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (output_dir / "metrics.svg").write_text(_svg(summary), encoding="utf-8")
-    failures = [row for row in records if row["error"] or (
-        row["expected_policy_ids"] and not set(row["expected_policy_ids"]).intersection(row["retrieved_policy_ids"][:top_k])
-    ) or bool(row["should_abstain"]) != bool(row["abstained"])]
+    # 이 목록은 "예외가 난 질문"이 아니라 "사람이 들여다봐야 할 질문"이다. 세
+    # 가지를 합친다: 예외, 정답 정책 미검색, 보류 판단 불일치. 실제로 대부분은
+    # error=None인 검색 실패라, 이유를 안 적으면 "실패 0건인데 왜 목록에 있냐"가
+    # 된다(2026-09-15 실측: 28건 중 예외는 1건뿐이었다). 그래서 항목마다 어느
+    # 범주로 걸렸는지 붙인다.
+    def _review_reasons(row: Mapping) -> list[str]:
+        reasons: list[str] = []
+        if row["error"]:
+            reasons.append("예외")
+        if row["expected_policy_ids"] and not set(
+            row["expected_policy_ids"]
+        ).intersection(row["retrieved_policy_ids"][:top_k]):
+            reasons.append("검색실패")
+        if bool(row["should_abstain"]) != bool(row["abstained"]):
+            reasons.append("보류불일치")
+        return reasons
+
+    reviewed = [(row, _review_reasons(row)) for row in records]
+    failures = [(row, reasons) for row, reasons in reviewed if reasons]
+    reason_counts = Counter(
+        reason for _row, reasons in failures for reason in reasons
+    )
     failure_lines = [
-        f"- `{row['question_id']}`: expected={row['expected_policy_ids']}, "
+        f"- `{row['question_id']}` [{'+'.join(reasons)}]: "
+        f"expected={row['expected_policy_ids']}, "
         f"retrieved={row['retrieved_policy_ids'][:top_k]}, abstained={row['abstained']}, "
         f"first_missing={row.get('first_missing_slots', [])}, "
         f"terminal={row.get('terminal_status')}, turns={row.get('turn_count')}, "
         f"error={row['error']}"
-        for row in failures
+        for row, reasons in failures
     ] or ["- 없음"]
     conversation = summary["conversation"]
     quality_metrics_valid = bool(summary.get("quality_metrics_valid"))
@@ -445,6 +499,8 @@ def write_report(
 
 첫 턴 부족 슬롯 빈도: {json.dumps(conversation['first_missing_slot_counts'], ensure_ascii=False, sort_keys=True)}
 
+fixture에 답이 없어 "모름"으로 진행한 슬롯: {json.dumps(conversation['unanswered_slot_counts'], ensure_ascii=False, sort_keys=True)} (해당 질문의 답변은 이 슬롯을 UNKNOWN으로 둔 채 생성된 것입니다)
+
 최종 답변 상태: {json.dumps(conversation['answer_status_counts'], ensure_ascii=False, sort_keys=True)}, 최종 실패: {conversation['terminal_status_counts'].get('failed', 0)}건, 최대 턴: {conversation['max_turn_count']}
 
 | 영역 | 지표 | 값 | 설명 |
@@ -457,7 +513,13 @@ def write_report(
 | 운영 | p50 / p95 | {summary['operations']['p50_latency_ms']:.0f} / {summary['operations']['p95_latency_ms']:.0f} ms | 전체 질문 응답시간의 중앙값 / 95백분위 |
 | 운영 | 오류율 | {summary['operations']['error_rate']:.3f} | 예외가 발생한 질문 비율 |
 
-## 실패 사례
+## 점검 대상 ({len(failures)}건 / 예외 {reason_counts.get('예외', 0)}, 검색실패 {reason_counts.get('검색실패', 0)}, 보류불일치 {reason_counts.get('보류불일치', 0)})
+
+예외가 난 질문만이 아니라 **사람이 들여다봐야 할 질문**을 모은 목록입니다. 대괄호가 걸린 이유입니다.
+
+- `예외` — 실행이 중단됨(`error` 참고). 이것만 위 오류율에 들어갑니다.
+- `검색실패` — 예외 없이 끝났지만 정답 정책이 Top-{top_k}에 없음. `error=None`이 정상입니다.
+- `보류불일치` — 보류해야 하는데 답했거나, 답해야 하는데 보류함.
 
 {chr(10).join(failure_lines)}
 

@@ -176,11 +176,13 @@ class _LoggingLLMClient:
         self.last_response: str | None = None
         self.last_error: BaseException | None = None
 
-    def complete(self, prompt: str, *, system: str | None = None) -> str:
+    def complete(
+        self, prompt: str, *, system: str | None = None, max_tokens: int | None = None
+    ) -> str:
         self.last_response = None
         self.last_error = None
         try:
-            response = self.inner.complete(prompt, system=system)
+            response = self.inner.complete(prompt, system=system, max_tokens=max_tokens)
             self.last_response = response
             return response
         except Exception as exc:  # noqa: BLE001 - 무엇이든 그대로 기록하고 다시 던짐

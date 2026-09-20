@@ -204,6 +204,27 @@ _GUIDANCE_TEMPLATE = (
 # 참고) - "사용자 정보 - 관심 분야: 청년"처럼 다른 슬롯(나이·소득 등)과
 # 같은 형식으로 넣으면 LLM이 "이 사용자는 청년이다"를 확정된 사실로
 # 오해해 답변에 반영할 수 있다(2026-09-15, PR #59 리뷰 피드백 반영).
+# ``respond_to_policy_question``이 guidance로 떨어질 수 있는 경로. 평가·로그가
+# 이 값으로 "진짜 거절"과 "실패 폴백"을 갈라 볼 수 있게 이름을 고정한다.
+#
+#   not_answerable  : 모델이 근거 없음으로 판단 (의도한 정상 동작)
+#   quote_not_found : 근거 발췌가 컨텍스트에 없음 (지어냄)
+#   inconsistent    : 답변이 자기가 든 근거와 어긋남
+#   llm_failed      : 호출 실패 또는 응답이 JSON 계약에 안 맞음
+#   no_llm          : LLM 클라이언트 없음
+#   no_context      : 정책 컨텍스트가 비어 있음
+GUIDANCE_REASONS: tuple[str, ...] = (
+    "not_answerable",
+    "quote_not_found",
+    "inconsistent",
+    "llm_failed",
+    "no_llm",
+    "no_context",
+)
+# 이 중 "모델이 제대로 판단해서" 거절한 것으로 볼 수 있는 경로. 나머지는
+# 거절이 아니라 사고이므로 거절 정확도에 같이 세면 안 된다.
+DELIBERATE_GUIDANCE_REASONS: frozenset[str] = frozenset({"not_answerable"})
+
 _PROFILE_FACT_EXCLUDE_KEYS = frozenset({"interests"})
 
 
@@ -242,10 +263,18 @@ def respond_to_policy_question(
     """정책 상세 채팅의 한 턴 - 컨텍스트 조립(B) → 생성(B) → 검증(C)을 묶어
     화면에 그대로 쓸 결과를 돌려준다.
 
-    반환: ``{"kind": "answer" | "guidance", "text": str, "evidence_quotes": list[str]}``
-    - ``"answer"``: 검증까지 통과한 경량 답변
+    반환: ``{"kind": "answer" | "guidance", "text": str,
+             "evidence_quotes": list[str], "reason": str | None}``
+    - ``"answer"``: 검증까지 통과한 경량 답변 (``reason``은 ``None``)
     - ``"guidance"``: 답할 수 없거나(``answerable=false``), LLM이 없거나 실패,
       또는 근거 검증 실패 - 지어내지 않고 안내 문구로 대체
+
+    ``reason``은 guidance로 떨어진 **경로**를 남긴다(``GUIDANCE_REASONS``).
+    화면에는 어느 쪽이든 같은 안내 문구가 나가지만, 품질로는 정반대이기
+    때문이다: ``not_answerable``은 "근거가 없다는 걸 제대로 알아봤다"이고
+    ``quote_not_found``는 "답하려다 없는 문장을 지어내서 걸렸다"이다. 이걸
+    구분하지 않으면 평가에서 후자가 전자로 집계돼 거절 정확도가 부풀려진다
+    (2026-09-16 light_followup 평가셋 리뷰).
 
     ``policy``는 ChatResponse의 ``policies`` 항목(PolicyView) 하나다.
     ``user_profile``은 세션의 "파악한 정보"(지역·나이·소득 등) - 자격 관련
@@ -253,13 +282,17 @@ def respond_to_policy_question(
     """
 
     title = str(policy.get("title") or policy.get("policy_id") or "이 정책")
-    guidance = {
-        "kind": "guidance",
-        "text": _GUIDANCE_TEMPLATE.format(title=title),
-        "evidence_quotes": [],
-    }
+
+    def _guidance(reason: str) -> dict:
+        return {
+            "kind": "guidance",
+            "text": _GUIDANCE_TEMPLATE.format(title=title),
+            "evidence_quotes": [],
+            "reason": reason,
+        }
+
     if llm_client is None:
-        return guidance
+        return _guidance("no_llm")
 
     reasons = [
         f"자격 판정 근거: {reason}"
@@ -270,21 +303,26 @@ def respond_to_policy_question(
         policy, extra_facts=[*_profile_facts(user_profile), *reasons]
     )
     if not context:
-        return guidance
+        return _guidance("no_context")
 
     light = answer_light_followup(context, question, llm_client=llm_client)
-    if light is None or not light["answerable"]:
-        return guidance
+    if light is None:
+        # 호출 실패이거나 응답이 계약(JSON)에 안 맞은 경우. 모델이 "못 하겠다"고
+        # 판단한 것과는 다르다.
+        return _guidance("llm_failed")
+    if not light["answerable"]:
+        return _guidance("not_answerable")
     if not verify_light_answer(light["evidence_quotes"], context):
-        return guidance
+        return _guidance("quote_not_found")
     if not verify_answer_consistency(
         light["answer"], light["evidence_quotes"], llm_client=llm_client
     ):
-        return guidance
+        return _guidance("inconsistent")
     return {
         "kind": "answer",
         "text": light["answer"],
         "evidence_quotes": light["evidence_quotes"],
+        "reason": None,
     }
 
 

@@ -234,3 +234,60 @@ def test_prefetch_workers_keep_the_request_recording_context(monkeypatch) -> Non
     assert summary["successes"] == 2
     assert summary["failures"] == 0
     assert recorder.summary()["calls"] == 0
+
+
+class _CapturingClient:
+    def __init__(self, response: str = '{"claims": []}') -> None:
+        self.calls: list[dict] = []
+        self.response = response
+
+    def complete(self, prompt, *, system=None, max_tokens=None):
+        self.calls.append({"prompt": prompt, "max_tokens": max_tokens})
+        return self.response
+
+
+def test_llm_extractor_uses_claim_extract_token_budget(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", raising=False)
+    client = _CapturingClient()
+
+    LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
+
+    assert client.calls[0]["max_tokens"] == 2048
+
+
+def test_claim_extract_token_budget_is_read_at_call_time_and_tolerates_bad_value(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", "512")
+    client = _CapturingClient()
+    LLMClaimExtractor(client).extract(policy_id="policy-a", text="나이 65세 이상 대상자")
+    assert client.calls[0]["max_tokens"] == 512
+
+    monkeypatch.setenv("LLM_MAX_NEW_TOKENS_CLAIM_EXTRACT", "2k")
+    client2 = _CapturingClient()
+    LLMClaimExtractor(client2).extract(policy_id="policy-b", text="나이 65세 이상 대상자")
+    assert client2.calls[0]["max_tokens"] == 2048
+
+
+def test_unsupported_aspects_and_duplicate_reasons_are_cleaned_for_n7() -> None:
+    from rag_design.policy import LEGAL_METADATA_ASPECT
+
+    text = "소득 기준을 충족하는 자에게 지급한다."
+    response = json.dumps(
+        {
+            "claims": [
+                {
+                    "claim_type": "eligibility",
+                    "law_check_required": True,
+                    "reasons": [text, text],
+                    "required_aspects": ["소득기준", LEGAL_METADATA_ASPECT],
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    claims = LLMClaimExtractor(FakeLLMClient(response=response)).extract(
+        policy_id="policy-a", text=text
+    )
+
+    assert claims[0]["reasons"] == [text]
+    assert claims[0]["required_aspects"] == [LEGAL_METADATA_ASPECT]
