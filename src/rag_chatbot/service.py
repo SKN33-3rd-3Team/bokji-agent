@@ -147,7 +147,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack, nullcontext
+import logging
 import sys
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, TypedDict
@@ -205,6 +207,8 @@ from .llm import (
     RunPodServerlessClient,
 )
 from .timing import TIMER, node_title
+
+_log = logging.getLogger(__name__)
 
 # 레포 루트의 .env에서 HF_TOKEN/LLM_MODEL_NAME 등을 읽는다(이미 셸에 직접
 # 설정돼 있으면 그 값이 우선한다 - load_dotenv 기본값 override=False).
@@ -442,6 +446,69 @@ def get_llm_client() -> Any:
 
     get_graph()
     return _runtime_cache.get("llm_client")
+
+
+# 서버 구동 직후 워밍업 진행 상태. 화면이 "검색 엔진 준비 중"을 표시할 수
+# 있게 backend/app/api/v1/config.py가 그대로 읽어 간다.
+_warmup_state: dict[str, Any] = {"status": "pending", "message": "아직 준비를 시작하지 않았습니다.", "seconds": None}
+_warmup_lock = Lock()
+
+
+def warmup_state() -> dict:
+    """``warm_up()``의 현재 상태 스냅샷(``pending``/``running``/``ready``/``failed``)."""
+
+    with _warmup_lock:
+        return dict(_warmup_state)
+
+
+def _set_warmup(status: str, message: str, seconds: float | None = None) -> None:
+    with _warmup_lock:
+        _warmup_state.update(status=status, message=message, seconds=seconds)
+
+
+def warm_up() -> dict:
+    """서버가 뜰 때 한 번 불러, 첫 상담이 감당하던 초기화 비용을 미리 치른다.
+
+    ``get_graph()``만으로는 부족하다. 검색용 임베딩 모델
+    (``SentenceTransformerKoreanProvider``)은 **처음 인코딩할 때** 비로소
+    로드되기 때문에(rag_design/embeddings.py의 ``_load()`` - "never downloaded
+    merely by importing"), get_graph()가 끝나도 모델 가중치는 아직 메모리에
+    없다. 그 상태로 첫 질문이 들어오면 N4(policy_search)가 도는 도중에 수백 MB
+    짜리 모델 로딩이 끼어들어, 사용자가 체감하는 첫 응답만 수십 초 더 느려진다.
+
+    그래서 여기서 실제 검색을 **한 번** 돌려 (1) 임베딩 모델 로딩,
+    (2) Chroma 컬렉션 열기와 인덱스 메모리 적재까지 끝내 둔다. 검색 결과 자체는
+    쓰지 않는다 - 목적은 "느린 첫 번째"를 서버 구동 시점으로 옮기는 것뿐이다.
+
+    실패해도 예외를 밖으로 던지지 않는다. 로컬 개발 환경에는 실제
+    ``data/vector_db``가 없을 수 있는데(알려진 한계), 그것 때문에 회원가입·
+    로그인·마이페이지까지 못 쓰게 되면 안 된다 - 채팅 API는 첫 요청에서 다시
+    시도하고, 그때도 실패하면 503으로 응답한다.
+    """
+
+    started = time.perf_counter()
+    _set_warmup("running", "검색 엔진을 준비하고 있어요.")
+    try:
+        with TIMER.measure("startup:warmup"):
+            get_graph()
+            store = get_store()
+            with TIMER.measure("startup:embedding_model"):
+                # 짧은 실제 질의 한 번 = 임베딩 모델 로드 + 컬렉션 오픈.
+                store.search(
+                    SourceType.SUBSIDY,
+                    "지원 제도",
+                    query_id="startup-warmup",
+                    top_k=1,
+                )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - SystemExit도 서버를 죽이면 안 됨(connect_store() 참고)
+        seconds = time.perf_counter() - started
+        _log.warning("서버 구동 워밍업 실패 - 채팅 API는 첫 요청 시 다시 시도됩니다.", exc_info=True)
+        _set_warmup("failed", f"준비하지 못했습니다({type(exc).__name__}). 첫 요청에서 다시 시도합니다.", round(seconds, 1))
+        return warmup_state()
+    seconds = time.perf_counter() - started
+    _log.info("서버 구동 워밍업 완료 (%.1f초)", seconds)
+    _set_warmup("ready", "준비가 끝났습니다.", round(seconds, 1))
+    return warmup_state()
 
 
 class PolicyDetail(TypedDict, total=False):
