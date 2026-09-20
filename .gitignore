@@ -65,3 +65,5 @@ artifacts/evaluation/*
 /output/llm_reproduction_linux_*/
 /output/*테스트_llm_comparison_*.zip
 /replays/
+/.runtime/*
+/artifacts/evaluation/*
