@@ -39,10 +39,10 @@ export function useAutoRecommendations(enabled: boolean) {
 
   const query = useQuery({
     queryKey,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       const token = newProgressToken();
       queryClient.setQueryData(progressKey, token);
-      return getAutoRecommendations(token, signal);
+      return getAutoRecommendations(token);
     },
     enabled: enabled && Boolean(user),
     staleTime: Infinity,
