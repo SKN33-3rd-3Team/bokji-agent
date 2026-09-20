@@ -1467,22 +1467,34 @@ def ask(
             return _to_chat_response(result, session_id=session_id, store=store)
 
 
-def is_awaiting_input(session_id: str) -> bool:
-    """이 세션이 지금 되묻기(interrupt)로 멈춰 있는지.
+# 되묻기에 답해 재개할 때 그래프 앞부분을 **다시 돌지 않는** 노드.
+# - request_calc_info(N10a): N9로 바로 이어간다(builder.py E18b). 이미 끝낸
+#   검색·근거 검증을 다시 하지 않으므로 진행률도 이어서 그려야 맞다.
+# - request_missing_slots(N3): N1로 돌아가 처음부터 다시 돈다(E6). 여기서
+#   진행률을 이어붙이면 폼을 제출하자마자 막대가 지난 턴 위치(예: N11 부근)에
+#   서 시작해, 아직 검색도 안 했는데 다 끝나가는 것처럼 보인다.
+_FORWARD_RESUME_NODES = frozenset({"request_calc_info"})
 
-    ``answer_followup()``은 두 가지를 겸한다 - 멈춰 있던 되묻기를 **재개**하거나
-    (이어서 몇 노드만 더 돈다), 이미 끝난 상담에 **새 질문**을 던지거나(처음부터
-    다시 돈다, ``resume_graph`` 참고). 진행 막대를 이어 그릴지 0부터 다시
-    그릴지는 이 구분에 달려 있어서, 호출 전에 체크포인트를 한 번 들여다본다.
+
+def resumes_forward(session_id: str) -> bool:
+    """이 세션이 "이어서 진행하는" 되묻기로 멈춰 있는지.
+
+    ``answer_followup()``은 세 가지를 겸한다 - (1) 멈춰 있던 되묻기를 이어서
+    재개하거나, (2) 되묻기를 재개하되 그래프를 처음부터 다시 돌거나,
+    (3) 이미 끝난 상담에 새 질문을 던지거나. 진행 막대를 이어 그려도 되는
+    것은 (1)뿐이라, 멈춰 있는 노드가 무엇인지까지 봐야 한다.
 
     판단에만 쓰는 값이라 실패는 삼키고 ``False``(= 이어붙이지 않음)로 본다 -
-    진행률 표시가 보수적으로 나올 뿐 상담 자체에는 영향이 없다.
+    진행률이 보수적으로(0부터) 나올 뿐 상담 자체에는 영향이 없다.
     """
 
     try:
         graph = get_graph()
         snapshot = graph.get_state({"configurable": {"thread_id": session_id}})
-        return any(task.interrupts for task in snapshot.tasks)
+        return any(
+            task.interrupts and task.name in _FORWARD_RESUME_NODES
+            for task in snapshot.tasks
+        )
     except (Exception, SystemExit):  # noqa: BLE001 - 진행률 표시용 부가 정보일 뿐이다
         _log.debug("되묻기 상태 확인 실패 - 진행률을 이어붙이지 않습니다.", exc_info=True)
         return False
@@ -1509,7 +1521,7 @@ def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
 __all__ = [
     "ask",
     "answer_followup",
-    "is_awaiting_input",
+    "resumes_forward",
     "llm_request_scope",
     "llm_status",
     "warm_up",

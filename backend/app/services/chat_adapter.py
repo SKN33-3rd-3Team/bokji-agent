@@ -14,7 +14,7 @@ from fastapi import status
 
 from rag_design.embeddings import EmbeddingProviderError
 from rag_design.vector_store import VectorStoreError
-from src.rag_chatbot.service import answer_followup, ask, get_graph, is_awaiting_input
+from src.rag_chatbot.service import answer_followup, ask, get_graph, resumes_forward
 from src.rag_chatbot.graph.builder import FailedCheckpointError
 from src.rag_chatbot.graph.nodes.request_calc_info import CalculationInputError
 from src.rag_chatbot.progress import PROGRESS
@@ -203,14 +203,15 @@ def continue_chat(
                 "세션이 만료되었거나 존재하지 않습니다. 새로 상담을 시작해주세요.",
             )
         # 소유권을 확인한 뒤에 켠다 - 남의 session_id를 찍어보는 요청이
-        # 진행률 기록만 남기고 가지 않게 한다. 되묻기 재개인지 여부는
+        # 진행률 기록만 남기고 가지 않게 한다. "이어서 진행하는" 재개인지는
         # answer_followup()을 부르기 **전에** 봐야 안다 - 부르고 나면 이미
-        # 재개가 끝나 interrupt가 사라진다.
+        # 재개가 끝나 interrupt가 사라진다. 개인정보 폼(N3)은 N1부터 다시
+        # 돌므로 이어붙이지 않는다(resumes_forward 참고).
         _begin_progress(
             session_id,
             user_id=user_id,
             progress_token=progress_token,
-            resuming=is_awaiting_input(session_id),
+            resuming=resumes_forward(session_id),
         )
         try:
             raw = _run(answer_followup, session_id, message)
