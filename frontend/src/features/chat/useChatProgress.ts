@@ -26,9 +26,10 @@ const POLL_INTERVAL_MS = 1200;
 export function useChatProgress(token: string | null, active: boolean): ChatProgress | null {
   const { data } = useQuery({
     queryKey: ["chat-progress", token],
-    queryFn: () => getChatProgress(token as string),
+    queryFn: ({ signal }) => getChatProgress(token as string, signal),
     enabled: Boolean(token) && active,
     refetchInterval: POLL_INTERVAL_MS,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
     retry: false,
     gcTime: 0,

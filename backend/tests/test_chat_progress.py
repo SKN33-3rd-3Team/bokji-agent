@@ -47,7 +47,8 @@ def test_unknown_token_is_not_an_error(client):
     assert r.json()["status"] == "unknown"
 
 
-def test_progress_reports_current_step_while_the_graph_runs(client, monkeypatch):
+@pytest.mark.parametrize("endpoint", ["messages", "recommendations"])
+def test_progress_reports_current_step_while_the_graph_runs(client, monkeypatch, endpoint):
     """상담이 도는 **중간에** 진행률을 읽을 수 있어야 한다.
 
     user_operation의 회원별 잠금을 진행률 조회가 같이 기다리면 상담이 끝날
@@ -59,12 +60,26 @@ def test_progress_reports_current_step_while_the_graph_runs(client, monkeypatch)
     entered = threading.Event()
     release = threading.Event()
 
-    def slow_ask(message, session_id, **kwargs):
-        # timed_node가 하는 일을 그대로 흉내 낸다(state["query_id"] == session_id).
-        PROGRESS.node_started(session_id, "policy_search")
-        PROGRESS.node_finished(session_id, "policy_search")
+    from langgraph.graph import END, START, StateGraph
+    from src.rag_chatbot.graph.state import GraphState
+    from src.rag_chatbot.timing import timed_node
+
+    def searching(state):
         entered.set()
-        release.wait(timeout=5)
+        assert release.wait(timeout=10)
+        return {}
+
+    builder = StateGraph(GraphState)
+    builder.add_node("prepare", timed_node("slot_parser", lambda state: {}))
+    builder.add_node("search", timed_node("policy_search", searching))
+    builder.add_edge(START, "prepare")
+    builder.add_edge("prepare", "search")
+    builder.add_edge("search", END)
+    graph = builder.compile()
+
+    def slow_ask(message, session_id, **kwargs):
+        # 실제 LangGraph 노드 계측이 API 조회 레지스트리에 도달해야 한다.
+        graph.invoke({"query_id": session_id})
         return {
             "status": "answered",
             "session_id": session_id,
@@ -85,9 +100,9 @@ def test_progress_reports_current_step_while_the_graph_runs(client, monkeypatch)
 
     def send():
         result["response"] = client.post(
-            "/api/v1/chat/messages",
-            json={"message": "안녕하세요"},
+            f"/api/v1/chat/{endpoint}",
             headers={"X-Progress-Token": "tok-1"},
+            **({"json": {"message": "안녕하세요"}} if endpoint == "messages" else {}),
         )
 
     worker = threading.Thread(target=send)

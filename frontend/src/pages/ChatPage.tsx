@@ -9,15 +9,10 @@ import { ExamplePrompts } from "@/components/chat/ExamplePrompts";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
 import { SlotConflictForm } from "@/components/chat/SlotConflictForm";
 import { CalcFollowupForm } from "@/components/chat/CalcFollowupForm";
-import { PolicySummaryStats } from "@/components/chat/PolicySummaryStats";
-import { PolicyCard } from "@/components/chat/PolicyCard";
-import { PolicyDetailView } from "@/components/chat/PolicyDetailView";
-import { PolicyCompareTable } from "@/components/chat/PolicyCompareTable";
-import { LlmDebugPanel } from "@/components/chat/LlmDebugPanel";
 import { ChatProgressBar } from "@/components/chat/ChatProgressBar";
 import { PolicyQuestionDialog } from "@/components/dialogs/PolicyQuestionDialog";
 import { useChatSession } from "@/features/chat/useChatSession";
-import { usePolicySelection } from "@/features/chat/usePolicySelection";
+import { ChatPolicyResult } from "@/components/chat/ChatPolicyResult";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { useAuth } from "@/features/auth/useAuth";
 import { getChatDefaults } from "@/api/userApi";
@@ -40,7 +35,6 @@ import { FALLBACK_DEFAULT_TOP_K } from "@/constants/labels";
 export function ChatPage() {
   const { user } = useAuth();
   const chat = useChatSession();
-  const compare = usePolicySelection();
 
   const [input, setInput] = useState("");
   const [supportConditions, setSupportConditions] = useState<string[]>([]);
@@ -90,7 +84,6 @@ export function ChatPage() {
 
   const handleNewChat = async () => {
     await chat.resetConversation();
-    compare.clear();
     setAskingPolicy(null);
   };
 
@@ -104,10 +97,6 @@ export function ChatPage() {
     }
   };
 
-  const handleCompareClick = () => {
-    if (compare.count >= 2) chat.openCompare();
-  };
-
   const isEmpty = chat.messages.length === 0;
   const response = chat.latestResponse;
   // S05-01/02/03: 마지막 응답이 needs_input이면 종류에 맞는 폼을, answered면
@@ -119,16 +108,10 @@ export function ChatPage() {
   const showFollowupUi = followupKind !== "none" && !chat.isSending;
   const showPolicyUi = response?.status === "answered" && response.policies.length > 0;
 
-  // 폼/정책 화면이 대신 보여주는 **그** assistant 턴만 버블 목록에서 뺀다.
-  // 예전에는 "마지막 한 개"를 잘랐는데, 보낸 말을 기다리지 않고 바로 화면에
-  // 올리면서부터는 마지막이 사용자 말풍선이라 방금 보낸 말이 잘려 나갔다.
-  const bubbleMessages =
-    showFollowupUi || showPolicyUi
-      ? chat.messages.filter((turn) => turn.response !== response)
-      : chat.messages;
-
-  const selectedPolicies = response?.policies.filter((p) => compare.selectedIds.includes(p.policy_id)) ?? [];
-  const activePolicy = response?.policies.find((p) => p.policy_id === chat.selectedPolicyId) ?? null;
+  // 정책 결과는 턴마다 보존하고, 현재 입력 폼만 말풍선과 중복되지 않게 제외한다.
+  const bubbleMessages = showFollowupUi
+    ? chat.messages.filter((turn) => turn.response !== response)
+    : chat.messages;
 
   // API-10/11 에러(예: GRAPH_EXECUTION_ERROR, SESSION_NOT_FOUND)를 서버 메시지 그대로 노출한다.
   const sendErrorMessage = chat.sendError ? toErrorMessage(chat.sendError) : null;
@@ -177,7 +160,10 @@ export function ChatPage() {
         )}
 
         {bubbleMessages.map((turn, i) => (
-          <ChatBubble key={i} role={turn.role} text={turn.text} />
+          turn.response?.status === "answered" && turn.response.policies.length > 0 ? (
+            <ChatPolicyResult key={i} response={turn.response}
+              onAskQuestion={turn.response === response && !chat.isSending ? setAskingPolicy : undefined} />
+          ) : <ChatBubble key={i} role={turn.role} text={turn.text} />
         ))}
 
         {/* S03-06: 응답 대기 중 진행 막대 — 지금 어느 단계인지까지 보여준다
@@ -188,7 +174,7 @@ export function ChatPage() {
           <p className="text-faint" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>{GUIDANCE_OFFICIAL}</p>
         )}
 
-        <div className="view-fade" key={`${chat.messages.length}-${chat.policyView}`}>
+        <div className="view-fade">
         {showFollowupUi && response && (
           followupKind === "calc" ? (
             <CalcFollowupForm
@@ -208,60 +194,11 @@ export function ChatPage() {
           )
         )}
 
-        {showPolicyUi && response && chat.policyView === "list" && (
-          <div>
-            <PolicySummaryStats policies={response.policies} />
-            {response.policies.map((policy) => (
-              <PolicyCard
-                key={policy.policy_id}
-                policy={policy}
-                selected={compare.selectedIds.includes(policy.policy_id)}
-                onToggleSelect={compare.toggle}
-                onOpenDetail={chat.openDetail}
-              />
-            ))}
-            <div
-              style={{
-                position: "sticky",
-                bottom: 0,
-                marginTop: 6,
-                background: "var(--text)",
-                borderRadius: 14,
-                padding: "12px 18px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <span style={{ color: "var(--bg)", fontWeight: 600, fontSize: 13.5 }}>
-                {compare.count === 0 && "정책을 선택하면 나란히 비교할 수 있어요"}
-                {compare.count === 1 && "1개만 더 선택하면 비교할 수 있어요"}
-                {compare.count >= 2 && `${compare.count}개 선택됨`}
-              </span>
-              <button type="button" className="btn-primary" style={{ width: "auto", padding: "0 18px" }} disabled={compare.count < 2} onClick={handleCompareClick}>
-                비교하기
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8 3L4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4" />
-                </svg>
-              </button>
-            </div>
-            <LlmDebugPanel response={response} />
-          </div>
-        )}
-
-        {showPolicyUi && chat.policyView === "detail" && activePolicy && (
-          <PolicyDetailView policy={activePolicy} onBack={chat.backToList} onAskQuestion={setAskingPolicy} />
-        )}
-
-        {showPolicyUi && chat.policyView === "compare" && (
-          <PolicyCompareTable policies={selectedPolicies} onBackToList={chat.backToList} onOpenDetail={chat.openDetail} />
-        )}
         </div>
 
         {sendErrorMessage && <ErrorBanner style={{ marginTop: 12, marginBottom: 0 }}>{sendErrorMessage}</ErrorBanner>}
 
-        {(isEmpty || !showFollowupUi) && chat.policyView === "list" && (
+        {(isEmpty || !showFollowupUi) && (
           <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 8 }}>
             <div className="input-shell" style={{ flex: 1 }}>
               <input

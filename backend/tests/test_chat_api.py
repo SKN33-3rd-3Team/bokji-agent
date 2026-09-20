@@ -171,6 +171,8 @@ def test_chat_accepts_public_choices_and_optional_prefill(client, monkeypatch):
 
 def test_chat_start_and_followup_happy_path(client, monkeypatch):
     _signup(client, "chatuser3@example.com")
+    # HTTP 계약 테스트에서는 진행률의 재개 판정도 실제 벡터 DB를 열지 않는다.
+    monkeypatch.setattr(chat_adapter, "resumes_forward", lambda session_id: False)
 
     monkeypatch.setattr(
         chat_adapter,

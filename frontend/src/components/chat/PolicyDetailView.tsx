@@ -5,7 +5,7 @@ import { amountNote, badgeColor, cardIntro, dupShortNote, regionLabel } from "@/
 interface PolicyDetailViewProps {
   policy: PolicyView;
   onBack: () => void;
-  onAskQuestion: (policy: PolicyView) => void;
+  onAskQuestion?: (policy: PolicyView) => void;
 }
 
 /** S-07 정책 상세. */
@@ -145,12 +145,12 @@ export function PolicyDetailView({ policy, onBack, onAskQuestion }: PolicyDetail
         )}
 
         {/* S07-07 */}
-        <button type="button" className="btn-primary" style={{ marginTop: 24 }} onClick={() => onAskQuestion(policy)}>
+        {onAskQuestion ? <button type="button" className="btn-primary" style={{ marginTop: 24 }} onClick={() => onAskQuestion(policy)}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
           이 정책에 대해 추가 질문하기
-        </button>
+        </button> : <p className="text-muted" style={{ marginTop: 24, fontSize: 12.5 }}>정책 문의는 최신 상담 결과에서 이용할 수 있어요.</p>}
       </div>
     </div>
   );

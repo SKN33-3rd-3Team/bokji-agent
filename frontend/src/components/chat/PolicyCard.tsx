@@ -41,12 +41,14 @@ export function PolicyCard({ policy, selected, onToggleSelect, onOpenDetail }: P
             {policy.verification_note}
           </p>
         )}
-        <span className={`badge ${color}`}>
-          <span className="dot" />
-          {policy.badge || policy.eligibility_status}
-        </span>
-        <span className="chip">{policy.amount_label || "지원금액 확인 필요"}</span>
-        <span className="chip">중복수급 {policy.duplicate_status || "미확인"}</span>
+        <div className="policy-card-tags">
+          <span className={`badge ${color}`}>
+            <span className="dot" />
+            {policy.badge || policy.eligibility_status}
+          </span>
+          <span className="chip">{policy.amount_label || "지원금액 확인 필요"}</span>
+          <span className="chip">중복수급 {policy.duplicate_status || "미확인"}</span>
+        </div>
       </div>
       <div style={{ width: 136, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
         {selected && (

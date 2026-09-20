@@ -34,12 +34,9 @@ import type { CalculationAnswers, ChatResponse, PolicyView } from "@/types/chat"
  * 완전히 별도의 useChatSession 인스턴스를 쓰므로, 진행 중이던 상담 세션을
  * 건드리지 않는다.
  *
- * 로그인/회원가입 직후는 물론, 로고 클릭이나 마이페이지 "홈으로 돌아가기"로
- * 재진입할 때도 매번 새로 호출해 최신 프로필 기준 추천을 보여준다. API-14
- * 계약의 "가입/페이지 재진입/프로필 수정에 자동 재호출을 추가하지 않는다"는
- * React가 스스로(예: effect 재실행, StrictMode 이중 마운트) 조용히 다시
- * 부르는 것을 막으라는 뜻이지, 사용자가 홈으로 이동을 직접 요청하는 것까지
- * 막는 게 아니다 - hasStartedRef는 그 "조용한 이중 호출"만 막는다.
+ * 추천 결과는 회원별 메모리 캐시에서 복원한다. 홈 재진입이나 별도 상담
+ * 시작으로는 추천을 다시 요청하지 않는다. 프로필 수정·로그아웃 시에는
+ * 캐시를 비우며, 새로고침하면 메모리 캐시도 초기화된다.
  */
 export function HomePage() {
   const chat = useChatSession();
@@ -101,12 +98,9 @@ export function HomePage() {
   // "새 상담 시작"은 여기서 추천을 반복하는 게 아니라 자유롭게 대화할 수 있는
   // 채팅 화면(S-03)으로 보내는 게 맞다.
   const handleNewChat = async () => {
-    await chat.resetConversation();
     compare.clear();
     setAskingPolicy(null);
-    // resetConversation이 API-13으로 이 session_id를 서버에서 지운다.
-    // 캐시된 추천 응답은 그 session_id를 물고 있으므로 같이 버려야 한다.
-    resetAutoReco();
+    // 일반 상담은 별도 세션이다. 홈 추천 세션과 캐시는 재방문을 위해 유지한다.
     navigate("/chat");
   };
 
@@ -193,7 +187,7 @@ export function HomePage() {
         <p className="text-faint" style={{ fontSize: 12.5, margin: "0 0 16px" }}>{HOME_CAPTION}</p>
 
         {/* 자동 추천(API-14)도, 이어지는 상담(API-10/11)도 같은 진행 막대를 쓴다. */}
-        <ChatProgressBar token={chat.progressToken} active={isBusy} />
+        <ChatProgressBar token={autoReco.isFetching ? autoReco.progressToken : chat.progressToken} active={isBusy} />
 
         {autoRecoErrorMessage && (
           <ErrorBanner>
@@ -297,7 +291,7 @@ export function HomePage() {
       <ConfirmModal
         open={confirmingNewChat}
         title="새 상담을 시작할까요?"
-        description="현재 진행 중인 검색 내용은 저장되지 않고 모두 사라져요."
+        description="홈의 추천 결과를 유지하고 새로운 상담으로 이동해요."
         confirmLabel="새 상담 시작"
         cancelLabel="취소"
         isSubmitting={chat.isResetting}
