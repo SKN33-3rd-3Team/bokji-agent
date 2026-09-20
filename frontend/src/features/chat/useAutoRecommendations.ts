@@ -1,7 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAutoRecommendations } from "@/api/chatApi";
 import { newProgressToken } from "./useChatSession";
+import { useAuth } from "@/features/auth/useAuth";
 
 /** 자동 추천 결과 캐시 키. 회원 한 명당 하나 - 계정이 바뀌면 통째로 비운다. */
 export const AUTO_RECOMMENDATION_QUERY_KEY = ["auto-recommendations"];
@@ -23,18 +24,26 @@ export const AUTO_RECOMMENDATION_QUERY_KEY = ["auto-recommendations"];
  * 때문이다 - 엔트리를 없애야 다음 마운트에서 실제로 새로 받는다.
  */
 export function useAutoRecommendations(enabled: boolean) {
-  // 진행 막대가 폴링할 토큰. 요청을 실제로 보낼 때만 새로 만든다 - 캐시에서
-  // 꺼내 쓰는 진입에서는 만들지 않으므로 막대도 뜨지 않는다.
-  const [progressToken, setProgressToken] = useState<string | null>(null);
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const queryKey = [...AUTO_RECOMMENDATION_QUERY_KEY, user?.id];
+  const progressKey = [...queryKey, "progress-token"];
+  // 요청 중 다른 화면에 갔다 돌아와도 같은 요청의 진행률을 이어서 조회한다.
+  const { data: progressToken = null } = useQuery<string | null>({
+    queryKey: progressKey,
+    queryFn: () => null,
+    enabled: false,
+    gcTime: Infinity,
+  });
 
   const query = useQuery({
-    queryKey: AUTO_RECOMMENDATION_QUERY_KEY,
-    queryFn: async () => {
+    queryKey,
+    queryFn: async ({ signal }) => {
       const token = newProgressToken();
-      setProgressToken(token);
-      return getAutoRecommendations(token);
+      queryClient.setQueryData(progressKey, token);
+      return getAutoRecommendations(token, signal);
     },
-    enabled,
+    enabled: enabled && Boolean(user),
     staleTime: Infinity,
     gcTime: Infinity,
     refetchOnMount: false,

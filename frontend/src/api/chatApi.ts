@@ -41,11 +41,11 @@ export async function sendMessage(
  * API-14 시트, Request 섹션). 응답은 API-10/11과 같은 ChatResponse.
  * 진행률 토큰만 헤더로 함께 보낸다 — 바디/쿼리로 보내면 서버가 400으로 막는다.
  */
-export async function getAutoRecommendations(progressToken?: string): Promise<ChatResponse> {
+export async function getAutoRecommendations(progressToken?: string, signal?: AbortSignal): Promise<ChatResponse> {
   const { data } = await apiClient.post<ChatResponse>(
     "/api/v1/chat/recommendations",
     undefined,
-    progressHeaders(progressToken),
+    { ...progressHeaders(progressToken), signal, timeout: 5000 },
   );
   return data;
 }
@@ -68,9 +68,10 @@ export async function submitFollowup(
  * GET /api/v1/chat/progress/{token} — 진행 중인 상담의 현재 단계.
  * 기록이 없어도 200 + status:"unknown"이라 폴링이 오류 배너를 띄우지 않는다.
  */
-export async function getChatProgress(token: string): Promise<ChatProgress> {
+export async function getChatProgress(token: string, signal?: AbortSignal): Promise<ChatProgress> {
   const { data } = await apiClient.get<ChatProgress>(
     `/api/v1/chat/progress/${encodeURIComponent(token)}`,
+    { signal, timeout: 5000 },
   );
   return data;
 }

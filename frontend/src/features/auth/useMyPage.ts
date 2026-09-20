@@ -16,6 +16,7 @@ export function useProfile() {
   return useQuery({
     queryKey: PROFILE_QUERY_KEY,
     queryFn: getMyProfile,
+    refetchOnMount: "always",
   });
 }
 
