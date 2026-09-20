@@ -36,8 +36,6 @@ import hashlib
 import json
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from typing import Sequence
 
 from rag_design.policy import (
@@ -47,6 +45,8 @@ from rag_design.policy import (
 )
 
 from ...llm import LLMCallError, LLMClient, loads_json_object
+from ...llm.client import GraphProviderError
+from ...deadline import BoundedExecutor, NodeDeadlineExceeded, active_write, check_deadline, wait_for
 
 # evidence_gate._LEGAL_ASPECTS와 같은 집합 - N7이 받아주는 값만 통과시킨다.
 _SUPPORTED_ASPECTS = frozenset(
@@ -126,6 +126,7 @@ def _prefetch_workers() -> int:
     return max(1, min(value, 16))
 # 캐시 상한. 한 프로세스가 오래 살아도 메모리가 무한정 늘지 않게 한다.
 _CACHE_MAX_ENTRIES = 512
+_prefetch_pool = BoundedExecutor(16, "claim-prefetch")
 
 # 전역 LLM_MAX_NEW_TOKENS(1024)로는 claim 3종을 한 번에 뽑는 이 호출이 종종
 # 잘려(finish_reason=length) 규칙 기반 폴백으로 조용히 떨어진다(2026-09-19 평가:
@@ -197,17 +198,25 @@ class LLMClaimExtractor:
             policy_id, text = item
             try:
                 self.extract(policy_id=policy_id, text=text)
+            except (NodeDeadlineExceeded, GraphProviderError):
+                raise
             except Exception:  # noqa: BLE001 - prefetch 실패는 조용히 넘긴다
                 pass
 
-        with ThreadPoolExecutor(max_workers=_prefetch_workers()) as pool:
-            futures = [
-                pool.submit(copy_context().run, _one, item) for item in pending
-            ]
-            for future in futures:
-                future.result()
+        size = _prefetch_workers()
+        for offset in range(0, len(pending), size):
+            futures = []
+            try:
+                for item in pending[offset:offset + size]:
+                    futures.append(_prefetch_pool.submit(_one, item))
+                for future in futures:
+                    wait_for(future)
+            finally:
+                for future in futures:
+                    future.cancel()
 
     def extract(self, *, policy_id: str, text: str) -> list[dict]:
+        check_deadline()
         if not text.strip():
             return []
 
@@ -219,7 +228,7 @@ class LLMClaimExtractor:
             return [dict(claim) for claim in cached]
 
         result = self._extract_uncached(policy_id=policy_id, text=text)
-        with self._lock:
+        with self._lock, active_write():
             if len(self._cache) < _CACHE_MAX_ENTRIES:
                 self._cache[key] = [dict(claim) for claim in result]
         return result

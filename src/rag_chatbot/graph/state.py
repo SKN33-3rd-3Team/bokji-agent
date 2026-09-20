@@ -191,6 +191,7 @@ abstained: 검증된 근거가 아예 없어 답변 자체를 노출하지 않�
 
 
 class GraphState(TypedDict, total=False):
+    automatic_recommendation: bool
     query_id: str
     # N4가 반환할 정책 후보 수. 프론트엔드의 "정책 후보 수" 설정을 첫 요청에
     # 받아 체크포인터에 보존한다. 값 검증은 run_graph/search_policies가 맡는다.
@@ -264,8 +265,8 @@ class GraphState(TypedDict, total=False):
     assembled_result: dict[str, Any]
     node_trace: list[str]
     safety_blocked: bool
-    evidence_gate_verdict: EvidenceGateVerdict
-    abstention_decision: AbstentionDecision
+    evidence_gate_verdict: EvidenceGateVerdict | None
+    abstention_decision: AbstentionDecision | None
     missing_document_claim_ids: list[str]
     missing_law_claim_ids: list[str]
     doc_retry_count: int
@@ -276,4 +277,4 @@ class GraphState(TypedDict, total=False):
     # --- N14 (최종 Claim-Citation 검증) ---
     final_answer: str
     final_citations: list[CitationEntry]
-    answer_status: AnswerStatus
+    answer_status: AnswerStatus | None

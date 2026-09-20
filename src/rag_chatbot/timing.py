@@ -29,6 +29,8 @@ import threading
 import time
 from contextlib import contextmanager
 
+from .deadline import run_node
+
 
 class PhaseTimer:
     """이름표가 붙은 구간의 경과 시간을 누적한다."""
@@ -184,7 +186,10 @@ def node_title(name: str) -> str:
     return f"{number} {name}" + (f" - {label}" if label else "")
 
 
-def timed_node(name: str, func):
+LLM_NODE_TIMEOUT_SECONDS = 90.0
+
+
+def timed_node(name: str, func, *, llm: bool = False):
     """LangGraph 노드를 감싸 실행 시간과 실행 순서를 기록한다.
 
     ``functools.partial``로 이미 감싼 노드도 그대로 받을 수 있게 이름을
@@ -201,7 +206,7 @@ def timed_node(name: str, func):
         if os.environ.get("BOKJI_TRACE") == "1":
             print(f"  -> {node_title(name)} ...", flush=True)
         try:
-            return func(*args, **kwargs)
+            return run_node(func, args, kwargs, seconds=LLM_NODE_TIMEOUT_SECONDS if llm else None)
         finally:
             elapsed = time.perf_counter() - started
             TIMER.record(f"node:{name}", elapsed)

@@ -88,10 +88,25 @@ _HOUSEHOLD_TYPE_VALUES = frozenset(
     }
 )
 
-# 생년월일 형식·개연성만 여기서 본다("만 나이가 말이 되는가" 같은 업무
-# 규칙은 이 모듈의 책임이 아니다 - graph.slot_schema.parse_birth_date가
-# 하드게이트 슬롯으로 쓰기 직전에 다시 검증한다). 미래 날짜만 걸러
-# 명백히 잘못된 값이 암호화돼 저장되는 것을 막는다.
+# 시/도: streamlit_ui.constants.SIDO_OPTIONS 와 같은 값을 그대로 쓴다(위
+# 성별 등과 같은 이유로 streamlit_ui 패키지 자체는 import하지 않는다 - 이
+# 모듈은 API가 직접 호출될 수도 있으므로 폼 제한과 별개로 서버에서도
+# 검증한다/fail-closed). 값이 바뀌면 두 곳을 같이 고쳐야 한다.
+_SIDO_VALUES = frozenset(
+    {
+        "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시",
+        "대전광역시", "울산광역시", "세종특별자치시", "경기도", "강원특별자치도",
+        "충청북도", "충청남도", "전북특별자치도", "전라남도", "경상북도",
+        "경상남도", "제주특별자치도",
+    }
+)
+
+# UI 의존 없이 API-01/05의 가입 관심조건을 검증한다. API 테스트가
+# API-09의 signup_interest_options와 일치하는지 확인한다.
+_INTEREST_VALUES = frozenset({"임신/출산", "노인/어르신", "농어업인", "청년"})
+
+# graph.slot_schema와 같은 한국 날짜·만 120세 상한. 인증 모듈은 무거운
+# graph 패키지를 import하지 않으며 경계 일치는 계약 테스트로 확인한다.
 _MAX_PLAUSIBLE_AGE_YEARS = 120
 
 
@@ -116,16 +131,19 @@ def _clean_birth_date(value: object) -> str:
         parsed = date.fromisoformat(text)
     except ValueError as exc:
         raise AuthError("생년월일 형식이 올바르지 않습니다.") from exc
-    today = _utcnow_date()
+    if parsed.isoformat() != text:
+        raise AuthError("생년월일 형식이 올바르지 않습니다.")
+    today = _korea_today()
     if parsed > today:
         raise AuthError("생년월일이 미래일 수 없습니다.")
-    if today.year - parsed.year > _MAX_PLAUSIBLE_AGE_YEARS:
+    age = today.year - parsed.year - ((today.month, today.day) < (parsed.month, parsed.day))
+    if age > _MAX_PLAUSIBLE_AGE_YEARS:
         raise AuthError("생년월일이 올바르지 않습니다.")
     return parsed.isoformat()
 
 
-def _utcnow_date() -> date:
-    return datetime.now(timezone.utc).date()
+def _korea_today() -> date:
+    return datetime.now(timezone(timedelta(hours=9))).date()
 
 
 def _clean_choice(value: object, allowed: frozenset[str], label: str) -> str:
@@ -168,6 +186,31 @@ def _clean_household_types(values: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(items))
 
 
+def _clean_region(value: object) -> str:
+    """빈 값은 "선택 안 함"으로 허용한다. API-09 시/도 목록에 없는 값은
+    거부한다(폼 위조 방지 - fail-closed)."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text not in _SIDO_VALUES:
+        raise AuthError("거주 지역 값이 올바르지 않습니다.")
+    return text
+
+
+def _clean_interests(values: object) -> tuple[str, ...]:
+    """관심 지원조건 목록을 검증한다. 계약 밖 값이 하나라도 있으면 거부한다
+    (폼 위조 방지 - fail-closed). 중복은 제거하고 입력 순서는 유지한다."""
+
+    if values is None:
+        return ()
+    items = [str(x).strip() for x in values if str(x).strip()]
+    for item in items:
+        if item not in _INTEREST_VALUES:
+            raise AuthError("관심 지원조건 값이 올바르지 않습니다.")
+    return tuple(dict.fromkeys(items))
+
+
 def _clean_display_name(value: object) -> str:
     text = _WS_RE.sub(" ", str(value or ""))   # 탭·개행 등은 공백으로
     text = _CONTROL_RE.sub("", text)           # 남은 제어문자는 제거
@@ -207,7 +250,7 @@ class UserNotFoundError(AuthError):
 class AuthBackendUnavailableError(AuthError):
     """회원 DB(원격 MySQL/MariaDB 등)에 연결할 수 없음.
 
-    ``AUTH_DB_URL`` 로 원격 DB 를 쓰는데 RunPod Pod 가 꺼져 있거나 주소/계정이
+    ``AUTH_DB_URL`` 로 원격 DB 를 쓰는데 DB 서버가 꺼져 있거나 주소/계정이
     틀렸을 때. 화면단은 ``except AuthError`` 로 잡아 안내만 하면 된다.
     """
 
@@ -446,12 +489,10 @@ def sign_up(
         raise PasswordPolicyError(violations)
 
     name = _clean_display_name(display_name)
-    region = (region or "").strip()
+    region = _clean_region(region)
     gender = _clean_gender(gender)
     birth_date = _clean_birth_date(birth_date)
-    interest_items = tuple(
-        str(x).strip() for x in (interests or []) if str(x).strip()
-    )
+    interest_items = _clean_interests(interests)
     disability_status = _clean_disability_status(disability_status)
     veteran_status = _clean_veteran_status(veteran_status)
     income_bracket = _clean_income_bracket(income_bracket)
@@ -527,26 +568,22 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
             _log.info("login blocked (locked) username=%s", mask_email(uname))
             raise AccountLockedError(remaining)
 
-        # 잠금 창이 지났으면(자동 해제) 카운터를 새로 센다.
-        prev_fails = 0 if locked_until is not None else int(row["failed_login_count"] or 0)
-
         if not verify_password(password, row["password_hash"]):
-            fails = prev_fails + 1
+            # 실패 횟수 증가와 잠금 판정을 DB에서 원자적으로 처리한다.
+            # 이전에는 여기서 값을 읽어 +1 해 다시 썼는데, 동시에
+            # 들어온 여러 잘못된 로그인 요청이 같은 이전 값을 읽어 같은 값을
+            # 저장할 수 있어(lost update) 실제보다 적게 집계되는 문제가 있었다.
             limit = lockout.max_attempts()
-            if fails >= limit:
-                secs = lockout.lockout_seconds()
-                new_lock = (now + timedelta(seconds=secs)).isoformat(timespec="seconds")
-                backend.set_login_security(
-                    conn, user_id, failed_login_count=fails, locked_until=new_lock
-                )
+            secs = lockout.lockout_seconds()
+            fails, locked_after = backend.record_failed_login(
+                conn, user_id, max_attempts=limit, lock_seconds=secs
+            )
+            if locked_after is not None:
                 _log.info(
                     "login fail username=%s (locked, fails=%d)",
                     mask_email(uname), fails,
                 )
                 raise AccountLockedError(secs)
-            backend.set_login_security(
-                conn, user_id, failed_login_count=fails, locked_until=None
-            )
             _log.info(
                 "login fail username=%s (fails=%d/%d)",
                 mask_email(uname), fails, limit,
@@ -573,7 +610,14 @@ def authenticate(username: str, password: str, *, db_path=None) -> AuthUser:
         conn.close()
 
 
-def get_profile(username: str, *, db_path=None) -> AuthUser:
+def _check_user_identity(row, expected_user_id: int | None) -> None:
+    """이메일을 재사용해도 기존 세션이 다른 회원 행을 읽거나 변경하지 못하게 한다."""
+
+    if row is None or (expected_user_id is not None and int(row["id"]) != expected_user_id):
+        raise UserNotFoundError("존재하지 않는 사용자입니다.")
+
+
+def get_profile(username: str, *, expected_user_id: int | None = None, db_path=None) -> AuthUser:
     """비밀번호 검증 없이 프로필을 읽어 복호화한다 (호출 전 세션으로 인증 확인)."""
 
     uname = _normalize_username(username)
@@ -582,8 +626,7 @@ def get_profile(username: str, *, db_path=None) -> AuthUser:
         row = backend.get_user_by_username(conn, uname)
     finally:
         conn.close()
-    if row is None:
-        raise UserNotFoundError("존재하지 않는 사용자입니다.")
+    _check_user_identity(row, expected_user_id)
     return _row_to_user(
         row,
         display_name=_safe_decrypt_name(row["display_name_enc"], uname),
@@ -604,6 +647,7 @@ def update_profile(
     veteran_status: str | None = None,
     income_bracket: str | None = None,
     household_types=None,
+    expected_user_id: int | None = None,
     db_path=None,
 ) -> AuthUser:
     """전달한 필드만 수정하고 최신 :class:`AuthUser` 를 돌려준다.
@@ -615,23 +659,21 @@ def update_profile(
     backend, conn = _open(db_path)
     try:
         row = backend.get_user_by_username(conn, uname)
-        if row is None:
-            raise UserNotFoundError("존재하지 않는 사용자입니다.")
+        _check_user_identity(row, expected_user_id)
 
         changes: dict[str, object] = {}
         if display_name is not None:
             trimmed = _clean_display_name(display_name)
             changes["display_name_enc"] = _encrypt_safe(trimmed) if trimmed else None
         if region is not None:
-            trimmed = region.strip()
-            changes["region"] = trimmed or None
+            changes["region"] = _clean_region(region) or None
         if gender is not None:
             changes["gender"] = _clean_gender(gender) or None
         if birth_date is not None:
             cleaned = _clean_birth_date(birth_date)
             changes["birth_date_enc"] = encrypt_pii(cleaned) if cleaned else None
         if interests is not None:
-            changes["interests_enc"] = _encrypt_interests(interests)
+            changes["interests_enc"] = _encrypt_interests(_clean_interests(interests))
         if disability_status is not None:
             cleaned = _clean_disability_status(disability_status)
             changes["disability_status_enc"] = encrypt_pii(cleaned) if cleaned else None
@@ -648,6 +690,7 @@ def update_profile(
 
         backend.update_profile_fields(conn, int(row["id"]), **changes)
         fresh = backend.get_user_by_username(conn, uname)
+        _check_user_identity(fresh, int(row["id"]))
     finally:
         conn.close()
 
@@ -665,6 +708,7 @@ def change_password(
     current_password: str,
     new_password: str,
     *,
+    expected_user_id: int | None = None,
     db_path=None,
 ) -> None:
     uname = _normalize_username(username)
@@ -672,8 +716,7 @@ def change_password(
     backend, conn = _open(db_path)
     try:
         row = backend.get_user_by_username(conn, uname)
-        if row is None:
-            raise UserNotFoundError("존재하지 않는 사용자입니다.")
+        _check_user_identity(row, expected_user_id)
         if not verify_password(current_password, row["password_hash"]):
             _log.info("password change fail (bad current) username=%s", mask_email(uname))
             raise InvalidCredentialsError("현재 비밀번호가 올바르지 않습니다.")
@@ -691,7 +734,9 @@ def change_password(
     _log.info("password change ok username=%s", mask_email(uname))
 
 
-def delete_account(username: str, password: str, *, db_path=None) -> None:
+def delete_account(
+    username: str, password: str, *, expected_user_id: int | None = None, db_path=None
+) -> None:
     """비밀번호를 확인한 뒤 회원 행과 그 내용을 삭제한다(되돌릴 수 없음).
 
     SQLite 백엔드에서는 ``delete_user`` 가 ``secure_delete`` 로 삭제 페이지를
@@ -705,8 +750,7 @@ def delete_account(username: str, password: str, *, db_path=None) -> None:
     backend, conn = _open(db_path)
     try:
         row = backend.get_user_by_username(conn, uname)
-        if row is None:
-            raise UserNotFoundError("존재하지 않는 사용자입니다.")
+        _check_user_identity(row, expected_user_id)
         if not verify_password(password, row["password_hash"]):
             _log.info("account delete fail (bad password) username=%s", mask_email(uname))
             raise InvalidCredentialsError("비밀번호가 올바르지 않습니다.")

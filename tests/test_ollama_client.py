@@ -106,6 +106,7 @@ def test_transport_error_sanitized_and_metadata_reset(failure):
 
 def test_service_ollama_route_never_constructs_hf(monkeypatch):
     from src.rag_chatbot import service
+    monkeypatch.delenv("RUNPOD_POD_ID", raising=False)
     for key, value in {"LLM_BACKEND": "ollama", "LLM_MODEL_NAME": "local",
                        "OLLAMA_BASE_URL": "http://localhost:11434",
                        "LLM_TIMEOUT_SECONDS": "30", "LLM_MAX_NEW_TOKENS": "55",
@@ -119,3 +120,127 @@ def test_service_ollama_route_never_constructs_hf(monkeypatch):
     assert client.options["num_predict"] == 55
     assert client.timeout_seconds == 30
     assert client.think is False
+
+
+@pytest.mark.parametrize("pod,backend,hf_token,expected", [
+    ("pod", "ollama", "token", "fallback"),
+    ("pod", "ollama", None, "pod"),
+    (None, "ollama", "token", "ollama"),
+    (None, None, "token", "hf"),
+    (None, None, None, "none"),
+])
+def test_service_selection_preserves_pod_priority_and_explicit_local_only(
+    monkeypatch, pod, backend, hf_token, expected,
+):
+    from src.rag_chatbot import service
+    from src.rag_chatbot.llm import FallbackLLMClient, HuggingFaceInferenceClient, RunPodPodClient
+
+    for key in ("RUNPOD_POD_ID", "LLM_BACKEND", "HF_TOKEN", "HUGGINGFACE_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in {"RUNPOD_POD_ID": pod, "LLM_BACKEND": backend,
+                       "HF_TOKEN": hf_token, "LLM_MODEL_NAME": "fixture"}.items():
+        if value is not None:
+            monkeypatch.setenv(key, value)
+    with patch.object(service, "OllamaClient", wraps=OllamaClient) as local:
+        recorder = service.build_llm_client()
+        if expected == "none":
+            assert recorder is None
+        else:
+            inner = recorder.inner
+            assert isinstance(inner, {"fallback": FallbackLLMClient, "pod": RunPodPodClient,
+                                      "ollama": OllamaClient, "hf": HuggingFaceInferenceClient}[expected])
+            if expected == "fallback":
+                assert isinstance(inner.primary, RunPodPodClient)
+                assert isinstance(inner.secondary, HuggingFaceInferenceClient)
+        assert local.call_count == (expected == "ollama")
+
+
+@pytest.fixture
+def node_budget(monkeypatch):
+    from src.rag_chatbot import deadline
+    clock = [0.0]
+    monkeypatch.setattr(deadline, "monotonic", lambda: clock[0])
+    token = deadline._deadline.set(deadline.Deadline(90))
+    try:
+        yield clock
+    finally:
+        deadline._deadline.reset(token)
+
+
+def test_ollama_show_and_multiple_calls_share_remaining_node_budget(node_budget):
+    client = OllamaClient(model="local", disable_thinking=True, timeout_seconds=120)
+    timeouts = []
+
+    def send(req, *, timeout):
+        timeouts.append(timeout)
+        show = req.full_url.endswith("/api/show")
+        node_budget[0] += 20 if show else 30
+        return mock_response({"capabilities": ["thinking"]} if show else
+                             {"message": {"content": "ok"}, "done": True})
+
+    with patch.object(client._opener, "open", side_effect=send):
+        assert client.complete("one") == client.complete("two") == "ok"
+    assert timeouts == [90, 70, 40]
+    assert client.timeout_seconds == 120
+    assert client._supports_thinking is True
+
+
+@pytest.mark.parametrize("failure", [None, TimeoutError("private"),
+    HTTPError("http://localhost", 503, "private", {}, io.BytesIO()),
+    ValueError("private")])
+def test_expired_show_never_starts_chat_or_updates_capability_cache(node_budget, failure):
+    from src.rag_chatbot.deadline import NodeDeadlineExceeded
+    client = OllamaClient(model="local", disable_thinking=True)
+
+    def send(*args, **kwargs):
+        node_budget[0] = 90
+        if failure is not None:
+            raise failure
+        return mock_response({"capabilities": ["thinking"]})
+
+    with patch.object(client._opener, "open", side_effect=send) as transport:
+        with pytest.raises(NodeDeadlineExceeded):
+            client.complete("private")
+    assert transport.call_count == 1
+    assert client._supports_thinking is None and client.last_response == {}
+
+
+def test_expired_node_does_not_send_or_reset_newer_metadata(node_budget):
+    from src.rag_chatbot.deadline import NodeDeadlineExceeded
+    client = OllamaClient(model="local")
+    client.last_response = {"eval_count": 10}
+    node_budget[0] = 90
+    with patch.object(client._opener, "open", return_value=mock_response(
+        {"message": {"content": "ok"}, "done": True},
+    )) as transport:
+        with pytest.raises(NodeDeadlineExceeded):
+            client.complete("private")
+    transport.assert_not_called()
+    assert client.last_response == {"eval_count": 10}
+
+
+def test_late_chat_cannot_overwrite_other_call_metadata(node_budget):
+    from src.rag_chatbot.deadline import NodeDeadlineExceeded
+    client = OllamaClient(model="local")
+
+    def send(*args, **kwargs):
+        node_budget[0] = 90
+        client.last_response = {"eval_count": 10}  # Another completed request.
+        return mock_response({"message": {"content": "late"}, "done": True, "eval_count": 99})
+
+    with patch.object(client._opener, "open", side_effect=send):
+        with pytest.raises(NodeDeadlineExceeded):
+            client.complete("private")
+    assert client.last_response == {"eval_count": 10}
+
+
+def test_ollama_failure_is_strict_only_in_automatic_recommendations():
+    from src.rag_chatbot.llm.client import GraphLLMClient, GraphProviderError, strict_llm_scope
+    client = OllamaClient(model="local")
+    graph_client = GraphLLMClient(client)
+    with patch.object(client._opener, "open", side_effect=URLError("private")) as transport:
+        with strict_llm_scope(True), pytest.raises(GraphProviderError):
+            graph_client.complete("private")
+        with strict_llm_scope(False), pytest.raises(LLMCallError):
+            graph_client.complete("private")
+    assert transport.call_count == 2  # No automatic local/remote fallback.

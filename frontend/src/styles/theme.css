@@ -1,0 +1,791 @@
+/* ============================================================
+   복지 에이전트 — 디자인 토큰 (복지에이전트_디자인시안.html 이식)
+   9개 아트보드(Main/States/Signup/PolicyList/PolicyDetail/
+   PolicyChatDialog/PolicyCompare/Mypage/MypageEdit)가 공유하는
+   CSS 변수를 하나의 토큰 세트로 통합했다. PROJECT_STRUCTURE.md
+   3.2.1 표와 값이 동일해야 한다.
+   ============================================================ */
+
+:root {
+  /* 배경/패널 */
+  --bg: #fcfcfd;
+  --panel: #ffffff;
+
+  /* 텍스트 3단계 */
+  --text: #1e2233;
+  --text-muted: #5b6072;
+  --text-faint: #8a8fa3;
+
+  /* 구분선 */
+  --border: #e4e6ef;
+  --border-strong: #d8dbe8;
+
+  /* 브랜드 포인트 (스카이블루 계열 — 전 화면 단일 기준) */
+  --primary: #3d63d8;
+  --primary-hover: #2f4fc0;
+  --primary-soft: #eaf0ff;
+
+  /* 사이드바/히어로용 스카이블루 그라데이션 스텝 */
+  --sky-1: #bfdbff;
+  --sky-2: #dcebff;
+  --sky-3: #f2f7ff;
+
+  /* 상태 색 — "충족" */
+  --green: #059669;
+  --green-bg: #d1fae5;
+  --green-text: #065f46;
+
+  /* 상태 색 — "미확인"/경고 */
+  --amber: #d97706;
+  --amber-bg: #fef3c7;
+  --amber-text: #92400e;
+  --amber-border: #f3d48a;
+
+  /* 상태 색 — "미충족"/오류 */
+  --red: #dc2626;
+  --red-bg: #fee2e2;
+  --red-text: #991b1b;
+  --red-border: #f0a8a8;
+
+  /* 중립 칩(구비서류 등) */
+  --gray-bg: #eef1f6;
+  --gray-text: #475569;
+
+  /* 비교표 "다름" 강조 배경 */
+  --diff-bg: #fffbeb;
+
+  /* 위험 액션(회원 탈퇴 등) */
+  --danger: #c43b2e;
+  --danger-soft: #fbeae8;
+  --danger-border: #f2c9c3;
+
+  /* 보훈/가구유형 등 보조 포인트(위반 배지) */
+  --violet: #6c4fd6;
+  --violet-soft: #efeafb;
+
+  color-scheme: light;
+}
+
+/* ============================================================
+   전역 리셋 + 타이포그래피
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Noto Sans KR", system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Edge가 모든 password input에 자동으로 붙이는 눈 아이콘(::-ms-reveal)을
+   끈다 — 우리 커스텀 눈 아이콘 버튼과 겹쳐 두 개로 보이는 문제 방지. */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+/* ============================================================
+   공용 레이아웃
+   ============================================================ */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  height: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--sky-3) 0%, var(--panel) 45%);
+}
+
+.app-header .brand-title {
+  font-size: 16.5px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.app-brand-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: none;
+  padding: 6px 10px 6px 6px;
+  margin: 0 0 0 -6px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.app-brand-btn:hover {
+  background: var(--primary-soft);
+}
+.app-brand-btn:active {
+  background: var(--sky-1);
+}
+
+.app-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 26px 32px 48px;
+  display: flex;
+  justify-content: center;
+}
+
+.app-content {
+  width: 100%;
+  max-width: 720px;
+}
+
+/* ============================================================
+   화면전환 애니메이션 (라우트 전환, 채팅 내부 뷰 전환, 말풍선 등장)
+   ============================================================ */
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* fill-mode를 안 쓴다: "both"/"forwards"로 애니메이션 종료 후에도
+ * transform이 남아있으면 그 요소가 자손 position:fixed(Toast 등)의
+ * containing block이 되어 버려 뷰포트가 아니라 이 요소 기준으로
+ * 고정돼버린다(2026-09-17, 마이페이지 저장 토스트가 뷰포트 상단이
+ * 아니라 스크롤된 페이지 맨 위에 뜨던 버그의 원인). 기본 상태가 이미
+ * "to" 키프레임과 같은 값(opacity:1, transform:none)이라 fill-mode
+ * 없이도 애니메이션 종료 시 시각적으로 끊김 없이 자연스럽게 복귀한다. */
+.route-transition {
+  animation: fade-in-up 0.28s ease-out;
+}
+.view-fade {
+  animation: fade-in-up 0.22s ease-out;
+}
+.chat-bubble-in {
+  animation: bubble-in 0.22s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-transition,
+  .view-fade,
+  .chat-bubble-in {
+    animation: none;
+  }
+}
+
+/* ============================================================
+   사이드바 (S-03/04, chat.py _render_sidebar 구조)
+   ============================================================ */
+
+.sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  background: linear-gradient(165deg, var(--sky-2) 0%, var(--sky-3) 55%);
+  border-right: 1px solid var(--border-strong);
+  padding: 22px 18px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.sb-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: linear-gradient(155deg, var(--sky-1), var(--primary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sb-avatar svg {
+  width: 13px;
+  height: 13px;
+  color: #fff;
+}
+
+.sb-account {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  padding: 2px 6px 14px;
+  font-weight: 500;
+}
+.sb-account-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.sb-account svg.status-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.sb-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 48px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+}
+.sb-btn:hover {
+  background: var(--primary-soft);
+}
+.sb-btn svg {
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sb-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 6px;
+}
+
+.sb-section-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 0 6px;
+  margin-bottom: 14px;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+.sb-section-label svg {
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.sb-section-label.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.sb-optional {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+.sb-field {
+  padding: 0 6px;
+  margin-bottom: 16px;
+}
+.sb-field label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.sb-slider-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  position: relative;
+  margin: 14px 2px 8px;
+}
+.sb-slider-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  background: var(--primary);
+}
+.sb-slider-handle {
+  position: absolute;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--primary);
+  border: 2.5px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transform: translate(-50%, -50%);
+}
+.sb-slider-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  padding: 0 2px;
+}
+.sb-slider-input {
+  width: 100%;
+  accent-color: var(--primary);
+}
+
+/* ============================================================
+   pill 다중선택 (지원조건/관심분야/가구유형 공용)
+   ============================================================ */
+
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pill {
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pill.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* ============================================================
+   카드 / 폼 요소 공용
+   ============================================================ */
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow:
+    0 1px 2px rgba(20, 20, 25, 0.02),
+    0 12px 32px rgba(30, 34, 64, 0.05);
+  padding: 26px 28px 30px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.field label.err-label {
+  color: var(--red);
+}
+.field .helper {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+
+.input-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-shell svg.leading {
+  position: absolute;
+  left: 13px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.input-shell input,
+.input-shell select,
+.select-shell select {
+  width: 100%;
+  height: 44px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0 14px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--panel);
+  outline: none;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.input-shell.has-icon input {
+  padding-left: 38px;
+}
+.input-shell input::placeholder {
+  color: var(--text-faint);
+}
+.input-shell input:focus,
+.input-shell select:focus,
+.select-shell select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+.input-shell.err input {
+  border-color: var(--red);
+  background: var(--red-bg);
+}
+.input-shell.err svg.leading {
+  color: var(--red);
+}
+
+.select-shell {
+  position: relative;
+}
+.select-shell select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  font-weight: 600;
+}
+.select-shell svg.chev {
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.date-select-row {
+  display: flex;
+  gap: 8px;
+}
+.date-select-row .select-shell {
+  flex: 1;
+  min-width: 0;
+}
+.date-select-row .select-shell select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--panel-muted, #f3f4f6);
+}
+
+.inline-err {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--red);
+  font-weight: 500;
+}
+.inline-err svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 2px 0;
+}
+.radio-opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.radio-opt input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.radio-opt .dot {
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  border: 2px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--panel);
+}
+.radio-opt.sel {
+  color: var(--text);
+  font-weight: 700;
+}
+.radio-opt.sel .dot {
+  border-color: var(--primary);
+}
+.radio-opt.sel .dot::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.check-row input {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+}
+.check-row label {
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.55;
+}
+.tag-req {
+  color: var(--danger);
+  font-weight: 800;
+}
+.tag-opt {
+  color: var(--text-faint);
+  font-weight: 800;
+}
+
+/* ============================================================
+   버튼
+   ============================================================ */
+
+.btn-primary {
+  width: 100%;
+  height: 47px;
+  border: none;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 1px 2px rgba(61, 99, 216, 0.18);
+  transition: background 0.12s;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.btn-primary:disabled {
+  background: var(--border-strong);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+.btn-primary svg {
+  width: 17px;
+  height: 17px;
+}
+
+.btn-outline {
+  height: 44px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 16px;
+}
+.btn-outline:hover:not(:disabled) {
+  background: var(--primary-soft);
+}
+.btn-outline svg {
+  width: 15px;
+  height: 15px;
+}
+
+.btn-danger {
+  width: 100%;
+  height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(196, 59, 46, 0.25);
+}
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   배지 / 칩
+   ============================================================ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  vertical-align: middle;
+  margin: 0 6px 6px 0;
+}
+.badge .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.badge.green {
+  background: var(--green-bg);
+  color: var(--green-text);
+}
+.badge.green .dot {
+  background: var(--green);
+}
+.badge.red {
+  background: var(--red-bg);
+  color: var(--red-text);
+}
+.badge.red .dot {
+  background: var(--red);
+}
+.badge.amber {
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
+.badge.amber .dot {
+  background: var(--amber);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--gray-bg);
+  color: var(--gray-text);
+  margin: 0 6px 6px 0;
+}
+
+.cond {
+  font-size: 12.5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-weight: 600;
+  margin: 0 6px 6px 0;
+  display: inline-block;
+}
+.cond.on {
+  background: var(--green-bg);
+  color: var(--green-text);
+}
+.cond.off {
+  background: var(--gray-bg);
+  color: var(--gray-text);
+}
+
+/* ============================================================
+   유틸리티
+   ============================================================ */
+
+.text-muted {
+  color: var(--text-muted);
+}
+.text-faint {
+  color: var(--text-faint);
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

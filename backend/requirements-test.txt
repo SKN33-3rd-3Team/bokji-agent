@@ -1,0 +1,3 @@
+# Same backend dependencies as the application; no production secrets required.
+-r requirements-backend.txt
+pytest>=8,<10

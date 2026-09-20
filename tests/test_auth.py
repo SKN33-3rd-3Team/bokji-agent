@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -44,6 +46,18 @@ from rag_chatbot.auth.service import _clean_display_name
 
 _GOOD_PW = "Abcd1234!"
 _GOOD_PW2 = "Zyxw9876$"
+
+
+class AuthCliTests(unittest.TestCase):
+    def test_keygen_script_runs_without_repo_root_on_import_path(self):
+        script = Path(__file__).resolve().parents[1] / "src/rag_chatbot/auth/__main__.py"
+        with tempfile.TemporaryDirectory() as workdir:
+            result = subprocess.run(
+                [sys.executable, "-B", "-E", str(script), "keygen"],
+                cwd=workdir, capture_output=True, text=True, timeout=15,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(bool(result.stdout.strip()))
 
 
 class PasswordPolicyTests(unittest.TestCase):
@@ -247,10 +261,10 @@ class ServiceTests(unittest.TestCase):
     # -- 프로필(회원가입 입력 내용) 저장·조회·수정 -----------------------
     def test_signup_persists_profile_and_authenticate_returns_it(self):
         sign_up("p@example.com", _GOOD_PW, "복지왕", region="서울특별시",
-                interests=["장애인", "청년"], marketing_opt_in=True, db_path=self.db)
+                interests=["임신/출산", "청년"], marketing_opt_in=True, db_path=self.db)
         got = authenticate("p@example.com", _GOOD_PW, db_path=self.db)
         self.assertEqual(got.region, "서울특별시")
-        self.assertEqual(set(got.interests), {"장애인", "청년"})
+        self.assertEqual(set(got.interests), {"임신/출산", "청년"})
         self.assertTrue(got.marketing_opt_in)
 
     def test_get_profile_decrypts_without_password(self):
@@ -270,11 +284,11 @@ class ServiceTests(unittest.TestCase):
         sign_up("u@example.com", _GOOD_PW, "old", region="대구광역시",
                 interests=["청년"], db_path=self.db)
         updated = update_profile("u@example.com", display_name="new",
-                                 region="인천광역시", interests=["장애인", "한부모/조손가정"],
+                                 region="인천광역시", interests=["임신/출산", "노인/어르신"],
                                  db_path=self.db)
         self.assertEqual(updated.display_name, "new")
         self.assertEqual(updated.region, "인천광역시")
-        self.assertEqual(set(updated.interests), {"장애인", "한부모/조손가정"})
+        self.assertEqual(set(updated.interests), {"임신/출산", "노인/어르신"})
         # 재조회해도 유지된다
         again = get_profile("u@example.com", db_path=self.db)
         self.assertEqual(again.display_name, "new")

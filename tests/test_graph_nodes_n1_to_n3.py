@@ -44,6 +44,10 @@ from rag_chatbot.collectors.gov_24.region_utils import extract_region  # noqa: E
 from rag_chatbot.graph.nodes.slot_parser import parse_slots  # noqa: E402
 from rag_design.contracts import validate_region_metadata  # noqa: E402
 
+# 실행일/호스트 시간대와 독립적인 나이 테스트 입력. 1990-03-15생의 만 나이는
+# 36, 연 나이는 37로, 아래 사용자 진술 "35세"와도 구분된다.
+_AGE_TEST_AS_OF = date(2027, 1, 1)
+
 
 class LlmGatewayExtractSlotsTests(unittest.TestCase):
     def test_extracts_age_region_interests_household_children(self) -> None:
@@ -387,13 +391,14 @@ class ParseSlotsNodeTests(unittest.TestCase):
             "user_input": "1955년 3월생이에요",
             "slots": {},
             "missing_slots": ["birth_date"],
+            "as_of": _AGE_TEST_AS_OF,
         }
 
         slots = parse_slots(state, llm_client=client)["slots"]
 
         self.assertEqual(slots["birth_date"], "1955-03-01")
         # 나이는 사용자가 말한 숫자가 아니라 생년월일에서 파생된 값이다.
-        expected_age, _ = calculate_ages(date(1955, 3, 1), date.today())
+        expected_age, _ = calculate_ages(date(1955, 3, 1), _AGE_TEST_AS_OF)
         self.assertEqual(slots["age"], expected_age)
         # 직전에 물어본 슬롯이 프롬프트 맥락으로 전달됐는지도 확인한다.
         self.assertIn("birth_date", client.calls[0]["prompt"])
@@ -899,13 +904,13 @@ class BirthDateAndAgeTests(unittest.TestCase):
         # 사용자가 말한 "35세"는 세는 나이일 수 있다. 만 나이는 항상
         # 생년월일에서 파생해야 경계에서 오판정이 나지 않는다 - 회귀 테스트.
         slots = parse_slots(
-            {"user_input": "1990-03-15 생이고 35세입니다", "slots": {}}
+            {"user_input": "1990-03-15 생이고 35세입니다", "slots": {}, "as_of": _AGE_TEST_AS_OF}
         )["slots"]
-        expected_age, expected_year_age = calculate_ages(date(1990, 3, 15), date.today())
+        expected_age, expected_year_age = calculate_ages(date(1990, 3, 15), _AGE_TEST_AS_OF)
         self.assertEqual(slots["age"], expected_age)
         self.assertEqual(slots["age_year_based"], expected_year_age)
         self.assertEqual(slots["age_self_reported"], 35)
-        self.assertEqual(slots["age_ref_date"], date.today().isoformat())
+        self.assertEqual(slots["age_ref_date"], _AGE_TEST_AS_OF.isoformat())
 
     def test_man_age_and_year_age_differ_before_the_birthday(self) -> None:
         # 만 나이 하나만 들고 있으면 출생연도 기준 청년 정책에서 경계에 있는
