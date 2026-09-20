@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAutoRecommendations } from "@/api/chatApi";
 import { newProgressToken } from "./useChatSession";
 import { useAuth } from "@/features/auth/useAuth";
+import { ApiError } from "@/api/client";
 
 /** 자동 추천 결과 캐시 키. 회원 한 명당 하나 - 계정이 바뀌면 통째로 비운다. */
 export const AUTO_RECOMMENDATION_QUERY_KEY = ["auto-recommendations"];
@@ -49,7 +50,11 @@ export function useAutoRecommendations(enabled: boolean) {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    retry: false,
+    // 개발 서버 --reload가 모델 캐시/런타임 변경을 감지해 잠깐 재시작하는
+    // 동안에는 연결이 끊길 수 있다. 이때만 짧게 재시도해 홈의 일시 오류
+    // 화면으로 튀지 않게 한다. 4xx/5xx 계약 오류는 즉시 사용자에게 보인다.
+    retry: (failureCount, error) => error instanceof ApiError && error.status === 0 && failureCount < 2,
+    retryDelay: (attempt) => Math.min(1000 * (attempt + 1), 2500),
   });
 
   return { ...query, progressToken };
