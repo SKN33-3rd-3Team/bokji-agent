@@ -50,10 +50,13 @@ export function useAutoRecommendations(enabled: boolean) {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    // 개발 서버 --reload가 모델 캐시/런타임 변경을 감지해 잠깐 재시작하는
-    // 동안에는 연결이 끊길 수 있다. 이때만 짧게 재시도해 홈의 일시 오류
-    // 화면으로 튀지 않게 한다. 4xx/5xx 계약 오류는 즉시 사용자에게 보인다.
-    retry: (failureCount, error) => error instanceof ApiError && error.status === 0 && failureCount < 2,
+    // 개발 서버 --reload가 모델 캐시/런타임 변경을 감지하면 진행 중인
+    // 그래프가 종료되며 500/503이 올 수 있다. 연결 끊김과 이 두 일시 오류만
+    // 재시도한다. 인증·입력 검증 같은 영구 오류는 즉시 표시한다.
+    retry: (failureCount, error) => {
+      if (!(error instanceof ApiError) || failureCount >= 2) return false;
+      return error.status === 0 || error.status === 500 || error.status === 503;
+    },
     retryDelay: (attempt) => Math.min(1000 * (attempt + 1), 2500),
   });
 
