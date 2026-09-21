@@ -193,7 +193,8 @@ def _start_chat(
 
 
 def continue_chat(
-    session_id: str, message: str | dict, *, user_id: int, progress_token: str | None = None
+    session_id: str, message: str | dict, *, user_id: int, progress_token: str | None = None,
+    top_k: int | None = None, extra_interests: list[str] | None = None,
 ) -> ChatResponse:
     with chat_session_store.locked(session_id, user_id=user_id) as record:
         if record is None:
@@ -214,7 +215,10 @@ def continue_chat(
             resuming=resumes_forward(session_id),
         )
         try:
-            raw = _run(answer_followup, session_id, message)
+            raw = _run(
+                answer_followup, session_id, message,
+                top_k=top_k, extra_interests=extra_interests,
+            )
             raw = _augment_required_documents(raw)
             _cache_last_response(session_id, raw)
             response = ChatResponse.model_validate(raw)

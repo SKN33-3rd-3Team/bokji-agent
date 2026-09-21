@@ -36,11 +36,8 @@ export function useChatSession() {
   // 만들어 헤더로 함께 보내고, 같은 값으로 진행 상황을 조회한다 — 첫 상담은
   // session_id를 서버가 만들기 때문에 응답 전에는 조회할 이름이 없다.
   const [progressToken, setProgressToken] = useState<string | null>(null);
-  // 최초 턴(API-10)에 보낸 top_k/extra_interests/known_*를 기억해뒀다가
-  // 되묻기(API-11) 요청에도 그대로 실어 보낸다. 백엔드가 지금 당장은 이
-  // 값들을 안 쓰더라도(top_k는 체크포인터가 보존, 나머지는 아직 파라미터가
-  // 없어 무시함) 최초 입력값이 요청 바디에서 조용히 빠지지 않도록 한다
-  // (코드리뷰 반영, 2026-09-18).
+  // 최초 입력은 후속 요청의 기본값으로 보존한다. 새 질문에서는 payload의
+  // 최신 사이드바 설정이 우선하며, 계산 답변은 기존 검색을 이어간다.
   const initialContextRef = useRef<Omit<ChatMessageRequest, "message"> | null>(null);
   // sessionId state는 setSessionId 호출 후 다음 렌더가 커밋돼야 읽는 쪽에
   // 반영된다. resetConversation() 직후 곧바로 send()를 호출하는 화면(HomePage의
@@ -63,7 +60,7 @@ export function useChatSession() {
         // FollowupRequest.require_one_answer) — 계산 답변일 때는 message를 뺀다.
         const body = calcAnswers
           ? { calc_answers: calcAnswers, ...initialContextRef.current }
-          : { message: payload.message, ...initialContextRef.current };
+          : { ...initialContextRef.current, ...payload };
         return submitFollowup(sessionIdRef.current, body, token);
       }
       const { message: _message, ...context } = payload;

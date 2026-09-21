@@ -86,7 +86,8 @@ def send_followup(
     with user_operation(current):
         answer = payload.calc_answers.model_dump() if payload.calc_answers is not None else payload.message
         return chat_adapter.continue_chat(
-            session_id, answer, user_id=current.user_id, progress_token=progress_token
+            session_id, answer, user_id=current.user_id, progress_token=progress_token,
+            top_k=payload.top_k, extra_interests=payload.extra_interests,
         )
 
 

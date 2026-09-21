@@ -1500,7 +1500,10 @@ def resumes_forward(session_id: str) -> bool:
         return False
 
 
-def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
+def answer_followup(
+    session_id: str, user_input: str | dict, *,
+    top_k: int | None = None, extra_interests: list[str] | None = None,
+) -> ChatResponse:
     """되묻기에는 답을 전달하고, 완료된 상담에는 같은 세션으로 새 질문을 실행한다.
 
     새 질문은 알려진 프로필을 이어받지만 이전 문답을 메시지 이력으로 전달하지
@@ -1513,7 +1516,10 @@ def answer_followup(session_id: str, user_input: str | dict) -> ChatResponse:
         graph = get_graph()
         store = get_store()
         with _llm_request_scope():
-            result = resume_graph(graph, session_id=session_id, user_input=user_input)
+            result = resume_graph(
+                graph, session_id=session_id, user_input=user_input,
+                top_k=top_k, extra_interests=extra_interests,
+            )
             request_timer.close()
             return _to_chat_response(result, session_id=session_id, store=store)
 

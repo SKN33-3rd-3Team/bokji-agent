@@ -513,7 +513,10 @@ def run_graph(
         return graph.invoke(initial_state, config=config)
 
 
-def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict:
+def resume_graph(
+    graph: Any, *, session_id: str, user_input: str | dict,
+    top_k: int | None = None, extra_interests: list[str] | None = None,
+) -> dict:
     """실제 interrupt는 재개하고, 완료된 상담에는 같은 ID로 새 턴을 시작한다.
 
     실패/미완료 체크포인트를 완료된 답변으로 취급하거나 무조건 재실행하지 않는다.
@@ -545,9 +548,11 @@ def resume_graph(graph: Any, *, session_id: str, user_input: str | dict) -> dict
         slots.pop("birth_date", None)
     for field in ("interests", "age_subject", "age_self_reported", "age", "age_year_based", "age_ref_date"):
         slots.pop(field, None)
+    if extra_interests is not None:
+        slots["interests"] = list(extra_interests)
     return run_graph(
         graph, session_id=session_id, user_input=user_input, slots=slots,
-        top_k=snapshot.values.get("policy_top_k", DEFAULT_TOP_K),
+        top_k=top_k if top_k is not None else snapshot.values.get("policy_top_k", DEFAULT_TOP_K),
     )
 
 

@@ -133,6 +133,8 @@ class FollowupRequest(BaseModel):
 
     message: _NonBlankStr | None = None
     calc_answers: CalculationAnswers | None = None
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    extra_interests: list[str] | None = None
 
     @model_validator(mode="after")
     def require_one_answer(self):
