@@ -22,7 +22,7 @@ from ...schemas.chat import (
 )
 from ...services import chat_adapter, followup_adapter
 from ...session_store.auth_session import AuthSessionRecord
-from ..deps import get_current_user, user_operation
+from ..deps import chat_operation, get_current_user, user_operation
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -58,7 +58,7 @@ def recommend(
     progress_token: ProgressToken = None,
 ) -> ChatResponse:
     response.headers["Cache-Control"] = "no-store"
-    with user_operation(current) as profile:
+    with chat_operation(current) as profile:
         return chat_adapter.start_recommendations(
             profile, user_id=current.user_id, progress_token=progress_token
         )
@@ -70,7 +70,7 @@ def send_message(
     current: AuthSessionRecord = Depends(get_current_user),
     progress_token: ProgressToken = None,
 ) -> ChatResponse:
-    with user_operation(current):
+    with chat_operation(current):
         return chat_adapter.start_chat(
             payload, user_id=current.user_id, progress_token=progress_token
         )
@@ -83,7 +83,7 @@ def send_followup(
     current: AuthSessionRecord = Depends(get_current_user),
     progress_token: ProgressToken = None,
 ) -> ChatResponse:
-    with user_operation(current):
+    with chat_operation(current):
         answer = payload.calc_answers.model_dump() if payload.calc_answers is not None else payload.message
         return chat_adapter.continue_chat(
             session_id, answer, user_id=current.user_id, progress_token=progress_token,

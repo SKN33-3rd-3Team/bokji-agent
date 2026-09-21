@@ -123,7 +123,8 @@ def start_recommendations(
 
 
 def _begin_progress(
-    session_id: str, *, user_id: int, progress_token: str | None, resuming: bool = False
+    session_id: str, *, user_id: int, progress_token: str | None,
+    resuming: bool = False, carry_elapsed: bool = False
 ) -> None:
     """진행률 추적을 켠다(``GET /api/v1/chat/progress/{token}``가 읽는다).
 
@@ -149,7 +150,9 @@ def _begin_progress(
         owner=user_id,
         aliases=(progress_token,) if progress_token else (),
         carried_steps=carried,
-        carried_seconds=record.elapsed_seconds if record else 0.0,
+        # 새 정책 검색은 0초부터 시작하고, 기존 상담의 추가 질문은 같은
+        # 상담의 누적 처리 시간을 이어서 표시한다.
+        carried_seconds=record.elapsed_seconds if (resuming or carry_elapsed) and record else 0.0,
     )
 
 
@@ -224,6 +227,7 @@ def continue_chat(
             user_id=user_id,
             progress_token=progress_token,
             resuming=resumes_forward(session_id),
+            carry_elapsed=True,
         )
         try:
             raw = _run(

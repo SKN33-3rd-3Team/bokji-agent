@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getServerStatus } from "@/api/configApi";
 import { useChatProgress } from "@/features/chat/useChatProgress";
@@ -8,6 +9,7 @@ interface ChatProgressBarProps {
   token: string | null;
   /** 요청이 도는 동안만 true */
   active: boolean;
+  startedAt?: number | null;
 }
 
 /**
@@ -21,8 +23,14 @@ interface ChatProgressBarProps {
  * 끝나봐야 알기 때문에, 백엔드가 끝나기 전에는 95%를 넘기지 않는다. 그래서
  * 숫자(%)는 굳이 크게 쓰지 않고 막대와 단계 문구, 경과 시간만 보여준다.
  */
-export function ChatProgressBar({ token, active }: ChatProgressBarProps) {
+export function ChatProgressBar({ token, active, startedAt }: ChatProgressBarProps) {
   const progress = useChatProgress(token, active);
+  const [, refresh] = useState(0);
+  useEffect(() => {
+    if (!active || !startedAt) return;
+    const timer = window.setInterval(() => refresh((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [active, startedAt]);
 
   // 서버 구동 워밍업(임베딩 모델 로드)이 아직 안 끝났으면 첫 상담만 유난히
   // 느리다. 그 사실을 알려주지 않으면 "왜 이렇게 느리지"로만 남는다.
@@ -40,7 +48,8 @@ export function ChatProgressBar({ token, active }: ChatProgressBarProps) {
   const warmingUp =
     serverStatus?.status === "pending" || serverStatus?.status === "running";
   const fraction = progress?.fraction ?? 0;
-  const elapsed = progress?.elapsed_seconds ?? 0;
+  const clientElapsed = startedAt ? Math.max(0, (Date.now() - startedAt) / 1000) : 0;
+  const elapsed = Math.max(progress?.elapsed_seconds ?? 0, clientElapsed);
   const message =
     warmingUp && (progress?.completed_steps ?? 0) === 0
       ? PROGRESS_WARMUP_MESSAGE

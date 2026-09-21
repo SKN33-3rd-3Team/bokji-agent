@@ -36,6 +36,7 @@ export function useChatSession() {
   // 만들어 헤더로 함께 보내고, 같은 값으로 진행 상황을 조회한다 — 첫 상담은
   // session_id를 서버가 만들기 때문에 응답 전에는 조회할 이름이 없다.
   const [progressToken, setProgressToken] = useState<string | null>(null);
+  const [progressStartedAt, setProgressStartedAt] = useState<number | null>(null);
   // 최초 입력은 후속 요청의 기본값으로 보존한다. 새 질문에서는 payload의
   // 최신 사이드바 설정이 우선하며, 계산 답변은 기존 검색을 이어간다.
   const initialContextRef = useRef<Omit<ChatMessageRequest, "message"> | null>(null);
@@ -53,6 +54,7 @@ export function useChatSession() {
     mutationFn: async ({ payload, calcAnswers }: SendVariables): Promise<ChatResponse> => {
       const token = newProgressToken();
       setProgressToken(token);
+      setProgressStartedAt(Date.now());
       // session_id 보유 여부로 API-10(최초)/API-11(진행 중)을 분기 호출한다
       // (S03-06 요구사항).
       if (sessionIdRef.current) {
@@ -136,6 +138,7 @@ export function useChatSession() {
       setPolicyView("list");
       setSelectedPolicyId(null);
       setProgressToken(null);
+      setProgressStartedAt(null);
       initialContextRef.current = null;
     },
   });
@@ -159,6 +162,7 @@ export function useChatSession() {
     selectedPolicyId,
     latestResponse,
     progressToken,
+    progressStartedAt,
     setProgressToken,
     send,
     sendCalcAnswers,

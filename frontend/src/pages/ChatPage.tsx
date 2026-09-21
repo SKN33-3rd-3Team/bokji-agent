@@ -168,7 +168,7 @@ export function ChatPage() {
 
         {/* S03-06: 응답 대기 중 진행 막대 — 지금 어느 단계인지까지 보여준다
             (예전에는 점 세 개만 떠 있어 멈춘 건지 도는 건지 알 수 없었다). */}
-        <ChatProgressBar token={chat.progressToken} active={chat.isSending} />
+        <ChatProgressBar token={chat.progressToken} active={chat.isSending} startedAt={chat.progressStartedAt} />
 
         {response && !showFollowupUi && !showPolicyUi && (
           <p className="text-faint" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>{GUIDANCE_OFFICIAL}</p>
