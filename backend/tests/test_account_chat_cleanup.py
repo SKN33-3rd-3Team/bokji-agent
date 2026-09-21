@@ -50,7 +50,7 @@ def accounts(client, monkeypatch):
     builder.add_edge("step", END)
     graph = builder.compile(checkpointer=MemorySaver())
 
-    def answer(session_id, message):
+    def answer(session_id, message, *, top_k=None, extra_interests=None):
         graph.invoke({"message": message}, config={"configurable": {"thread_id": session_id}})
         return {
             "session_id": session_id, "status": "answered",
@@ -196,8 +196,10 @@ def test_withdrawal_waits_for_running_chat_without_blocking_other_users(accounts
         response = original_ask(message, session_id, **kwargs)
         return pause(session_id, response) if message == "inflight" else response
 
-    def resume(session_id, message):
-        return pause(session_id, original_resume(session_id, message))
+    def resume(session_id, message, *, top_k=None, extra_interests=None):
+        return pause(session_id, original_resume(
+            session_id, message, top_k=top_k, extra_interests=extra_interests,
+        ))
 
     monkeypatch.setattr(chat_adapter, "ask", ask)
     monkeypatch.setattr(chat_adapter, "answer_followup", resume)

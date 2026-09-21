@@ -200,7 +200,7 @@ def test_resume_and_delete_are_serialized(monkeypatch, first):
     checkpoints = {"session": "initial"}
     events = []
 
-    def resume(sid, message):
+    def resume(sid, message, *, top_k=None, extra_interests=None):
         events.append("resume")
         if first == "resume":
             entered.set()

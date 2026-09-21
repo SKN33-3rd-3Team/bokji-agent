@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import platform
 from pathlib import Path
 import sys
 import tempfile
@@ -29,6 +30,7 @@ def isolated_environment(directory: Path) -> None:
         os.environ[key] = str(directory)
     os.environ.update(
         AUTH_DB_PATH=str(directory / "auth.db"),
+        BOKJI_LOG_DIR=str(directory / "logs"),
         AUTH_ENC_KEY=base64.urlsafe_b64encode(os.urandom(32)).decode("ascii"),
         PYTHON_DOTENV_DISABLED="1", PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
         PYTHONDONTWRITEBYTECODE="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
@@ -89,6 +91,8 @@ def main(argv=None) -> int:
             parser.error("Select tests under backend/tests only")
 
     os.chdir(ROOT)
+    # Windows의 보고서용 OS 정보 조회는 격리 전에 캐시한다.
+    platform.uname()
     sys.dont_write_bytecode = True
     sys.path[:0] = [str(ROOT), str(ROOT / "src")]
     REPORTS.mkdir(parents=True, exist_ok=True)

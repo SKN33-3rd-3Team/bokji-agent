@@ -179,11 +179,13 @@ def test_chat_start_and_followup_happy_path(client, monkeypatch):
         "ask",
         lambda message, session_id, **kwargs: _fake_chat_response(session_id, "needs_input"),
     )
-    monkeypatch.setattr(
-        chat_adapter,
-        "answer_followup",
-        lambda session_id, message: _fake_chat_response(session_id, "answered"),
-    )
+    received_options = []
+
+    def answer_followup(session_id, message, *, top_k=None, extra_interests=None):
+        received_options.append((top_k, extra_interests))
+        return _fake_chat_response(session_id, "answered")
+
+    monkeypatch.setattr(chat_adapter, "answer_followup", answer_followup)
 
     r = client.post("/api/v1/chat/messages", json={"message": "유치원비 지원 정책 있나요?"})
     assert r.status_code == 200
@@ -196,6 +198,15 @@ def test_chat_start_and_followup_happy_path(client, monkeypatch):
     body = r.json()
     assert body["status"] == "answered"
     assert body["policies"][0]["policy_id"] == "P1"
+
+    assert received_options == [(None, None)]
+    for top_k, interests in ((8, ["주거"]), (2, [])):
+        r = client.post(
+            f"/api/v1/chat/sessions/{session_id}/followup",
+            json={"message": "다시 찾아줘", "top_k": top_k, "extra_interests": interests},
+        )
+        assert r.status_code == 200
+        assert received_options[-1] == (top_k, interests)
 
 
 def test_chat_response_includes_parsed_required_documents_items(client, monkeypatch):

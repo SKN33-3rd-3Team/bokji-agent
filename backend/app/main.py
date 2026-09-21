@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import threading
 import logging
 from logging.handlers import RotatingFileHandler
@@ -17,7 +18,7 @@ for _path in (_REPO_ROOT, _REPO_ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-_LOG_DIR = _REPO_ROOT / "logs"
+_LOG_DIR = Path(os.environ.get("BOKJI_LOG_DIR") or _REPO_ROOT / "logs")
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
