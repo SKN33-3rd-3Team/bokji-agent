@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from hashlib import sha256
 from math import sqrt
 import re
+from threading import Lock
 from typing import Protocol, runtime_checkable
 
 
@@ -105,6 +106,7 @@ class SentenceTransformerKoreanProvider:
         self.workers = workers
         self._model = None
         self._pool = None
+        self._load_lock = Lock()
 
     @property
     def provider_id(self) -> str:
@@ -115,6 +117,11 @@ class SentenceTransformerKoreanProvider:
         return self._dimension
 
     def _load(self):
+        # 워밍업과 첫 검색이 겹쳐도 초기화와 차원 검증은 한 번에 하나만 실행한다.
+        with self._load_lock:
+            return self._load_locked()
+
+    def _load_locked(self):
         if self._model is not None:
             return self._model
         try:

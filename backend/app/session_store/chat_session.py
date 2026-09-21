@@ -27,6 +27,7 @@ from weakref import WeakValueDictionary
 class ChatSessionRecord:
     user_id: int
     elapsed_seconds: float = 0.0
+    completed_steps: int = 0
     last_policies: list[dict] = field(default_factory=list)
     last_profile: list[dict] = field(default_factory=list)
     operation_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)

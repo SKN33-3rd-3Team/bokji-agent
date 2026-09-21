@@ -141,8 +141,8 @@ def _begin_progress(
     움직인다.
     """
 
-    carried = PROGRESS.completed_steps(session_id) if resuming else 0
     record = chat_session_store.get(session_id, user_id=user_id)
+    carried = record.completed_steps if resuming and record is not None else 0
     PROGRESS.start(
         session_id,
         total_steps=max(18, carried + EXPECTED_RESUME_NODE_COUNT) if resuming else EXPECTED_NODE_COUNT,
@@ -159,6 +159,7 @@ def _finish_progress(session_id: str, *, user_id: int, failed: bool = False) -> 
     progress = PROGRESS.snapshot(session_id, owner=user_id)
     if record is not None and progress is not None:
         record.elapsed_seconds = progress["elapsed_seconds"]
+        record.completed_steps = progress["completed_steps"]
 
 
 def _start_chat(

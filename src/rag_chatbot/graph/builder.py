@@ -533,8 +533,19 @@ def resume_graph(
             raise CalculationInputError("현재 계산 질문에 대한 답변이 아닙니다.")
         merge_structured_calc_answer(snapshot.values, user_input)
     if any(task.interrupts for task in snapshot.tasks):
+        updates = {}
+        # 개인정보 되묻기는 이후 검색을 다시 실행하므로 현재 옵션을 반영한다.
+        # 계산 되묻기는 이미 검색한 정책을 이어서 계산하므로 변경하지 않는다.
+        if any(task.interrupts and task.name == "request_missing_slots" for task in snapshot.tasks):
+            if top_k is not None:
+                updates["policy_top_k"] = top_k
+            if extra_interests is not None:
+                updates["slots"] = {
+                    **(snapshot.values.get("slots") or {}),
+                    "interests": list(extra_interests),
+                }
         with graph_execution():
-            return graph.invoke(Command(resume=user_input), config=config)
+            return graph.invoke(Command(resume=user_input, update=updates or None), config=config)
     if snapshot.next or not snapshot.values or snapshot.values.get("answer_status") not in (
         "complete", "partial", "abstained",
     ):
