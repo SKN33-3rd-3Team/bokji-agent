@@ -144,7 +144,7 @@ def _begin_progress(
     carried = PROGRESS.completed_steps(session_id) if resuming else 0
     PROGRESS.start(
         session_id,
-        total_steps=carried + (EXPECTED_RESUME_NODE_COUNT if resuming else EXPECTED_NODE_COUNT),
+        total_steps=max(18, carried + EXPECTED_RESUME_NODE_COUNT) if resuming else EXPECTED_NODE_COUNT,
         owner=user_id,
         aliases=(progress_token,) if progress_token else (),
         carried_steps=carried,

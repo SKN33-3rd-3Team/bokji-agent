@@ -172,6 +172,7 @@ export function HomePage() {
       onBrandClick={handleBrandClick}
       sidebar={
         <Sidebar
+          showSearchScope={false}
           onNewChat={() => setConfirmingNewChat(true)}
           isResettingChat={chat.isResetting}
           supportConditions={supportConditions}

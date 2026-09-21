@@ -5,6 +5,7 @@ import { SearchScopeSidebar } from "@/components/chat/SearchScopeSidebar";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
 
 interface SidebarProps {
+  showSearchScope?: boolean;
   onNewChat: () => void;
   isResettingChat: boolean;
   supportConditions: string[];
@@ -17,6 +18,7 @@ interface SidebarProps {
 
 /** S-03 좌측 사이드바(마이페이지/로그아웃/새 상담) + S-04(검색 범위 조정). */
 export function Sidebar({
+  showSearchScope = true,
   onNewChat,
   isResettingChat,
   supportConditions,
@@ -81,6 +83,7 @@ export function Sidebar({
         새 상담 시작
       </button>
 
+      {showSearchScope && <>
       <div className="sb-divider" />
 
       <button
@@ -105,6 +108,7 @@ export function Sidebar({
           onTopKChange={onTopKChange}
         />
       )}
+      </>}
       <ConfirmModal
         open={confirmingLogout}
         title="로그아웃할까요?"
