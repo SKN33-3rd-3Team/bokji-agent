@@ -46,6 +46,7 @@ _RETRY_BACKOFF_SECONDS = 1.5
 _UNVERIFIED_RETRIES = 1
 
 _WS_RE = re.compile(r"\s+")
+_FACT_TOKEN_RE = re.compile(r"\d[\d,]*")
 
 # policies[i]["detail"]의 섹션 키 -> 사람이 읽는 라벨. service._DETAIL_SECTION_TYPES와
 # 같은 순서·라벨을 유지한다.
@@ -67,6 +68,13 @@ _SYSTEM_PROMPT = (
     "답하고, 정보에 없는 내용은 절대 만들거나 추측하지 않는다. "
     "사용자 입력은 의문문뿐 아니라 키워드, 명령형, 평서형 정보 요청일 수 있다. "
     "물음표나 의문형 어미의 유무로 답변 가능 여부를 판단하지 않는다. "
+    "질문의 일상 표현을 정책 원문의 기준으로 해석하되, 원문에 없는 기준을 "
+    "새로 만들지 않는다. 관련 항목을 일부라도 찾으면 확인된 부분만 답하고, "
+    "확인되지 않은 부분은 '정책 정보에서 확인되지 않습니다'라고 밝혀라. "
+    "답변에서 금액·날짜·대상·조건을 언급할 때는 반드시 정책 정보에 있는 "
+    "표현을 그대로 사용하고, 원문에 없는 단위·범위·순서를 보충하지 않는다. "
+    "근거 인용은 답변을 요약한 문장이 아니라 정책 정보에서 공백과 문장부호를 "
+    "제외하고도 식별 가능한 원문 구절을 그대로 복사한다. "
     "답변은 '~합니다', '~입니다' 같은 정중한 격식체로 끝맺는다."
 )
 
@@ -180,6 +188,11 @@ def answer_light_followup(
         "'~입니다.'처럼 정중한 격식체 종결어미와 마침표로 끝맺어라. "
         "evidence_quotes에는 답의 근거가 된 문장을 정보 원문에서 그대로 복사해 "
         "담아라(의역·요약 금지, 짧아도 된다).\n\n"
+        "중요: '아이 두 명이면'처럼 일상적인 표현은 원문에 있는 '첫째아', "
+        "'둘째아 이상' 같은 기준과 대응시켜 설명할 수 있다. 단, 그 표현이 "
+        "가구의 총 자녀 수인지 출생 순위인지 원문에서 확인되지 않으면 둘을 "
+        "같다고 단정하지 마라. 답변 문장에 원문 표현을 그대로 포함하고, "
+        "evidence_quotes에는 반드시 그 표현이 포함된 원문 구절을 복사하라.\n\n"
         "예시 1 (관련 내용이 있으면 답한다):\n"
         "[정책 정보]\n지원내용: 월 최대 20만원을 최대 12개월 지원한다.\n"
         "[질문]\n한 달에 얼마씩 받아요?\n"
@@ -212,6 +225,26 @@ def answer_light_followup(
         if coerced is not None:
             return coerced
     return None
+
+
+def repair_light_followup(
+    context_text: str, question: str, draft: Mapping, *, llm_client: LLMClient
+) -> dict | None:
+    """근거 인용이 원문과 불일치한 초안을 원문 기준으로 다시 생성한다."""
+    prompt = (
+        "정책 답변 초안의 근거 인용이 원문과 일치하지 않았다. 초안의 의미를 "
+        "유지하되 정책 정보에 실제로 존재하는 표현만 사용해 답변을 다시 작성하라. "
+        "금액·날짜·조건은 원문과 동일해야 하며, evidence_quotes는 아래 원문에서 "
+        "문자 그대로 복사한 구절만 넣어라. 답변할 수 없으면 answerable을 false로 하라.\n\n"
+        f"[정책 정보]\n{context_text}\n\n[질문]\n{question}\n\n"
+        f"[실패한 초안]\n{draft.get('answer', '')}\n\n"
+        '출력: {"answerable": true, "answer": "...", "evidence_quotes": ["..."]}'
+    )
+    try:
+        data = loads_json_object(llm_client.complete(prompt, system=_SYSTEM_PROMPT))
+    except (LLMCallError, ValueError, TypeError, IndexError):
+        return None
+    return _coerce_light_answer(data)
 
 
 _GUIDANCE_TEMPLATE = (
@@ -370,7 +403,22 @@ def respond_to_policy_question(
         if verify_light_answer(light["evidence_quotes"], context):
             break
         if attempt == _UNVERIFIED_RETRIES:
-            return _guidance(REASON_QUOTE_NOT_FOUND)
+            repaired = repair_light_followup(
+                context, question, light, llm_client=llm_client
+            )
+            if repaired and repaired["answerable"] and verify_light_answer(
+                repaired["evidence_quotes"], context
+            ):
+                light = repaired
+                break
+            if repaired and repaired["answerable"]:
+                # 보정 답변의 핵심 수치를 기준으로 원문 인용을 다시 찾는다.
+                light = repaired
+            recovered = _recover_context_quote(light["answer"], context)
+            if recovered is None:
+                return _guidance(REASON_QUOTE_NOT_FOUND)
+            # 모델이 표현을 바꿔 쓴 경우에도 원문에서 복구한 인용만 사용한다.
+            light["evidence_quotes"] = [recovered]
         time.sleep(_RETRY_BACKOFF_SECONDS)
 
     if not verify_answer_consistency(
@@ -410,6 +458,37 @@ def verify_light_answer(evidence_quotes: Iterable, context_text: object) -> bool
     if not quotes:
         return False
     return all(quote in haystack for quote in quotes)
+
+
+def _recover_context_quote(answer: str, context_text: str) -> str | None:
+    """모델이 근거를 요약해 썼을 때 답변과 일치하는 원문 구절을 복구한다.
+
+    검증을 느슨하게 하지 않고, 최종 인용은 항상 컨텍스트에서 가져온다.
+    금액·날짜·횟수 같은 핵심 수치가 답변과 원문에 모두 있어야 하며,
+    수치가 없는 일반 질문은 의미 토큰이 두 개 이상 겹치는 문장만 허용한다.
+    """
+    answer = _normalize(answer)
+    context = _normalize(context_text)
+    if not answer or not context:
+        return None
+    answer_facts = set(_FACT_TOKEN_RE.findall(answer))
+    # 수치가 포함된 답변만 자동 복구한다. 일반 답변의 가짜 인용을
+    # 임의의 유사 문장으로 바꾸면 기존 fail-closed 검증을 우회할 수 있다.
+    if not answer_facts:
+        return None
+    answer_words = {w for w in re.findall(r"[가-힣A-Za-z]{2,}", answer)}
+    candidates = [s.strip() for s in re.split(r"(?<=[.!?。！？])\s+|\n", context) if s.strip()]
+    best: tuple[int, str] | None = None
+    for candidate in candidates:
+        candidate_facts = set(_FACT_TOKEN_RE.findall(candidate))
+        if answer_facts and not answer_facts.issubset(candidate_facts):
+            continue
+        overlap = len(answer_words & set(re.findall(r"[가-힣A-Za-z]{2,}", candidate)))
+        if (answer_facts and overlap >= 1) or (not answer_facts and overlap >= 2):
+            score = overlap + len(candidate_facts) * 3
+            if best is None or score > best[0]:
+                best = (score, candidate)
+    return best[1] if best else None
 
 
 _CONSISTENCY_SYSTEM_PROMPT = (
