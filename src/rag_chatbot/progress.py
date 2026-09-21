@@ -113,6 +113,7 @@ class ProgressRegistry:
         owner: object | None = None,
         aliases: Iterable[str] = (),
         carried_steps: int = 0,
+        carried_seconds: float = 0.0,
     ) -> None:
         """요청 하나의 추적을 시작한다(같은 키의 이전 기록은 덮어쓴다).
 
@@ -124,9 +125,8 @@ class ProgressRegistry:
         재개하는 요청은 그래프를 처음부터 다시 돌지 않고 멈춘 자리에서
         이어가는데(builder.py E18b: N10a -> N9), 그때 진행률을 0부터 다시
         그리면 사용자에게는 "답했더니 처음부터 다시 함"으로 보인다. 이미
-        끝낸 만큼을 물려받아 막대가 뒤로 가지 않게 한다. 경과 시간(초)은
-        이번 요청 기준으로 새로 잰다 - 누적 대기 시간이 아니라 "지금 이
-        요청이 얼마나 걸리고 있는지"가 궁금한 값이기 때문이다.
+        끝낸 만큼을 물려받아 막대가 뒤로 가지 않게 한다. ``carried_seconds``는
+        같은 상담의 이전 처리 시간으로, 사용자 답변을 기다린 시간은 제외한다.
         """
 
         now = time.monotonic()
@@ -142,7 +142,7 @@ class ProgressRegistry:
             self._records[key] = _Record(
                 owner=owner,
                 total_steps=max(int(total_steps), 1),
-                started_at=now,
+                started_at=now - max(carried_seconds, 0.0),
                 updated_at=now,
                 completed=carried,
                 floor_fraction=floor,

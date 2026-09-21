@@ -142,13 +142,23 @@ def _begin_progress(
     """
 
     carried = PROGRESS.completed_steps(session_id) if resuming else 0
+    record = chat_session_store.get(session_id, user_id=user_id)
     PROGRESS.start(
         session_id,
         total_steps=max(18, carried + EXPECTED_RESUME_NODE_COUNT) if resuming else EXPECTED_NODE_COUNT,
         owner=user_id,
         aliases=(progress_token,) if progress_token else (),
         carried_steps=carried,
+        carried_seconds=record.elapsed_seconds if record else 0.0,
     )
+
+
+def _finish_progress(session_id: str, *, user_id: int, failed: bool = False) -> None:
+    PROGRESS.finish(session_id, failed=failed)
+    record = chat_session_store.get(session_id, user_id=user_id)
+    progress = PROGRESS.snapshot(session_id, owner=user_id)
+    if record is not None and progress is not None:
+        record.elapsed_seconds = progress["elapsed_seconds"]
 
 
 def _start_chat(
@@ -174,10 +184,10 @@ def _start_chat(
         response = ChatResponse.model_validate(raw)
         chat_session_store.create(session_id, user_id=user_id)
         _cache_last_response(session_id, raw)
-        PROGRESS.finish(session_id)
+        _finish_progress(session_id, user_id=user_id)
         return response
     except Exception:
-        PROGRESS.finish(session_id, failed=True)
+        _finish_progress(session_id, user_id=user_id, failed=True)
         # 초기화 실패 때 get_graph()를 다시 호출하면 다른 그래프를 만들 수 있다.
         # 두 정리는 독립적으로 시도하고 원래 HTTP 오류는 그대로 전달한다.
         try:
@@ -223,9 +233,9 @@ def continue_chat(
             _cache_last_response(session_id, raw)
             response = ChatResponse.model_validate(raw)
         except Exception:
-            PROGRESS.finish(session_id, failed=True)
+            _finish_progress(session_id, user_id=user_id, failed=True)
             raise
-        PROGRESS.finish(session_id)
+        _finish_progress(session_id, user_id=user_id)
         return response
 
 
