@@ -321,6 +321,62 @@ class FailedLoginTransactionTests(unittest.TestCase):
                     conn.commit.assert_not_called()
 
 
+@unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
+class TLSConnectionTests(unittest.TestCase):
+    def test_ssl_mode_connection_contract(self):
+        import ssl
+        from rag_chatbot.auth._mysql import MySQLBackend
+
+        backend = MySQLBackend({
+            "host": "db.invalid", "port": 3310, "user": "test-user",
+            "password": "synthetic-password", "database": "test-db",
+        })
+        expected = {
+            "host": "db.invalid", "port": 3310, "user": "test-user",
+            "password": "synthetic-password", "database": "test-db",
+            "charset": "utf8mb4", "cursorclass": pymysql.cursors.DictCursor,
+            "autocommit": True, "connect_timeout": 7,
+            "read_timeout": 30, "write_timeout": 30,
+        }
+        for mode, required in (
+            (None, False), ("", False), ("  ", False),
+            ("REQUIRED", True), (" required ", True),
+            ("REQUIERD", None), ("DISABLED", None), ("VERIFY_CA", None),
+        ):
+            with self.subTest(mode=mode), patch.dict(os.environ, {
+                "AUTH_DB_URL": "", "AUTH_DB_CONNECT_TIMEOUT": "7",
+            }), patch("rag_chatbot.auth._mysql.pymysql.connect") as connect:
+                if mode is None:
+                    os.environ.pop("AUTH_DB_SSL_MODE", None)
+                else:
+                    os.environ["AUTH_DB_SSL_MODE"] = mode
+                self.assertIsInstance(repo.get_backend(), repo.SqliteBackend)
+                if required is None:
+                    with self.assertRaises(AuthBackendUnavailableError):
+                        backend.connect()
+                    connect.assert_not_called()
+                    continue
+                self.assertIs(backend.connect(), connect.return_value)
+                connect.assert_called_once()
+                kwargs = connect.call_args.kwargs.copy()
+                context = kwargs.pop("ssl", None)
+                self.assertEqual(kwargs, expected)
+                if required:
+                    self.assertIsInstance(context, ssl.SSLContext)
+                    self.assertEqual(context.protocol, ssl.PROTOCOL_TLS_CLIENT)
+                    self.assertFalse(context.check_hostname)
+                    self.assertEqual(context.verify_mode, ssl.CERT_NONE)
+                else:
+                    self.assertIsNone(context)
+        with patch.dict(os.environ, {"AUTH_DB_SSL_MODE": "REQUIRED"}), patch(
+            "rag_chatbot.auth._mysql.pymysql.connect",
+            side_effect=pymysql.err.OperationalError(2026, "TLS unavailable"),
+        ) as connect:
+            with self.assertRaises(AuthBackendUnavailableError):
+                backend.connect()
+            connect.assert_called_once()
+
+
 @unittest.skipUnless(_LIVE_URL, "AUTH_TEST_DB_URL 미설정 — 라이브 DB 테스트 skip")
 @unittest.skipUnless(_HAS_PYMYSQL, "pymysql 미설치")
 class LiveRemoteDbTests(unittest.TestCase):

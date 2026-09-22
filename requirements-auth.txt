@@ -10,4 +10,4 @@ cryptography>=42.0
 
 # 원격 회원 DB(MySQL/MariaDB) 드라이버. FastAPI 백엔드 설치 시 함께 설치된다.
 # 배포 절차: docs/AUTH_REMOTE_DB.md
-pymysql>=1.1
+pymysql>=1.2.3

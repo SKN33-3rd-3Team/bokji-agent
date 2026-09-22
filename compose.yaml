@@ -1,0 +1,36 @@
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - /home/ubuntu/.config/bokji-agent/backend.env
+    environment:
+      COOKIE_SECURE: "true"
+      MIGRATIONS: "validate"
+    volumes:
+      - backend_runtime:/app/.runtime
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:80:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  backend_runtime:

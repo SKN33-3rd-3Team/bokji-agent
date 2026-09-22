@@ -32,6 +32,34 @@ python -m uvicorn backend.app.main:app --reload --port 8000
 
 `/healthz`는 프로세스 응답 확인용이고 DB·LLM 준비 완료를 보장하지 않는다. 실제 벡터 데이터·임베딩 설정이 없으면 그래프 워밍업 실패 후에도 서버는 뜨지만, 그래프가 필요한 요청에서 `503 VECTOR_STORE_UNAVAILABLE`이 발생할 수 있다. 회원·옵션 API는 벡터 DB에 의존하지 않는다.
 
+## EC2 Docker 실행
+
+실제 DB 접속정보는 저장소 밖
+`/home/ubuntu/.config/bokji-agent/backend.env`에 보관한다.
+전용 디렉터리 권한은 `700`, 파일 권한은 `600`으로 설정하고
+Compose의 `backend.env_file`에서 참조한다.
+
+회원 DB와 TLS 설정은 [원격 회원 DB 안내](../docs/AUTH_REMOTE_DB.md)를 따른다.
+
+프로젝트 루트에서 실행한다.
+
+```bash
+sudo docker compose config -q &&
+sudo docker compose build backend &&
+sudo docker compose up -d --force-recreate --wait --wait-timeout 180 backend nginx
+```
+
+백엔드와 Nginx를 함께 재생성하여 새 백엔드 컨테이너 주소를 반영한다.
+기존 런타임 볼륨과 data 마운트는 유지한다.
+
+```bash
+sudo docker compose ps
+curl -fsS http://127.0.0.1/healthz
+```
+
+health 응답은 HTTP 서버 상태를 확인한다.
+회원 DB의 TLS 연결과 회원가입·로그인·프로필 저장은 별도로 검증한다.
+
 ## 구성과 API 범위
 
 | 경로 | 역할 |

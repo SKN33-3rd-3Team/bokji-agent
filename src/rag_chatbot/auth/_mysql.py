@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import os
+import ssl
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -126,6 +127,17 @@ class MySQLBackend:
 
     # -- 연결 -----------------------------------------------------------
     def connect(self):
+        ssl_mode = os.environ.get("AUTH_DB_SSL_MODE", "").strip().upper()
+        if ssl_mode not in {"", "REQUIRED"}:
+            raise AuthBackendUnavailableError(
+                "AUTH_DB_SSL_MODE는 비워 두거나 REQUIRED로 설정하세요."
+            )
+        ssl_context = None
+        if ssl_mode == "REQUIRED":
+            # REQUIRED는 암호화만 강제하며 서버 인증서와 호스트 이름은 검증하지 않는다.
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
         try:
             return pymysql.connect(
                 host=self._dsn["host"],
@@ -139,6 +151,7 @@ class MySQLBackend:
                 connect_timeout=_connect_timeout(),
                 read_timeout=30,
                 write_timeout=30,
+                ssl=ssl_context,
             )
         except _MySQLOperationalError as exc:
             raise AuthBackendUnavailableError(
