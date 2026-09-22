@@ -23,7 +23,14 @@ export function usePolicyQuestion(sessionId: string | null, policyId: string | n
     onSuccess: (response) => {
       setHistory((prev) => [
         ...prev,
-        { role: "assistant", text: response.text, kind: response.kind, evidenceQuotes: response.evidence_quotes },
+        {
+          role: "assistant",
+          text: response.text,
+          kind: response.kind,
+          evidenceQuotes: response.evidence_quotes,
+          reasonMessage: response.reason_message,
+          llmStatus: response.llm_status,
+        },
       ]);
     },
   });

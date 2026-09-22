@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChatBubble } from "./ChatBubble";
 import { LlmDebugPanel } from "./LlmDebugPanel";
 import { BirthDateSelect } from "@/components/common/BirthDateSelect";
+import { UnknownToggle } from "@/components/common/UnknownToggle";
 import { stripNumberedSlotList } from "@/utils/chatQuestion";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import {
@@ -11,6 +12,7 @@ import {
   GENDER_LABELS_KO,
   INCOME_BRACKET_LABELS_KO,
   SLOT_LABELS_KO,
+  UNKNOWN_FIELD_NOTE,
 } from "@/constants/labels";
 import type { ChatResponse, HardGateSlot } from "@/types/chat";
 
@@ -77,25 +79,15 @@ export function SlotFollowupForm({ response, onSubmit, isSubmitting }: SlotFollo
           const isSkipped = Boolean(skipped[slot]);
           return (
             <div className="field" key={slot}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="field-head">
                 <label>{SLOT_LABELS_KO[slot]}</label>
-                <button
-                  type="button"
-                  onClick={() => toggleSkip(slot)}
-                  style={{
-                    background: isSkipped ? "var(--primary-soft)" : "none",
-                    color: isSkipped ? "var(--primary)" : "var(--text-faint)",
-                    border: "none",
-                    borderRadius: 999,
-                    fontSize: 11.5,
-                    fontWeight: 700,
-                    padding: "3px 10px",
-                    cursor: "pointer",
-                  }}
-                >
-                  {isSkipped ? "모름 ✓" : "모름"}
-                </button>
+                <UnknownToggle
+                  active={isSkipped}
+                  onToggle={() => toggleSkip(slot)}
+                  fieldLabel={SLOT_LABELS_KO[slot]}
+                />
               </div>
+              {isSkipped && <p className="field-unknown-note">{UNKNOWN_FIELD_NOTE}</p>}
 
               {!isSkipped && slot === "region" && (
                 <div className="select-shell">

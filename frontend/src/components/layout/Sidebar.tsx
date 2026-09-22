@@ -2,8 +2,10 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/features/auth/useAuth";
 import { SearchScopeSidebar } from "@/components/chat/SearchScopeSidebar";
+import { ConfirmModal } from "@/components/common/ConfirmModal";
 
 interface SidebarProps {
+  showSearchScope?: boolean;
   onNewChat: () => void;
   isResettingChat: boolean;
   supportConditions: string[];
@@ -16,6 +18,7 @@ interface SidebarProps {
 
 /** S-03 좌측 사이드바(마이페이지/로그아웃/새 상담) + S-04(검색 범위 조정). */
 export function Sidebar({
+  showSearchScope = true,
   onNewChat,
   isResettingChat,
   supportConditions,
@@ -28,9 +31,11 @@ export function Sidebar({
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [scopeExpanded, setScopeExpanded] = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
 
   const handleLogout = async () => {
     await logout();
+    setConfirmingLogout(false);
     navigate("/login");
   };
 
@@ -59,7 +64,7 @@ export function Sidebar({
         </svg>
         마이페이지
       </Link>
-      <button type="button" className="sb-btn" onClick={handleLogout}>
+      <button type="button" className="sb-btn" onClick={() => setConfirmingLogout(true)}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
           <path d="M16 17l5-5-5-5" />
@@ -78,6 +83,7 @@ export function Sidebar({
         새 상담 시작
       </button>
 
+      {showSearchScope && <>
       <div className="sb-divider" />
 
       <button
@@ -102,6 +108,16 @@ export function Sidebar({
           onTopKChange={onTopKChange}
         />
       )}
+      </>}
+      <ConfirmModal
+        open={confirmingLogout}
+        title="로그아웃할까요?"
+        description="현재 로그인된 계정에서 로그아웃합니다."
+        confirmLabel="로그아웃"
+        cancelLabel="취소"
+        onConfirm={() => void handleLogout()}
+        onCancel={() => setConfirmingLogout(false)}
+      />
     </aside>
   );
 }

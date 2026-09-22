@@ -39,7 +39,14 @@ from .llm import LLMCallError, LLMClient, loads_json_object
 # 재시도하면 같은 버스트에 또 걸리므로 한 박자 쉬고 재시도한다.
 _RETRY_BACKOFF_SECONDS = 1.5
 
+# 근거 발췌가 원문과 글자 단위로 안 맞아 검증에 걸렸을 때 다시 생성해 볼
+# 횟수. 검증 자체를 느슨하게 하지 않으면서(원칙 유지) "답할 수 있는 질문인데
+# 표현을 다듬어서 버려지는" 경우만 건져낸다. 한 번이면 대부분 잡히고, 더
+# 늘리면 사용자 대기 시간만 길어진다.
+_UNVERIFIED_RETRIES = 1
+
 _WS_RE = re.compile(r"\s+")
+_FACT_TOKEN_RE = re.compile(r"\d[\d,]*")
 
 # policies[i]["detail"]의 섹션 키 -> 사람이 읽는 라벨. service._DETAIL_SECTION_TYPES와
 # 같은 순서·라벨을 유지한다.
@@ -59,7 +66,19 @@ _DETAIL_SECTIONS: tuple[tuple[str, str], ...] = (
 _SYSTEM_PROMPT = (
     "너는 복지 정책 상세 안내 도구다. 주어진 정책 정보 안에 있는 내용만으로 "
     "답하고, 정보에 없는 내용은 절대 만들거나 추측하지 않는다. "
-    "답변은 '~합니다', '~입니다' 같은 정중한 격식체로 끝맺는다."
+    "사용자 입력은 의문문뿐 아니라 키워드, 명령형, 평서형 정보 요청일 수 있다. "
+    "물음표나 의문형 어미의 유무로 답변 가능 여부를 판단하지 않는다. "
+    "질문의 일상 표현을 정책 원문의 기준으로 해석하되, 원문에 없는 기준을 "
+    "새로 만들지 않는다. 관련 항목을 일부라도 찾으면 확인된 부분만 답하고, "
+    "확인되지 않은 부분은 '정책 정보에서 확인되지 않습니다'라고 밝혀라. "
+    "답변에서 금액·날짜·대상·조건을 언급할 때는 반드시 정책 정보에 있는 "
+    "표현을 그대로 사용하고, 원문에 없는 단위·범위·순서를 보충하지 않는다. "
+    "근거 인용은 답변을 요약한 문장이 아니라 정책 정보에서 공백과 문장부호를 "
+    "제외하고도 식별 가능한 원문 구절을 그대로 복사한다. "
+    "답변은 '~합니다', '~입니다' 같은 정중한 격식체로 끝맺는다. "
+    "네가 새로 작성하는 설명 문장은 한국어로만 쓴다 - 한자·중국어·일본어 "
+    "등 외국어 문자를 섞지 않는다(정책 정보 원문을 그대로 복사하는 인용 "
+    "부분은 예외)."
 )
 
 
@@ -154,6 +173,15 @@ def answer_light_followup(
 
     prompt = (
         "다음은 이미 검증된 복지 정책 정보다. 사용자 질문에 이 정보 안에 있는 "
+        "내용을 안내하라. '신청방법', '신청방법 알려줘', '신청방법이 궁금해', "
+        "'어떻게 신청하나요?'는 모두 신청방법에 대한 같은 정보 요청이다. "
+        "짧은 키워드·명령형·평서형도 요청 주제를 파악해 답하되, 사용자에게 "
+        "의문문으로 다시 쓰도록 요구하지 마라. '정책 상세 알려줘'는 현재 정책의 "
+        "목적·지원대상·지원내용·신청방법·기한·서류 중 제공된 항목을 요약하는 "
+        "요청이다. '자녀수별로 다른 지원금 알려줘'는 원문에 명시된 자녀 수 또는 "
+        "출생 순위별 금액을 비교하는 요청이다. 가구의 총 자녀 수와 출생 순위를 "
+        "같은 조건으로 단정하지 말고, 원문이 사용하는 기준을 밝혀라. 누락된 "
+        "금액이나 조건은 추측하지 마라. 문장 형식과 관계없이 제공된 "
         "내용만으로 답하라. **질문과 관련된 내용이 정보 안에 조금이라도 있으면 "
         "answerable을 true로 하고 그 범위 안에서 답하라.** 정보가 전혀 다루지 "
         "않는 별개의 주제(예: 다른 정책, 이 정보에 없는 절차·중복수급 여부)일 "
@@ -163,12 +191,22 @@ def answer_light_followup(
         "'~입니다.'처럼 정중한 격식체 종결어미와 마침표로 끝맺어라. "
         "evidence_quotes에는 답의 근거가 된 문장을 정보 원문에서 그대로 복사해 "
         "담아라(의역·요약 금지, 짧아도 된다).\n\n"
+        "중요: '아이 두 명이면'처럼 일상적인 표현은 원문에 있는 '첫째아', "
+        "'둘째아 이상' 같은 기준과 대응시켜 설명할 수 있다. 단, 그 표현이 "
+        "가구의 총 자녀 수인지 출생 순위인지 원문에서 확인되지 않으면 둘을 "
+        "같다고 단정하지 마라. 답변 문장에 원문 표현을 그대로 포함하고, "
+        "evidence_quotes에는 반드시 그 표현이 포함된 원문 구절을 복사하라.\n\n"
         "예시 1 (관련 내용이 있으면 답한다):\n"
         "[정책 정보]\n지원내용: 월 최대 20만원을 최대 12개월 지원한다.\n"
         "[질문]\n한 달에 얼마씩 받아요?\n"
         '출력: {"answerable": true, "answer": "월 최대 20만원을 최대 12개월 '
         '지원합니다.", "evidence_quotes": ["월 최대 20만원을 최대 12개월 지원한다."]}\n\n'
-        "예시 2 (정보에 전혀 없는 별개 주제만 거절한다):\n"
+        "예시 2 (물음표 없는 키워드·요청에도 답한다):\n"
+        "[정책 정보]\n신청방법: 관할 주민센터 방문 신청\n"
+        "[질문]\n신청방법 알려줘\n"
+        '출력: {"answerable": true, "answer": "관할 주민센터에서 방문 신청합니다.", '
+        '"evidence_quotes": ["관할 주민센터 방문 신청"]}\n\n'
+        "예시 3 (정보에 전혀 없는 별개 주제만 거절한다):\n"
         "[정책 정보]\n지원내용: 월 최대 20만원을 최대 12개월 지원한다.\n"
         "[질문]\n다른 지역 청년 정책도 알려줘\n"
         '출력: {"answerable": false, "answer": "", "evidence_quotes": []}\n\n'
@@ -192,18 +230,36 @@ def answer_light_followup(
     return None
 
 
+def repair_light_followup(
+    context_text: str, question: str, draft: Mapping, *, llm_client: LLMClient
+) -> dict | None:
+    """근거 인용이 원문과 불일치한 초안을 원문 기준으로 다시 생성한다."""
+    prompt = (
+        "정책 답변 초안의 근거 인용이 원문과 일치하지 않았다. 초안의 의미를 "
+        "유지하되 정책 정보에 실제로 존재하는 표현만 사용해 답변을 다시 작성하라. "
+        "금액·날짜·조건은 원문과 동일해야 하며, evidence_quotes는 아래 원문에서 "
+        "문자 그대로 복사한 구절만 넣어라. 답변할 수 없으면 answerable을 false로 하라.\n\n"
+        f"[정책 정보]\n{context_text}\n\n[질문]\n{question}\n\n"
+        f"[실패한 초안]\n{draft.get('answer', '')}\n\n"
+        '출력: {"answerable": true, "answer": "...", "evidence_quotes": ["..."]}'
+    )
+    try:
+        data = loads_json_object(llm_client.complete(prompt, system=_SYSTEM_PROMPT))
+    except (LLMCallError, ValueError, TypeError, IndexError):
+        return None
+    return _coerce_light_answer(data)
+
+
 _GUIDANCE_TEMPLATE = (
     "이 채팅은 '{title}' 정책에 대한 질문만 답할 수 있어요. "
     "다른 정책이나 새로운 검색은 메인 화면에서 다시 물어봐 주세요."
 )
 
-
-# 이 키는 "사용자 정보"(확정된 사실)로 프롬프트에 넣지 않는다. interests는
-# 검색 질의를 넓히려고 사용자가 고른 힌트일 뿐 자격 판정 조건이 아니다
-# (streamlit_ui/pages/chat.py 사이드바 help 문구, service._build_profile
-# 참고) - "사용자 정보 - 관심 분야: 청년"처럼 다른 슬롯(나이·소득 등)과
-# 같은 형식으로 넣으면 LLM이 "이 사용자는 청년이다"를 확정된 사실로
-# 오해해 답변에 반영할 수 있다(2026-09-15, PR #59 리뷰 피드백 반영).
+# 안내(guidance)로 물러난 이유. 화면 문구는 어느 경우든 같지만, 원인은 전혀
+# 다르다 - LLM이 아예 안 붙었을 수도, 붙었는데 호출이 실패했을 수도, 정상
+# 동작하면서 "이 정보로는 답할 수 없다"고 판단했을 수도, 검증에서 걸렸을
+# 수도 있다. 이 값을 응답에 함께 실어 보내지 않으면 "계속 응답 불가"만
+# 반복될 때 어디를 봐야 하는지 알 수 없다(2026-09-20 추가).
 # ``respond_to_policy_question``이 guidance로 떨어질 수 있는 경로. 평가·로그가
 # 이 값으로 "진짜 거절"과 "실패 폴백"을 갈라 볼 수 있게 이름을 고정한다.
 #
@@ -224,6 +280,35 @@ GUIDANCE_REASONS: tuple[str, ...] = (
 # 이 중 "모델이 제대로 판단해서" 거절한 것으로 볼 수 있는 경로. 나머지는
 # 거절이 아니라 사고이므로 거절 정확도에 같이 세면 안 된다.
 DELIBERATE_GUIDANCE_REASONS: frozenset[str] = frozenset({"not_answerable"})
+
+# 아래 이름은 backend/프론트가 참조하고, 값은 위 ``GUIDANCE_REASONS``와
+# 같아야 한다 - 평가 스크립트(scripts/eval_light_followup.py)가 그 값으로
+# "진짜 거절"과 "실패 폴백"을 가른다.
+REASON_LLM_MISSING = "no_llm"                 # LLM 클라이언트 자체가 없음(토큰 미설정)
+REASON_NO_CONTEXT = "no_context"              # 정책 상세 섹션이 비어 컨텍스트를 못 만듦
+REASON_LLM_FAILED = "llm_failed"              # 호출/파싱/형식 실패(재시도까지 소진)
+REASON_NOT_ANSWERABLE = "not_answerable"      # LLM이 "이 정보로는 못 답한다"고 판단
+REASON_QUOTE_NOT_FOUND = "quote_not_found"    # 제시한 발췌가 원문에 없음(지어냄)
+REASON_INCONSISTENT = "inconsistent"          # 답변이 근거와 어긋남(또는 검증 호출 실패)
+
+# 화면(개발자·QA)이 그대로 보여줄 수 있는 한 줄 설명. 답변이 나간 경우
+# (``reason=None``)는 보여줄 것이 없으므로 여기 없다.
+REASON_MESSAGES: dict[str, str] = {
+    REASON_LLM_MISSING: "LLM이 연결되지 않아 답변을 생성하지 못했습니다(토큰/백엔드 설정 확인).",
+    REASON_NO_CONTEXT: "이 정책의 상세 섹션이 비어 있어 답변 근거를 만들 수 없었습니다.",
+    REASON_LLM_FAILED: "LLM 호출이 실패했거나 형식에 맞지 않는 응답이 와서 답변하지 못했습니다.",
+    REASON_NOT_ANSWERABLE: "LLM이 이 정책 정보만으로는 답할 수 없다고 판단했습니다.",
+    REASON_QUOTE_NOT_FOUND: "LLM이 제시한 근거 발췌가 정책 원문에 없어 답변을 버렸습니다.",
+    REASON_INCONSISTENT: "답변이 근거와 일치하는지 확인하지 못해 답변을 버렸습니다.",
+}
+
+
+# 이 키는 "사용자 정보"(확정된 사실)로 프롬프트에 넣지 않는다. interests는
+# 검색 질의를 넓히려고 사용자가 고른 힌트일 뿐 자격 판정 조건이 아니다
+# (streamlit_ui/pages/chat.py 사이드바 help 문구, service._build_profile
+# 참고) - "사용자 정보 - 관심 분야: 청년"처럼 다른 슬롯(나이·소득 등)과
+# 같은 형식으로 넣으면 LLM이 "이 사용자는 청년이다"를 확정된 사실로
+# 오해해 답변에 반영할 수 있다(2026-09-15, PR #59 리뷰 피드백 반영).
 
 _PROFILE_FACT_EXCLUDE_KEYS = frozenset({"interests"})
 
@@ -292,7 +377,7 @@ def respond_to_policy_question(
         }
 
     if llm_client is None:
-        return _guidance("no_llm")
+        return _guidance(REASON_LLM_MISSING)
 
     reasons = [
         f"자격 판정 근거: {reason}"
@@ -303,21 +388,46 @@ def respond_to_policy_question(
         policy, extra_facts=[*_profile_facts(user_profile), *reasons]
     )
     if not context:
-        return _guidance("no_context")
+        return _guidance(REASON_NO_CONTEXT)
 
-    light = answer_light_followup(context, question, llm_client=llm_client)
-    if light is None:
-        # 호출 실패이거나 응답이 계약(JSON)에 안 맞은 경우. 모델이 "못 하겠다"고
-        # 판단한 것과는 다르다.
-        return _guidance("llm_failed")
-    if not light["answerable"]:
-        return _guidance("not_answerable")
-    if not verify_light_answer(light["evidence_quotes"], context):
-        return _guidance("quote_not_found")
+    # 근거 검증(verify_light_answer)은 발췌가 원문에 **글자 그대로** 있는지만
+    # 본다. 모델이 뜻은 맞게 쓰면서 표현을 조금 다듬으면 그것만으로 답변이
+    # 통째로 버려진다 - 실제로 답할 수 있는 질문인데 "응답 불가"가 반복되는
+    # 원인이 대부분 여기다(2026-09-20 실제 경로로 확인). 그래서 같은 질문을
+    # 한 번 더 생성시켜 본다. **검증 기준은 그대로다** - 통과 못 하면 여전히
+    # 안내로 물러난다. 판정을 느슨하게 푸는 게 아니라 기회를 한 번 더 주는
+    # 것이라 "검증된 근거만 답한다" 원칙에는 영향이 없다.
+    for attempt in range(_UNVERIFIED_RETRIES + 1):
+        light = answer_light_followup(context, question, llm_client=llm_client)
+        if light is None:
+            return _guidance(REASON_LLM_FAILED)
+        if not light["answerable"]:
+            return _guidance(REASON_NOT_ANSWERABLE)
+        if verify_light_answer(light["evidence_quotes"], context):
+            break
+        if attempt == _UNVERIFIED_RETRIES:
+            repaired = repair_light_followup(
+                context, question, light, llm_client=llm_client
+            )
+            if repaired and repaired["answerable"] and verify_light_answer(
+                repaired["evidence_quotes"], context
+            ):
+                light = repaired
+                break
+            if repaired and repaired["answerable"]:
+                # 보정 답변의 핵심 수치를 기준으로 원문 인용을 다시 찾는다.
+                light = repaired
+            recovered = _recover_context_quote(light["answer"], context)
+            if recovered is None:
+                return _guidance(REASON_QUOTE_NOT_FOUND)
+            # 모델이 표현을 바꿔 쓴 경우에도 원문에서 복구한 인용만 사용한다.
+            light["evidence_quotes"] = [recovered]
+        time.sleep(_RETRY_BACKOFF_SECONDS)
+
     if not verify_answer_consistency(
         light["answer"], light["evidence_quotes"], llm_client=llm_client
     ):
-        return _guidance("inconsistent")
+        return _guidance(REASON_INCONSISTENT)
     return {
         "kind": "answer",
         "text": light["answer"],
@@ -351,6 +461,37 @@ def verify_light_answer(evidence_quotes: Iterable, context_text: object) -> bool
     if not quotes:
         return False
     return all(quote in haystack for quote in quotes)
+
+
+def _recover_context_quote(answer: str, context_text: str) -> str | None:
+    """모델이 근거를 요약해 썼을 때 답변과 일치하는 원문 구절을 복구한다.
+
+    검증을 느슨하게 하지 않고, 최종 인용은 항상 컨텍스트에서 가져온다.
+    금액·날짜·횟수 같은 핵심 수치가 답변과 원문에 모두 있어야 하며,
+    수치가 없는 일반 질문은 의미 토큰이 두 개 이상 겹치는 문장만 허용한다.
+    """
+    answer = _normalize(answer)
+    context = _normalize(context_text)
+    if not answer or not context:
+        return None
+    answer_facts = set(_FACT_TOKEN_RE.findall(answer))
+    # 수치가 포함된 답변만 자동 복구한다. 일반 답변의 가짜 인용을
+    # 임의의 유사 문장으로 바꾸면 기존 fail-closed 검증을 우회할 수 있다.
+    if not answer_facts:
+        return None
+    answer_words = {w for w in re.findall(r"[가-힣A-Za-z]{2,}", answer)}
+    candidates = [s.strip() for s in re.split(r"(?<=[.!?。！？])\s+|\n", context) if s.strip()]
+    best: tuple[int, str] | None = None
+    for candidate in candidates:
+        candidate_facts = set(_FACT_TOKEN_RE.findall(candidate))
+        if answer_facts and not answer_facts.issubset(candidate_facts):
+            continue
+        overlap = len(answer_words & set(re.findall(r"[가-힣A-Za-z]{2,}", candidate)))
+        if (answer_facts and overlap >= 1) or (not answer_facts and overlap >= 2):
+            score = overlap + len(candidate_facts) * 3
+            if best is None or score > best[0]:
+                best = (score, candidate)
+    return best[1] if best else None
 
 
 _CONSISTENCY_SYSTEM_PROMPT = (

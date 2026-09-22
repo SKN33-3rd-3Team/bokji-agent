@@ -84,10 +84,14 @@ health 응답은 HTTP 서버 상태를 확인한다.
 | API-08 | `GET /users/me/chat-defaults` | `known_*` 프리필, `employment_status_available=false` |
 | API-09 | `GET /config/search-options` | 가입·프로필·검색 폼 옵션 |
 | API-10 | `POST /chat/messages` | 새 상담, 서버가 채팅 ID 발급 |
-| API-11 | `POST /chat/sessions/{session_id}/followup` | 중단 질문 응답 또는 정상 완료 상담의 새 턴 |
+| API-11 | `POST /chat/sessions/{session_id}/followup` | 중단 질문 응답 또는 정상 완료 상담의 새 턴. 계산 되묻기 답변(`calc_answers`)은 항목별 "모름"을 `unknown_slots`/`unknown_choices`로 받는다 |
 | API-12 | `POST /chat/sessions/{session_id}/policies/{policy_id}/questions` | 마지막 응답의 특정 정책에 대한 문의 |
 | API-13 | `DELETE /chat/sessions/{session_id}` | 소유한 채팅 세션·체크포인트 삭제 |
 | API-14 | `POST /chat/recommendations` | 인증된 회원의 DB 저장 프로필로 질문 없는 자동 추천 |
+| (부가) | `GET /chat/progress/{token}` | 진행 중인 상담의 현재 단계·진행률. 요청 시 `X-Progress-Token` 헤더로 보낸 값으로 조회하며, 본인 요청만 보인다 |
+| (부가) | `GET /config/status` | 서버 구동 워밍업(임베딩 모델 로드) 상태. 인증 불필요 |
+
+API-01~14 외의 두 경로는 원본 정의서에 없는 부가 엔드포인트다. `GET /chat/progress/{token}`은 API-10/11/14가 도는 동안 프론트 진행 막대가 폴링한다 - 회원별 직렬화 잠금(`user_operation`)을 쓰지 않으므로 상담이 도는 중에도 읽힌다. `GET /config/status`는 구동 직후 임베딩 모델 로딩이 끝났는지 알려준다(워밍업은 `main.lifespan`이 별도 스레드에서 돌린다).
 
 S-01/02/09는 인증·프로필 API, S-03/04/05는 상담·옵션 API, S-06/07/10은 동일한 `policies` 응답을 재사용한다. 상세·비교 전용 API는 없다. S-08 문의는 `kind`, `text`, `evidence_quotes`를 반환하며 `policies` 배열은 반환하지 않는다. 문의 이력은 서버에 저장하지 않고 화면에서 다이얼로그가 열린 동안만 관리하는 요구사항이다.
 

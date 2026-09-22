@@ -107,6 +107,77 @@ def test_structured_resume_applies_exact_answers_and_amount(client, calculation,
     assert len(calls) == 2
 
 
+def test_structured_resume_tolerates_the_context_fields_the_frontend_resends(client, calculation):
+    """프론트(useChatSession)는 최초 턴에 보낸 top_k/extra_interests/known_*를
+    되묻기 요청에도 그대로 동봉한다 - 계산 답변 요청에서도 그 동봉 때문에
+    400이 나면 안 된다(FollowupRequest는 모르는 필드를 무시한다)."""
+
+    _, _, first = calculation
+    response = client.post(
+        f"/api/v1/chat/sessions/{first['session_id']}/followup",
+        json={
+            "calc_answers": _answers(first),
+            "top_k": 5,
+            "extra_interests": ["청년"],
+            "known_region": "서울특별시",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "answered"
+
+
+def test_unknown_marks_a_single_field_without_discarding_the_answered_ones(client, calculation):
+    """폼에서 항목별 "모름"을 고르면 그 항목만 미확인으로 확정된다.
+
+    자유 문장 경로는 원래 이걸 할 수 있었지만("혼인 상태는 기혼이고 나머지는
+    모르겠어요" -> apply_calc_skip), 구조화 경로에는 자리가 없어 폼에서는
+    "전부 답하거나 전부 건너뛰거나"뿐이었다. 아는 값까지 같이 버리면 안 된다.
+    """
+
+    graph, _, first = calculation
+    sid = first["session_id"]
+    answers = {
+        "interrupt_id": first["interrupt_id"],
+        "slots": {"children_count": 2, "marital_status": "married"},
+        "choices": {"birth": "제왕절개"},
+        # 숫자 슬롯도 "모름"이 될 수 있다(apply_calc_skip과 같은 state 모양).
+        "unknown_slots": ["household_size", "pregnancy_status"],
+        "unknown_choices": ["care"],
+    }
+    response = client.post(f"/api/v1/chat/sessions/{sid}/followup", json={"calc_answers": answers})
+    assert response.status_code == 200
+    assert response.json()["status"] == "answered"
+
+    state = graph.get_state({"configurable": {"thread_id": sid}}).values
+    assert state["slots"]["marital_status"] == "married"
+    assert state["slots"]["children_count"] == 2
+    assert state["slots"]["household_size"] == "unknown"
+    assert state["slots"]["pregnancy_status"] == "unknown"
+    assert state["calc_choice_answers"] == {"birth": "제왕절개", "care": "unknown"}
+    # 모름으로 확정된 항목은 다시 묻지 않는다.
+    assert response.json()["calc_missing_slots"] == []
+    assert response.json()["calc_missing_choices"] == []
+
+
+def test_unknown_numeric_slot_reports_it_as_unconfirmed_not_malformed(client):
+    """숫자 슬롯이 '모름'이면 "값이 올바르지 않아"가 아니라 "미확인"이어야 한다.
+
+    apply_calc_skip은 예전부터 children_count/household_size에도 UNKNOWN
+    센티넬을 넣어 왔는데, _select_tier_amount는 그걸 정수 검사에 먼저 걸어
+    형식 오류처럼 안내했다 - 사용자는 모른다고 답했을 뿐이다.
+    """
+
+    amount, note, missing = _select_tier_amount(
+        {"variable": "household_size", "tiers": [
+            {"label": "3인", "match_min": 3, "match_max": 3, "amount": 300},
+        ]},
+        {"household_size": "unknown"},
+        {},
+    )
+    assert (amount, missing) == (None, None)
+    assert "미확인" in note and "올바르지 않아" not in note
+
+
 def test_invalid_structured_answers_never_change_checkpoint(client, calculation):
     graph, calls, first = calculation
     sid = first["session_id"]
@@ -121,6 +192,12 @@ def test_invalid_structured_answers_never_change_checkpoint(client, calculation)
         {"choices": {"absent-policy": "입원"}}, {"choices": {"birth": "입원"}},
         {"interrupt_id": "stale"}, {"slots": {}, "choices": {}},
         {"unexpected": True},
+        # 항목별 "모름"도 현재 질문에 있는 항목이어야 하고, 같은 항목에 값과
+        # "모름"을 같이 보낼 수 없다(어느 쪽이 사용자의 뜻인지 알 수 없다).
+        {"unknown_slots": ["age"]}, {"unknown_slots": ["gender"]},
+        {"unknown_slots": ["marital_status"]}, {"unknown_choices": ["absent-policy"]},
+        {"unknown_choices": ["birth"]}, {"unknown_slots": "marital_status"},
+        {"unknown_slots": [None]},
     ]
     for invalid_fields in invalid:
         answers = {**_answers(first), **invalid_fields}

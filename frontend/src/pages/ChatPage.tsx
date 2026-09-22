@@ -8,27 +8,33 @@ import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ExamplePrompts } from "@/components/chat/ExamplePrompts";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
 import { SlotConflictForm } from "@/components/chat/SlotConflictForm";
-import { PolicySummaryStats } from "@/components/chat/PolicySummaryStats";
-import { PolicyCard } from "@/components/chat/PolicyCard";
-import { PolicyDetailView } from "@/components/chat/PolicyDetailView";
-import { PolicyCompareTable } from "@/components/chat/PolicyCompareTable";
-import { LlmDebugPanel } from "@/components/chat/LlmDebugPanel";
-import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { CalcFollowupForm } from "@/components/chat/CalcFollowupForm";
+import { ChatProgressBar } from "@/components/chat/ChatProgressBar";
 import { PolicyQuestionDialog } from "@/components/dialogs/PolicyQuestionDialog";
 import { useChatSession } from "@/features/chat/useChatSession";
-import { usePolicySelection } from "@/features/chat/usePolicySelection";
+import { ChatPolicyResult } from "@/components/chat/ChatPolicyResult";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
 import { useAuth } from "@/features/auth/useAuth";
 import { getChatDefaults } from "@/api/userApi";
 import { ApiError, toErrorMessage } from "@/api/client";
-import { CHAT_INPUT_PLACEHOLDER, GUIDANCE_OFFICIAL, INTRO_GREETING_BODY, INTRO_GREETING_HINT, INTRO_GREETING_TITLE } from "@/constants/labels";
-import type { PolicyView } from "@/types/chat";
+import {
+  CHAT_INPUT_PLACEHOLDER,
+  GUIDANCE_OFFICIAL,
+  INTRO_GREETING_BODY,
+  INTRO_GREETING_HINT,
+  INTRO_GREETING_TITLE,
+  INTRO_REQUIRED_HINT,
+  INTRO_REQUIRED_SLOTS,
+  INTRO_REQUIRED_TITLE,
+  SLOT_LABELS_KO,
+} from "@/constants/labels";
+import { followupKindOf } from "@/utils/chatQuestion";
+import type { CalculationAnswers, PolicyView } from "@/types/chat";
 import { FALLBACK_DEFAULT_TOP_K } from "@/constants/labels";
 
 export function ChatPage() {
   const { user } = useAuth();
   const chat = useChatSession();
-  const compare = usePolicySelection();
 
   const [input, setInput] = useState("");
   const [supportConditions, setSupportConditions] = useState<string[]>([]);
@@ -72,9 +78,12 @@ export function ChatPage() {
     });
   };
 
+  const submitCalcAnswers = (answers: CalculationAnswers) => {
+    void chat.sendCalcAnswers(answers, "지원금 계산에 필요한 정보를 입력했어요.");
+  };
+
   const handleNewChat = async () => {
     await chat.resetConversation();
-    compare.clear();
     setAskingPolicy(null);
   };
 
@@ -88,21 +97,21 @@ export function ChatPage() {
     }
   };
 
-  const handleCompareClick = () => {
-    if (compare.count >= 2) chat.openCompare();
-  };
-
   const isEmpty = chat.messages.length === 0;
   const response = chat.latestResponse;
-  // S05-01/02: 마지막 응답이 needs_input이면 폼을, answered면 정책 화면을 그린다.
-  const showFollowupUi = response?.status === "needs_input";
+  // S05-01/02/03: 마지막 응답이 needs_input이면 종류에 맞는 폼을, answered면
+  // 정책 화면을 그린다. 되묻기 종류를 구분하지 않으면 계산 되묻기(N10a)가
+  // 슬롯 폼으로 떨어져 필드 0개짜리 폼에 갇힌다(followupKindOf 주석 참고).
+  const followupKind = followupKindOf(response);
+  // 답을 보내는 중에는 폼을 내린다 - 방금 고른 값은 바로 위 사용자 말풍선에
+  // 이미 보이고, 그 아래 같은 질문 폼이 그대로 떠 있으면 "보낸 건가?" 싶다.
+  const showFollowupUi = followupKind !== "none" && !chat.isSending;
   const showPolicyUi = response?.status === "answered" && response.policies.length > 0;
 
-  // 마지막 assistant 메시지는 폼/정책 화면이 대신 보여주므로 버블 목록에서는 뺀다.
-  const bubbleMessages = showFollowupUi || showPolicyUi ? chat.messages.slice(0, -1) : chat.messages;
-
-  const selectedPolicies = response?.policies.filter((p) => compare.selectedIds.includes(p.policy_id)) ?? [];
-  const activePolicy = response?.policies.find((p) => p.policy_id === chat.selectedPolicyId) ?? null;
+  // 정책 결과는 턴마다 보존하고, 현재 입력 폼만 말풍선과 중복되지 않게 제외한다.
+  const bubbleMessages = showFollowupUi
+    ? chat.messages.filter((turn) => turn.response !== response)
+    : chat.messages;
 
   // API-10/11 에러(예: GRAPH_EXECUTION_ERROR, SESSION_NOT_FOUND)를 서버 메시지 그대로 노출한다.
   const sendErrorMessage = chat.sendError ? toErrorMessage(chat.sendError) : null;
@@ -126,8 +135,21 @@ export function ChatPage() {
         {isEmpty && (
           <div className="card" style={{ marginBottom: 20 }}>
             <p style={{ fontSize: 15, fontWeight: 700, margin: "0 0 8px" }}>{INTRO_GREETING_TITLE}</p>
-            <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: "0 0 10px" }}>{INTRO_GREETING_BODY}</p>
-            <p className="text-faint" style={{ fontSize: 12, margin: 0 }}>{INTRO_GREETING_HINT}</p>
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: "0 0 12px" }}>{INTRO_GREETING_BODY}</p>
+
+            {/* 하드 게이트 슬롯(N2)은 다 차기 전에는 정책 검색으로 넘어가지
+                않는다 — 무엇을 알려줘야 하는지 처음부터 밝혀 되묻기 왕복을 줄인다. */}
+            <div className="intro-required">
+              <p className="intro-required-title">{INTRO_REQUIRED_TITLE}</p>
+              <ul className="intro-required-list">
+                {INTRO_REQUIRED_SLOTS.map((slot) => (
+                  <li key={slot}>{SLOT_LABELS_KO[slot]}</li>
+                ))}
+              </ul>
+              <p className="intro-required-hint text-muted">{INTRO_REQUIRED_HINT}</p>
+            </div>
+
+            <p className="text-faint" style={{ fontSize: 12, margin: "12px 0 0" }}>{INTRO_GREETING_HINT}</p>
           </div>
         )}
 
@@ -138,19 +160,30 @@ export function ChatPage() {
         )}
 
         {bubbleMessages.map((turn, i) => (
-          <ChatBubble key={i} role={turn.role} text={turn.text} />
+          turn.response?.status === "answered" && turn.response.policies.length > 0 ? (
+            <ChatPolicyResult key={i} response={turn.response}
+              onAskQuestion={turn.response === response && !chat.isSending ? setAskingPolicy : undefined} />
+          ) : <ChatBubble key={i} role={turn.role} text={turn.text} />
         ))}
 
-        {/* S03-06: 응답 대기 중 로딩 인디케이터 */}
-        {chat.isSending && <TypingIndicator />}
+        {/* S03-06: 응답 대기 중 진행 막대 — 지금 어느 단계인지까지 보여준다
+            (예전에는 점 세 개만 떠 있어 멈춘 건지 도는 건지 알 수 없었다). */}
+        <ChatProgressBar token={chat.progressToken} active={chat.isSending} startedAt={chat.progressStartedAt} />
 
         {response && !showFollowupUi && !showPolicyUi && (
           <p className="text-faint" style={{ fontSize: 12, marginTop: -6, marginBottom: 12 }}>{GUIDANCE_OFFICIAL}</p>
         )}
 
-        <div className="view-fade" key={`${chat.messages.length}-${chat.policyView}`}>
+        <div className="view-fade">
         {showFollowupUi && response && (
-          response.slot_conflicts ? (
+          followupKind === "calc" ? (
+            <CalcFollowupForm
+              response={response}
+              onSubmit={submitCalcAnswers}
+              onSkip={submitMessage}
+              isSubmitting={chat.isSending}
+            />
+          ) : followupKind === "conflict" ? (
             <SlotConflictForm response={response} onSubmit={submitMessage} isSubmitting={chat.isSending} />
           ) : (
             <SlotFollowupForm
@@ -161,60 +194,11 @@ export function ChatPage() {
           )
         )}
 
-        {showPolicyUi && response && chat.policyView === "list" && (
-          <div>
-            <PolicySummaryStats policies={response.policies} />
-            {response.policies.map((policy) => (
-              <PolicyCard
-                key={policy.policy_id}
-                policy={policy}
-                selected={compare.selectedIds.includes(policy.policy_id)}
-                onToggleSelect={compare.toggle}
-                onOpenDetail={chat.openDetail}
-              />
-            ))}
-            <div
-              style={{
-                position: "sticky",
-                bottom: 0,
-                marginTop: 6,
-                background: "var(--text)",
-                borderRadius: 14,
-                padding: "12px 18px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <span style={{ color: "var(--bg)", fontWeight: 600, fontSize: 13.5 }}>
-                {compare.count === 0 && "정책을 선택하면 나란히 비교할 수 있어요"}
-                {compare.count === 1 && "1개만 더 선택하면 비교할 수 있어요"}
-                {compare.count >= 2 && `${compare.count}개 선택됨`}
-              </span>
-              <button type="button" className="btn-primary" style={{ width: "auto", padding: "0 18px" }} disabled={compare.count < 2} onClick={handleCompareClick}>
-                비교하기
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8 3L4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4" />
-                </svg>
-              </button>
-            </div>
-            <LlmDebugPanel response={response} />
-          </div>
-        )}
-
-        {showPolicyUi && chat.policyView === "detail" && activePolicy && (
-          <PolicyDetailView policy={activePolicy} onBack={chat.backToList} onAskQuestion={setAskingPolicy} />
-        )}
-
-        {showPolicyUi && chat.policyView === "compare" && (
-          <PolicyCompareTable policies={selectedPolicies} onBackToList={chat.backToList} onOpenDetail={chat.openDetail} />
-        )}
         </div>
 
         {sendErrorMessage && <ErrorBanner style={{ marginTop: 12, marginBottom: 0 }}>{sendErrorMessage}</ErrorBanner>}
 
-        {(isEmpty || !showFollowupUi) && chat.policyView === "list" && (
+        {(isEmpty || !showFollowupUi) && (
           <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 8 }}>
             <div className="input-shell" style={{ flex: 1 }}>
               <input

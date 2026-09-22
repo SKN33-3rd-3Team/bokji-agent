@@ -88,9 +88,6 @@ export const FALLBACK_SIDO_OPTIONS = [
   "제주특별자치도",
 ];
 
-/** API-09 로딩 전 폴백 — signup_interest_options (회원가입 전용 4종) */
-export const FALLBACK_SIGNUP_INTEREST_OPTIONS = ["임신/출산", "노인/어르신", "농어업인", "청년"];
-
 /** API-09 로딩 전 폴백 — sidebar_interest_options (사이드바 지원조건 전체 8종) */
 export const FALLBACK_SIDEBAR_INTEREST_OPTIONS = [
   "기초생활수급/차상위",
@@ -154,6 +151,30 @@ export const INTRO_GREETING_BODY =
   "거주 지역과 기본 정보를 알려주시면 받을 수 있는 지원 제도를 찾아 자격 · 지원금 · 중복수급을 근거와 함께 확인해 드려요.";
 export const INTRO_GREETING_HINT = "아래 예시를 눌러 바로 시작할 수 있어요.";
 
+/**
+ * S-03 인트로 카드 "처음에 알려주셔야 하는 정보" 공지.
+ *
+ * 그래프의 하드 게이트(N2 slot_completeness_gate)는 아래 6개가 다 차기
+ * 전에는 정책 검색으로 넘어가지 않고 N3로 되묻는다. 그 사실을 미리 알려주지
+ * 않으면 사용자는 질문만 던졌다가 되묻기 폼을 한 번 더 거치게 된다 — 처음
+ * 한 문장에 같이 적으면 왕복 한 번이 줄어든다. 말하지 않은 항목은 어차피
+ * 폼으로 다시 여쭤보므로(SlotFollowupForm), 여기서는 "필수"가 아니라
+ * "미리 알려주면 빠르다"로 안내한다.
+ *
+ * 순서는 request_missing_slots.py가 되묻는 순서와 같게 유지한다.
+ */
+export const INTRO_REQUIRED_TITLE = "처음에 이 정보를 함께 알려주시면 더 빨라요";
+export const INTRO_REQUIRED_SLOTS: HardGateSlot[] = [
+  "region",
+  "birth_date",
+  "gender",
+  "income_bracket",
+  "disability_status",
+  "employment_status",
+];
+export const INTRO_REQUIRED_HINT =
+  "말씀하지 않으신 항목은 아래에서 선택 폼으로 다시 여쭤볼게요. (모르면 '모름'으로 넘어갈 수 있어요)";
+
 /** S06-05: 공식 확인 안내 고정 문구(GUIDANCE_OFFICIAL) */
 export const GUIDANCE_OFFICIAL =
   "정확한 내용은 복지로 또는 국가법령정보센터 공식 페이지에서 확인해 주세요.";
@@ -166,4 +187,34 @@ export const GUIDANCE_OFFICIAL =
  * API-14가 생기면서 그 트릭은 더 이상 필요 없다.
  */
 export const HOME_CAPTION = "마이페이지에 저장된 정보로 맞춤 지원 제도를 자동으로 찾아드려요.";
-export const HOME_LOADING_MESSAGE = "마이페이지 정보로 맞춤 지원 제도를 찾고 있어요...";
+// HOME_LOADING_MESSAGE("...찾고 있어요...")는 없앴다 — 자동 추천 대기 화면도
+// ChatProgressBar가 실제 진행 단계를 문장으로 보여주므로, 고정 문구를 함께
+// 띄우면 같은 자리에 서로 다른 말이 두 줄 나온다.
+
+/** S03-06 확장: 진행 막대(ChatProgressBar) 문구 */
+export const PROGRESS_FALLBACK_MESSAGE = "요청을 처리하고 있어요";
+export const PROGRESS_WARMUP_MESSAGE =
+  "검색 엔진을 준비하고 있어요 (서버를 켠 뒤 처음 한 번만 더 걸려요)";
+
+/**
+ * S05-03: 지원금 계산 되묻기 폼(CalcFollowupForm) 문구.
+ * 되묻는 슬롯은 자격 판정이 아니라 금액 계산에만 쓰이므로(N10a
+ * request_calc_info.py), 건너뛰어도 안내 자체는 그대로 나온다.
+ */
+export const CALC_FORM_SKIP_ALL_LABEL = "전부 모르겠어요 / 건너뛸게요";
+export const CALC_FORM_SKIP_NOTICE =
+  "모름으로 두면 그 항목은 정확한 금액 대신 안내만 드려요. 자격 판정 결과는 그대로예요.";
+export const CALC_FORM_SUBMIT_LABEL = "이 정보로 계산하기";
+
+/**
+ * 되묻기 폼 공통 "모름" 문구.
+ *
+ * 전송 방식은 폼마다 다르다 — 계산 되묻기는 구조화 필드
+ * (calc_answers.unknown_slots / unknown_choices)에 **항목 이름**을 담고,
+ * 슬롯 되묻기·충돌 재확인은 문장("거주 지역: 모름")을 보낸다. 후자는
+ * "모름"이라는 낱말 자체가 계약이다(llm_gateway._DONT_KNOW_MARKERS).
+ * 어느 쪽이든 그래프 내부 센티넬 문자열("unknown")을 프론트가 직접 보내지는
+ * 않는다 — 공개 API는 열거형 계약에 있는 값만 받는다.
+ */
+export const UNKNOWN_CHOICE_LABEL = "모름 / 해당 없음";
+export const UNKNOWN_FIELD_NOTE = "이 항목 없이 진행할게요.";

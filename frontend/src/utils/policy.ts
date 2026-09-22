@@ -15,11 +15,71 @@ export function regionLabel(policy: PolicyView): string {
   return "지역 미확인";
 }
 
+/**
+ * cardIntro/cardTagline 공용 원문 소스.
+ *
+ * 실제 정책 설명(support_details/purpose)을 최우선으로 쓴다 - 이게 없을
+ * 때만 검증 문장(verification_note)으로 대신한다. verification_note를
+ * 우선하면 거의 모든 정책에서 "이 정책이 뭔지"는 한 번도 안 보이고 검증
+ * 상태 문장만 보이는데다(대부분의 정책에 확인/미확인 조건이 있으므로),
+ * 그 내용은 바로 아래 "지원자격" 칩으로 이미 따로 보여주고 있어 중복이다.
+ */
+function _policySummarySource(policy: PolicyView): string {
+  return (policy.detail?.support_details || policy.detail?.purpose || policy.verification_note || "").trim();
+}
+
 /** rendering.py _card_intro와 동일한 우선순위(90자 초과 시 말줄임). */
 export function cardIntro(policy: PolicyView): string {
-  const text = (policy.verification_note || policy.detail?.support_details || policy.detail?.purpose || "").trim();
+  const text = _policySummarySource(policy);
   if (!text) return "정책 설명이 아직 확인되지 않았습니다.";
   return text.length > 90 ? `${text.slice(0, 89).trimEnd()}…` : text;
+}
+
+// 정책 원문이 "ㅇ 인턴형 일경험: ... ㅇ 프로젝트형 일경험: ..."처럼 불릿
+// 목록이거나 "지급 * 단, 고소득 가구는 제외" 처럼 "*"로 단서를 다는
+// 경우가 있다 - 문장부호가 아니라 이 마커들로 항목이 나뉜다.
+const _BULLET_RE = /(?:^|\s)[ㅇ○◦•▪●∙□▶※*]\s*/g;
+
+/**
+ * 목록 카드 전용 — cardIntro와 같은 소스를 쓰되 "~을 지원하는 제도입니다"
+ * 처럼 짧게 보여준다. 상세 화면(cardIntro, 최대 90자)은 원문 전체를 그대로
+ * 자르는 반면, 카드는 support_details가 여러 문장/여러 불릿짜리 문단일 때
+ * 중간에서 잘려 난잡해 보인다는 피드백이 있어 첫 항목 경계에서 우선 끊는다.
+ */
+function _firstSentence(text: string): string {
+  return (text.match(/^[^.!?]*[.!?]/)?.[0] ?? text).trim();
+}
+
+export function cardTagline(policy: PolicyView): string {
+  const text = _policySummarySource(policy);
+  if (!text) return "정책 설명이 아직 확인되지 않았습니다.";
+
+  const bulletMatches = [...text.matchAll(_BULLET_RE)];
+  let candidate: string;
+  if (bulletMatches.length > 0) {
+    const first = bulletMatches[0];
+    const leading = text.slice(0, first.index).trim();
+    if (leading) {
+      // 불릿 앞에 이미 온전한 설명 문장이 있으면(예: "만 19~34세 청년을
+      // 대상으로 한 지원사업입니다. ㅇ 인턴형...") 그 문장이 불릿 하위
+      // 항목 하나보다 더 나은 한 줄 요약이므로 우선한다.
+      candidate = _firstSentence(leading);
+    } else {
+      // 텍스트가 불릿으로 곧장 시작하면 첫 항목만 뗀다 - 마커 이후 ~
+      // 다음 마커 전(또는 끝)까지.
+      const start = first.index + first[0].length;
+      const end = bulletMatches.length > 1 ? bulletMatches[1].index : text.length;
+      candidate = text.slice(start, end).trim();
+    }
+  } else {
+    candidate = _firstSentence(text);
+  }
+  if (!candidate) candidate = text;
+
+  const CARD_MAX = 60;
+  return candidate.length > CARD_MAX
+    ? `${candidate.slice(0, CARD_MAX - 1).trimEnd()}…`
+    : candidate;
 }
 
 /** rendering.py _dup_short_note와 동일한 분기. */

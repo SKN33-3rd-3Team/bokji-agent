@@ -21,7 +21,52 @@ let nextUserId = 1;
 // QA 피드백 반영 — 채팅/정책 문의처럼 실제로 시간이 걸리는 API에만 일부러
 // 지연을 준다. 실제 서비스와는 무관한 QA 전용 값이다.
 const QA_DELAY_MS = 700;
+// 그래프를 실제로 도는 API(상담/자동추천/되묻기)는 진짜 서버에서 수십 초가
+// 걸린다. 진행 막대(ChatProgressBar)가 단계별로 차오르는지 QA에서 눈으로
+// 확인하려면 mock도 그만큼은 끌어야 해서, 이 세 엔드포인트만 따로 둔다.
+const QA_GRAPH_DELAY_MS = 6000;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 진행률 mock — X-Progress-Token으로 요청이 들어오면 시작 시각만 기억해두고,
+// GET /chat/progress/{token}에서 경과 시간으로 단계를 흉내 낸다. 실제 백엔드는
+// 그래프 노드가 끝날 때마다 기록한다(src/rag_chatbot/progress.py).
+const progressByToken = new Map();
+const MOCK_PROGRESS_STEPS = [
+  "말씀하신 내용에서 필요한 정보를 정리하고 있어요",
+  "받을 수 있는 지원 제도를 찾고 있어요",
+  "조건이 원문에 실제로 있는지 확인하고 있어요",
+  "자격 충족 여부를 판정하고 있어요",
+  "받을 수 있는 지원금을 계산하고 있어요",
+  "찾은 제도를 정리하고 있어요",
+  "안내 문장을 작성하고 있어요",
+];
+
+function beginProgress(req) {
+  const token = req.headers["x-progress-token"];
+  if (typeof token === "string" && token) progressByToken.set(token, Date.now());
+  return token;
+}
+
+function progressSnapshot(token) {
+  const startedAt = progressByToken.get(token);
+  if (!startedAt) return { status: "unknown", fraction: 0, message: null, completed_steps: 0, total_steps: 0, elapsed_seconds: 0 };
+  const elapsedMs = Date.now() - startedAt;
+  const total = 14;
+  const stepIndex = Math.min(
+    MOCK_PROGRESS_STEPS.length - 1,
+    Math.floor((elapsedMs / QA_GRAPH_DELAY_MS) * MOCK_PROGRESS_STEPS.length),
+  );
+  const completed = Math.min(total, Math.floor((elapsedMs / QA_GRAPH_DELAY_MS) * total));
+  const done = elapsedMs >= QA_GRAPH_DELAY_MS;
+  return {
+    status: done ? "done" : "running",
+    fraction: done ? 1 : Math.min(completed / total, 0.95),
+    message: done ? "완료" : MOCK_PROGRESS_STEPS[stepIndex],
+    completed_steps: completed,
+    total_steps: total,
+    elapsed_seconds: Math.round(elapsedMs / 100) / 10,
+  };
+}
 
 /** UI 힌트("8자 이상, 영문·숫자·특수문자를 섞어 주세요")와 동일한 정책. */
 function passwordViolations(password) {
@@ -420,6 +465,55 @@ function chatResponseNeedsRegion(sessionId) {
   };
 }
 
+/** N10a(request_calc_info) 계산 되묻기 — 슬롯 위젯 + 정책별 선택형 */
+function chatResponseNeedsCalcInfo(sessionId) {
+  return {
+    status: "needs_input",
+    session_id: sessionId,
+    question:
+      "정확한 지원금액을 계산하려면 아래 정보가 필요해요.\n1. 혼인 상태 (미혼/기혼/이혼/사별)\n2. 가구원 수\n3. [첫만남이용권] 어떤 방식에 해당하시나요? (자연분만 / 제왕절개 중 선택)\n모르시거나 말씀하기 어려우면 '모름'이라고 답하셔도 됩니다. 이 경우 정확한 금액 대신 안내만 드려요.",
+    missing_slots: [],
+    interrupt_id: "mock-interrupt-1",
+    calc_missing_slots: ["marital_status", "household_size"],
+    calc_missing_choices: [
+      { policy_id: "policy-2", labels: ["자연분만", "제왕절개"], policy_title: "첫만남이용권" },
+    ],
+    calc_slot_inputs: [
+      {
+        slot: "marital_status",
+        label: "혼인 상태 (미혼/기혼/이혼/사별)",
+        input_type: "select",
+        options: [
+          { value: "single", label: "미혼" },
+          { value: "married", label: "기혼" },
+          { value: "divorced", label: "이혼" },
+          { value: "bereaved", label: "사별" },
+        ],
+        minimum: null,
+        maximum: null,
+      },
+      {
+        slot: "household_size",
+        label: "가구원 수",
+        input_type: "number",
+        options: [],
+        minimum: 1,
+        maximum: 10,
+      },
+    ],
+    slot_conflicts: null,
+    answer_status: null,
+    final_answer: null,
+    final_citations: [],
+    policies: [],
+    output_json: {},
+    output_text: "",
+    output_markdown: "",
+    llm_status: mockLlmStatus(),
+    timing: emptyTiming(),
+  };
+}
+
 function chatResponseConflict(sessionId) {
   return {
     status: "needs_input",
@@ -595,13 +689,31 @@ const routes = [
     handler: async (_req, res) => sendJson(res, 200, SEARCH_OPTIONS),
   },
   {
+    // 실제 백엔드는 구동 직후 임베딩 모델을 백그라운드로 로드한다 - mock은
+    // 로드할 모델이 없으니 항상 준비 완료.
+    method: "GET",
+    pattern: /^\/api\/v1\/config\/status$/,
+    handler: async (_req, res) =>
+      sendJson(res, 200, { status: "ready", message: "준비가 끝났습니다.", seconds: 0 }),
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/v1\/chat\/progress\/([^/]+)$/,
+    handler: async (req, res, [token]) => {
+      const user = getCurrentUser(req);
+      if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
+      sendJson(res, 200, progressSnapshot(decodeURIComponent(token)));
+    },
+  },
+  {
     method: "POST",
     pattern: /^\/api\/v1\/chat\/messages$/,
     handler: async (req, res) => {
       const user = getCurrentUser(req);
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
       const body = await readBody(req);
-      await delay(QA_DELAY_MS);
+      beginProgress(req);
+      await delay(QA_GRAPH_DELAY_MS);
       const sessionId = crypto.randomUUID();
       // top_k(사이드바 "정책 후보 수" 슬라이더)는 이 첫 호출에만 실려 오고, 이후 followup(API-11)
       // 요청에는 없으므로 세션 상태에 기억해뒀다가 답변 단계에서 그대로 쓴다.
@@ -618,9 +730,10 @@ const routes = [
     handler: async (req, res) => {
       const user = getCurrentUser(req);
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
-      await delay(QA_DELAY_MS);
+      beginProgress(req);
+      await delay(QA_GRAPH_DELAY_MS);
       const sessionId = crypto.randomUUID();
-      chatSessions.set(sessionId, { userId: user.id, step: 3 });
+      chatSessions.set(sessionId, { userId: user.id, step: 4 });
       const hasAnyProfile = Boolean(
         user.region ||
           user.gender ||
@@ -643,12 +756,31 @@ const routes = [
     handler: async (req, res, [sessionId]) => {
       const user = getCurrentUser(req);
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
-      await readBody(req);
-      await delay(QA_DELAY_MS);
+      const followupBody = await readBody(req);
+      beginProgress(req);
+      await delay(QA_GRAPH_DELAY_MS);
       const state = chatSessions.get(sessionId) ?? { userId: user.id, step: 1 };
       state.step += 1;
       chatSessions.set(sessionId, state);
       if (state.step === 2) return sendJson(res, 200, chatResponseConflict(sessionId));
+      // step 3은 지원금 계산 되묻기(N10a) — CalcFollowupForm을 QA에서 볼 수
+      // 있게 재현한다. 여기서 calc_answers를 보내면 다음 턴이 답변이 된다.
+      if (state.step === 3) return sendJson(res, 200, chatResponseNeedsCalcInfo(sessionId));
+      // 실제 백엔드는 같은 항목을 값과 "모름" 양쪽에 담은 답변을 400으로
+      // 거절한다(merge_structured_calc_answer). 폼이 둘 중 하나만 채우는지
+      // mock에서도 드러나게 같은 검사를 둔다.
+      const calcAnswers = followupBody?.calc_answers;
+      if (calcAnswers) {
+        const overlapSlot = (calcAnswers.unknown_slots ?? []).find(
+          (field) => field in (calcAnswers.slots ?? {}),
+        );
+        const overlapChoice = (calcAnswers.unknown_choices ?? []).find(
+          (policyId) => policyId in (calcAnswers.choices ?? {}),
+        );
+        if (overlapSlot || overlapChoice) {
+          return sendError(res, 400, "VALIDATION_ERROR", "같은 항목에 값과 '모름'을 함께 보낼 수 없습니다.");
+        }
+      }
       return sendJson(res, 200, chatResponseAnswered(sessionId, state.topK));
     },
   },
@@ -660,10 +792,26 @@ const routes = [
       if (!user) return sendError(res, 401, "UNAUTHENTICATED", "로그인이 필요합니다.");
       await delay(QA_DELAY_MS);
       const body = await readBody(req);
+      // "응답 불가"가 반복될 때 화면이 이유를 보여주는지 QA에서 확인할 수
+      // 있도록, 질문에 "모름"/"왜"가 들어가면 안내(guidance) 경로를 재현한다.
+      const asksWhy = /모름|왜|안 ?돼|안돼/.test(body.question ?? "");
+      if (asksWhy) {
+        return sendJson(res, 200, {
+          kind: "guidance",
+          text: `이 채팅은 '${policyId}' 정책에 대한 질문만 답할 수 있어요. 다른 정책이나 새로운 검색은 메인 화면에서 다시 물어봐 주세요.`,
+          evidence_quotes: [],
+          reason: "evidence_not_found",
+          reason_message: "LLM이 제시한 근거 발췌가 정책 원문에 없어 답변을 버렸습니다.",
+          llm_status: mockLlmStatus(),
+        });
+      }
       sendJson(res, 200, {
         kind: "answer",
         text: `"${body.question ?? ""}"에 대한 답변입니다 (mock). 정책 ${policyId}의 지원 조건은 상세 화면의 안내를 참고해 주세요.`,
         evidence_quotes: ["관련 법령 제3조에 따라 소득 기준을 충족하는 가구가 대상입니다."],
+        reason: "ok",
+        reason_message: "근거 검증까지 통과했습니다.",
+        llm_status: mockLlmStatus(),
       });
     },
   },
@@ -684,7 +832,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Progress-Token");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);

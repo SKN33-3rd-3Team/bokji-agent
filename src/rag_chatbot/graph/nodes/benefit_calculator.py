@@ -885,8 +885,10 @@ def _select_tier_amount(
 
     variable이 _TIER_NUMERIC_VARIABLES(children_count/household_size/age)면
     tier 매칭이 열거형 exact match가 아니라 구간(match_min~match_max)
-    포함 여부다(_numeric_tier_matches 참고) - 이 경우 UNKNOWN 센티넬
-    개념도 없다(정수 슬롯은 애초에 "unknown" 문자열 값을 갖지 않는다).
+    포함 여부다(_numeric_tier_matches 참고). 값 자체는 정수지만, 사용자가
+    "모름"으로 답하면 숫자 슬롯도 UNKNOWN 센티넬로 확정된다
+    (apply_calc_skip / merge_structured_calc_answer) - 그래서 구간 매칭
+    전에 UNKNOWN을 먼저 걸러낸다.
 
     반환: ``(amount, note, missing)``. ``missing``은 아직 값을 몰라서
     (그리고 아직 물어볼 수 있어서) N10a가 되물어야 할 대상이다 - 슬롯
@@ -949,7 +951,12 @@ def _select_tier_amount(
         # 그래도 방어적으로 처리한다 - fail-closed.
         return None, f"'{variable}' 슬롯 값을 확인할 수 없어 계산할 수 없음", None
 
-    if not is_numeric_variable and value == UNKNOWN:
+    # 숫자 슬롯도 "모름"으로 확정될 수 있다 - apply_calc_skip(건너뛰기)과
+    # merge_structured_calc_answer(폼의 '모름')가 children_count/household_size
+    # 에도 같은 UNKNOWN 센티넬을 쓴다. 그래서 숫자/열거형을 가리지 않고 먼저
+    # 본다 - 아래 정수 검사에 먼저 걸리면 "값이 올바르지 않아"로 잘못 안내된다
+    # (사용자가 모른다고 답한 것이지 이상한 값을 보낸 게 아니다).
+    if value == UNKNOWN:
         return (
             None,
             f"'{variable}'을(를) 확인하지 못해(미확인) 조건부 금액을 계산할 수 없음",

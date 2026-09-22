@@ -11,8 +11,8 @@ import {
   DISABILITY_NONE,
   FALLBACK_HOUSEHOLD_TYPE_OPTIONS,
   FALLBACK_INCOME_BRACKET_OPTIONS,
+  FALLBACK_INTEREST_FIELD_OPTIONS,
   FALLBACK_SIDO_OPTIONS,
-  FALLBACK_SIGNUP_INTEREST_OPTIONS,
   GENDER_NONE,
   INCOME_BRACKET_NONE,
   VETERAN_NONE,
@@ -43,7 +43,6 @@ export function SignupPage() {
   const [veteranStatus, setVeteranStatus] = useState<VeteranStatus | "">("");
   const [householdTypes, setHouseholdTypes] = useState<string[]>([]);
   const [incomeBracket, setIncomeBracket] = useState<IncomeBracket | "">("");
-  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [privacyAgreed, setPrivacyAgreed] = useState(false);
 
@@ -53,7 +52,9 @@ export function SignupPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const sidoOptions = options?.sido_options ?? FALLBACK_SIDO_OPTIONS;
-  const signupInterestOptions = options?.signup_interest_options ?? FALLBACK_SIGNUP_INTEREST_OPTIONS;
+  // 마이페이지 "관심 지원조건"과 같은 19종 목록을 쓴다 - 가입 때부터 같은
+  // 계약으로 저장돼야 나중에 마이페이지에서 다시 고를 때 어긋나지 않는다.
+  const signupInterestOptions = options?.interest_field_options ?? FALLBACK_INTEREST_FIELD_OPTIONS;
   const householdTypeOptions = options?.household_type_options ?? FALLBACK_HOUSEHOLD_TYPE_OPTIONS;
   const incomeOptions = options?.income_bracket_options ?? FALLBACK_INCOME_BRACKET_OPTIONS;
 
@@ -90,7 +91,6 @@ export function SignupPage() {
         veteran_status: (veteranStatus || undefined) as VeteranStatus | undefined,
         income_bracket: (incomeBracket || undefined) as IncomeBracket | undefined,
         household_types: householdTypes.length ? (householdTypes as HouseholdType[]) : undefined,
-        marketing_opt_in: marketingOptIn,
         terms_agreed: termsAgreed,
         privacy_agreed: privacyAgreed,
       });
@@ -293,10 +293,6 @@ export function SignupPage() {
           <div className="check-row">
             <input type="checkbox" checked={privacyAgreed} onChange={(e) => setPrivacyAgreed(e.target.checked)} />
             <label><span className="tag-req">[필수]</span> 개인정보 수집&middot;이용에 동의합니다.</label>
-          </div>
-          <div className="check-row">
-            <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} />
-            <label><span className="tag-opt">[선택]</span> 혜택&middot;안내 정보 수신에 동의합니다.</label>
           </div>
         </div>
 

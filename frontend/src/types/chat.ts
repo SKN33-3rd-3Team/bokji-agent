@@ -35,9 +35,14 @@ export interface ChatMessageRequest {
  * 받지 않아 백엔드가 무시하지만(top_k는 체크포인터가 보존), 최초 턴에
  * 보낸 값을 요청 바디에서 조용히 빠뜨리지 않기 위해 옵셔널로 동봉한다
  * (코드리뷰 반영, 2026-09-18 - useChatSession.ts 참고).
+ *
+ * message와 calc_answers는 **둘 중 하나만** 보낸다(backend/app/schemas/chat.py
+ * FollowupRequest.require_one_answer). calc_answers는 지원금 계산 되묻기
+ * (N10a)에 폼으로 답할 때 쓴다.
  */
 export interface FollowupRequest {
-  message: string;
+  message?: string;
+  calc_answers?: CalculationAnswers;
   top_k?: number;
   extra_interests?: string[];
   known_region?: string;
@@ -47,6 +52,25 @@ export interface FollowupRequest {
   known_income_bracket?: IncomeBracket;
   known_household_types?: HouseholdType[];
   known_veteran_status?: VeteranStatus;
+}
+
+/**
+ * API-11 계산 되묻기 답변(backend/app/schemas/chat.py CalculationAnswers).
+ * slots 값은 select면 코드 문자열, number면 정수다(백엔드가 StrictInt로
+ * 검증하므로 문자열로 보내면 400이 된다). choices는 정책별로 고른 라벨
+ * 원문이며, calc_missing_choices[].labels에 있는 값이어야 한다.
+ *
+ * unknown_slots/unknown_choices는 "이 항목은 모름/해당 없음"이다 — 항목
+ * 이름만 담는다. 그래프 내부 센티넬("unknown") 문자열을 값 자리에 넣는 게
+ * 아니라는 점에 주의(공개 API는 열거형 계약에 있는 값만 받는다). 같은
+ * 항목을 값과 모름 양쪽에 넣으면 400이다.
+ */
+export interface CalculationAnswers {
+  interrupt_id: string;
+  slots?: Record<string, string | number>;
+  choices?: Record<string, string>;
+  unknown_slots?: string[];
+  unknown_choices?: string[];
 }
 
 /** API-12 Request Body */
@@ -150,10 +174,9 @@ export type SlotConflicts = Record<string, { profile: string; chat: string }>;
 /**
  * D5 공용 필드(자동추천_API_정의서_v1.0.xlsx 계약참조 시트) — 금액 계산에
  * 필요한 슬롯을 select/number 위젯으로 묻는 계산 interrupt 응답에 쓰인다.
- * ⚠ 이 4개 필드는 모든 ChatResponse에 항상 존재해야 하는 스키마 자체는
- * 반영했지만, 실제로 calc_slot_inputs/calc_missing_choices를 렌더링해
- * calc_answers를 제출하는 화면(일반 상담의 금액 계산 되묻기 UI)은 아직 없다
- * - API-14(자동 추천)는 항상 null/[]/[]/[]만 받으므로 이 갭과 무관하다.
+ * 화면은 CalcFollowupForm이 그린다(2026-09-20 구현 — 그 전까지는 스키마만
+ * 있고 렌더링이 없어, 계산 되묻기가 오면 빈 슬롯 폼에 막혀 답을 보낼 수
+ * 없었다). API-14(자동 추천)는 항상 null/[]/[]/[]만 받으므로 무관하다.
  */
 export interface CalculationSlotInput {
   slot: string;
@@ -192,16 +215,60 @@ export interface ChatResponse {
   timing: Timing;
 }
 
-/** API-12 응답 */
+/**
+ * API-12 응답.
+ *
+ * reason/reason_message/llm_status는 진단용이다 — kind="guidance"(답변 대신
+ * 안내)일 때 화면 문구는 어느 경우든 같아서, 이 값들이 없으면 LLM 미연결인지
+ * 호출 실패인지 근거 검증 탈락인지 구분할 수 없다
+ * (src/rag_chatbot/light_followup.py의 REASON_* 참고).
+ */
 export interface PolicyQuestionResponse {
   kind: "answer" | "guidance";
   text: string;
   evidence_quotes: string[];
+  /**
+   * guidance로 떨어진 경로. 답변이 나간 경우(kind="answer")는 null이다.
+   * 값은 light_followup.GUIDANCE_REASONS와 같아야 한다 - 평가 스크립트가
+   * 같은 값으로 "진짜 거절(not_answerable)"과 "실패 폴백"을 가른다.
+   */
+  reason:
+    | "no_llm"
+    | "no_context"
+    | "llm_failed"
+    | "not_answerable"
+    | "quote_not_found"
+    | "inconsistent"
+    | null;
+  reason_message: string | null;
+  llm_status: LlmStatus | Record<string, never>;
 }
 
 /** API-13 응답 */
 export interface SessionResetResponse {
   message: string;
+}
+
+/**
+ * GET /api/v1/chat/progress/{token} 응답 — 상담이 지금 어느 단계인지.
+ * fraction은 어림값이라 끝나기 전에는 0.95를 넘지 않는다(백엔드
+ * src/rag_chatbot/progress.py). status가 "unknown"이면 아직 서버에 기록이
+ * 없다는 뜻이지 오류가 아니다.
+ */
+export interface ChatProgress {
+  status: "running" | "done" | "failed" | "unknown";
+  fraction: number;
+  message: string | null;
+  completed_steps: number;
+  total_steps: number;
+  elapsed_seconds: number;
+}
+
+/** GET /api/v1/config/status 응답 — 서버 구동 워밍업(임베딩 모델 로드) 상태 */
+export interface ServerStatus {
+  status: "pending" | "running" | "ready" | "failed";
+  message: string;
+  seconds: number | null;
 }
 
 /** S-05 되묻기용 하드 게이트 슬롯 코드 — request_missing_slots.py 순서 기준 */
@@ -219,6 +286,9 @@ export interface PolicyQuestionTurn {
   text: string;
   kind?: "answer" | "guidance";
   evidenceQuotes?: string[];
+  /** 안내로 물러난 이유(진단용) — 사용자 말풍선에는 없다 */
+  reasonMessage?: string | null;
+  llmStatus?: LlmStatus | Record<string, never>;
 }
 
 /** ChatPage 로컬 메시지 이력 아이템 */

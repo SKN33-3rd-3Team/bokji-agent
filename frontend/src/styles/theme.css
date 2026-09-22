@@ -754,6 +754,22 @@ ol {
   margin: 0 6px 6px 0;
 }
 
+.policy-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.policy-card-tags > .badge,
+.policy-card-tags > .chip {
+  margin: 0;
+  min-height: 26px;
+  box-sizing: border-box;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  line-height: 18px;
+}
+
 .cond {
   font-size: 12.5px;
   padding: 5px 11px;
@@ -769,6 +785,173 @@ ol {
 .cond.off {
   background: var(--gray-bg);
   color: var(--gray-text);
+}
+
+/* 정책 문의 다이얼로그 — 안내로 물러난 이유(진단) */
+.policy-question-reason {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  background: var(--gray-bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 4px 0 0;
+}
+
+/* ============================================================
+   "모름 / 해당 없음" 토글 (UnknownToggle) — 되묻기 폼 공통
+   ============================================================ */
+
+.unknown-toggle {
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.unknown-toggle:hover:not(:disabled) {
+  background: var(--gray-bg);
+}
+.unknown-toggle.on {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.unknown-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 항목 라벨과 토글을 한 줄에 놓는 머리줄 */
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+/* 토글이 켜져 위젯을 감췄을 때 자리를 채우는 안내 */
+.field-unknown-note {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin: 2px 0 0;
+}
+
+/* ============================================================
+   인트로 카드 — 처음에 알려주셔야 하는 정보 공지
+   ============================================================ */
+
+.intro-required {
+  background: var(--sky-3);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.intro-required-title {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--primary);
+  margin: 0 0 8px;
+}
+.intro-required-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.intro-required-list li {
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.intro-required-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  margin: 9px 0 0;
+}
+
+/* ============================================================
+   진행 막대 (ChatProgressBar) — 상담이 도는 동안의 단계 표시
+   ============================================================ */
+
+.progress-card {
+  padding: 16px 18px;
+}
+.progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.progress-message {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.5;
+}
+.progress-elapsed {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--sky-1), var(--primary));
+  /* 단계가 끝날 때마다 계단식으로 뛰는 값이라, 전환을 길게 줘야 막대가
+     튀지 않고 이어지는 것처럼 보인다. */
+  transition: width 0.6s ease-out;
+}
+/* 다음 단계로 넘어가기 전까지는 폭이 그대로라 멈춘 것처럼 보인다 -
+   옅은 띠를 흘려 "아직 돌고 있다"를 계속 보여준다. */
+.progress-fill::after {
+  content: "";
+  display: block;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: progress-sheen 1.6s linear infinite;
+}
+@keyframes progress-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.progress-note {
+  font-size: 11.5px;
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+  .progress-fill::after {
+    animation: none;
+  }
 }
 
 /* ============================================================

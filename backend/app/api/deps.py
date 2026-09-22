@@ -38,3 +38,17 @@ def user_operation(current: AuthSessionRecord):
             raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.")
         profile = auth_adapter.get_profile(current.username, user_id=current.user_id)
         yield profile
+
+
+@contextmanager
+def chat_operation(current: AuthSessionRecord):
+    """상담 실행용 인증 확인.
+
+    상담은 세션별 잠금(chat_adapter.continue_chat)으로 직렬화하므로 회원 전체
+    잠금을 잡지 않는다. 따라서 홈 자동 추천과 일반 상담이 서로 기다리지 않는다.
+    프로필 변경·탈퇴 같은 계정 작업은 기존 user_operation으로 보호한다.
+    """
+
+    if not auth_session_store.is_active(current):
+        raise ApiError(status.HTTP_401_UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.")
+    yield auth_adapter.get_profile(current.username, user_id=current.user_id)

@@ -15,6 +15,7 @@ import {
   DISABILITY_NONE,
   FALLBACK_HOUSEHOLD_TYPE_OPTIONS,
   FALLBACK_INCOME_BRACKET_OPTIONS,
+  FALLBACK_INTEREST_FIELD_OPTIONS,
   GENDER_LABELS_KO,
   GENDER_NONE,
   HOUSEHOLD_TYPE_LABELS_KO,
@@ -92,12 +93,16 @@ export function MyPage() {
   const [deleteAgree, setDeleteAgree] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteSuccess, setDeleteSuccess] = useState(false);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
 
   const householdTypeOptions = options?.household_type_options ?? FALLBACK_HOUSEHOLD_TYPE_OPTIONS;
   const householdOptions = householdTypeOptions.map((o) => o.label);
   const householdLabelToCode = Object.fromEntries(householdTypeOptions.map((o) => [o.label, o.code]));
   const selectedHouseholdLabels = householdTypes.map((code) => HOUSEHOLD_TYPE_LABELS_KO[code] ?? code);
-  const interestFieldOptions = options?.interest_field_options ?? Object.values(HOUSEHOLD_TYPE_LABELS_KO);
+  // 마이페이지는 회원가입(4종)보다 넓은 19종 관심 분야를 보여준다 - 서버
+  // 쪽 허용값(auth/service.py _INTEREST_VALUES)도 이 19종을 포함하도록
+  // 맞춰뒀으니, 여기서 고른 값은 그대로 저장된다.
+  const interestFieldOptions = options?.interest_field_options ?? FALLBACK_INTEREST_FIELD_OPTIONS;
 
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
@@ -257,7 +262,6 @@ export function MyPage() {
               ["장애 등록 여부", labelOrUnset(profile.disability_status, DISABILITY_LABELS_KO)],
               ["보훈대상자 여부", labelOrUnset(profile.veteran_status, VETERAN_LABELS_KO)],
               ["소득 수준", labelOrUnset(profile.income_bracket, INCOME_BRACKET_LABELS_KO)],
-              ["마케팅 수신", profile.marketing_opt_in ? "동의" : "미동의"],
             ].map(([label, value]) => (
               <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "13px 2px", borderBottom: "1px solid var(--border)" }}>
                 <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 600 }}>{label}</span>
@@ -432,7 +436,7 @@ export function MyPage() {
         </div>
 
         <div style={{ display: "flex", gap: 10 }}>
-          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={async () => { await logout(); navigate("/login"); }}>
+          <button type="button" className="btn-outline" style={{ flex: 1 }} onClick={() => setLogoutModalOpen(true)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
             로그아웃
           </button>
@@ -442,6 +446,16 @@ export function MyPage() {
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={logoutModalOpen}
+        title="로그아웃할까요?"
+        description="현재 로그인된 계정에서 로그아웃합니다."
+        confirmLabel="로그아웃"
+        cancelLabel="취소"
+        onConfirm={async () => { await logout(); setLogoutModalOpen(false); navigate("/login"); }}
+        onCancel={() => setLogoutModalOpen(false)}
+      />
 
       <ConfirmModal
         open={deleteModalOpen}

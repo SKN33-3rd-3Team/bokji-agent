@@ -1,5 +1,5 @@
 import type { PolicyView } from "@/types/chat";
-import { badgeColor, regionLabel } from "@/utils/policy";
+import { badgeColor, cardTagline, regionLabel } from "@/utils/policy";
 
 interface PolicyCardProps {
   policy: PolicyView;
@@ -36,17 +36,19 @@ export function PolicyCard({ policy, selected, onToggleSelect, onOpenDetail }: P
         <p style={{ fontSize: 15.5, fontWeight: 700, margin: 0 }}>
           {policy.title} <span className="text-muted" style={{ fontSize: 11.5, fontWeight: 500 }}>· {regionLabel(policy)}</span>
         </p>
-        {policy.verification_note && (
-          <p className="text-muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: "4px 0 8px" }}>
-            {policy.verification_note}
-          </p>
-        )}
-        <span className={`badge ${color}`}>
-          <span className="dot" />
-          {policy.badge || policy.eligibility_status}
-        </span>
-        <span className="chip">{policy.amount_label || "지원금액 확인 필요"}</span>
-        <span className="chip">중복수급 {policy.duplicate_status || "미확인"}</span>
+        {/* 이 제도가 정확히 뭔지 카드만 보고도 알 수 있게 — 상세 화면(S07-01)의
+            cardIntro(전문)보다 짧게, 첫 문장만 태그라인처럼 보여준다. */}
+        <p className="text-muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: "4px 0 8px" }}>
+          {cardTagline(policy)}
+        </p>
+        <div className="policy-card-tags">
+          <span className={`badge ${color}`}>
+            <span className="dot" />
+            {policy.badge || policy.eligibility_status}
+          </span>
+          <span className="chip">{policy.amount_label || "지원금액 확인 필요"}</span>
+          <span className="chip">중복수급 {policy.duplicate_status || "미확인"}</span>
+        </div>
       </div>
       <div style={{ width: 136, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
         {selected && (

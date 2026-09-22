@@ -26,6 +26,10 @@ from weakref import WeakValueDictionary
 @dataclass
 class ChatSessionRecord:
     user_id: int
+    elapsed_seconds: float = 0.0
+    completed_steps: int = 0
+    # 같은 세션에서도 답변 완료 후 입력은 새 정책 검색이다.
+    awaiting_input: bool = False
     last_policies: list[dict] = field(default_factory=list)
     last_profile: list[dict] = field(default_factory=list)
     operation_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)

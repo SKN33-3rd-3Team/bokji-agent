@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ConfirmModal } from "@/components/common/ConfirmModal";
@@ -8,20 +7,25 @@ import { ErrorBanner } from "@/components/common/ErrorBanner";
 import { Toast } from "@/components/common/Toast";
 import { SlotFollowupForm } from "@/components/chat/SlotFollowupForm";
 import { SlotConflictForm } from "@/components/chat/SlotConflictForm";
+import { CalcFollowupForm } from "@/components/chat/CalcFollowupForm";
 import { PolicySummaryStats } from "@/components/chat/PolicySummaryStats";
 import { PolicyCard } from "@/components/chat/PolicyCard";
 import { PolicyDetailView } from "@/components/chat/PolicyDetailView";
 import { PolicyCompareTable } from "@/components/chat/PolicyCompareTable";
 import { LlmDebugPanel } from "@/components/chat/LlmDebugPanel";
-import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { ChatProgressBar } from "@/components/chat/ChatProgressBar";
 import { PolicyQuestionDialog } from "@/components/dialogs/PolicyQuestionDialog";
 import { useChatSession } from "@/features/chat/useChatSession";
+import {
+  useAutoRecommendations,
+  useResetAutoRecommendations,
+} from "@/features/chat/useAutoRecommendations";
 import { usePolicySelection } from "@/features/chat/usePolicySelection";
 import { useSearchOptions } from "@/features/config/useSearchOptions";
-import { getAutoRecommendations } from "@/api/chatApi";
 import { ApiError, toErrorMessage } from "@/api/client";
-import { FALLBACK_DEFAULT_TOP_K, GUIDANCE_OFFICIAL, HOME_CAPTION, HOME_LOADING_MESSAGE } from "@/constants/labels";
-import type { PolicyView } from "@/types/chat";
+import { FALLBACK_DEFAULT_TOP_K, GUIDANCE_OFFICIAL, HOME_CAPTION } from "@/constants/labels";
+import { followupKindOf } from "@/utils/chatQuestion";
+import type { CalculationAnswers, ChatResponse, PolicyView } from "@/types/chat";
 
 /**
  * 홈 화면 — API-14(자동추천_API_정의서_v1.0.xlsx) POST
@@ -30,12 +34,9 @@ import type { PolicyView } from "@/types/chat";
  * 완전히 별도의 useChatSession 인스턴스를 쓰므로, 진행 중이던 상담 세션을
  * 건드리지 않는다.
  *
- * 로그인/회원가입 직후는 물론, 로고 클릭이나 마이페이지 "홈으로 돌아가기"로
- * 재진입할 때도 매번 새로 호출해 최신 프로필 기준 추천을 보여준다. API-14
- * 계약의 "가입/페이지 재진입/프로필 수정에 자동 재호출을 추가하지 않는다"는
- * React가 스스로(예: effect 재실행, StrictMode 이중 마운트) 조용히 다시
- * 부르는 것을 막으라는 뜻이지, 사용자가 홈으로 이동을 직접 요청하는 것까지
- * 막는 게 아니다 - hasStartedRef는 그 "조용한 이중 호출"만 막는다.
+ * 추천 결과는 회원별 메모리 캐시에서 복원한다. 홈 재진입이나 별도 상담
+ * 시작으로는 추천을 다시 요청하지 않는다. 프로필 수정·로그아웃 시에는
+ * 캐시를 비우며, 새로고침하면 메모리 캐시도 초기화된다.
  */
 export function HomePage() {
   const chat = useChatSession();
@@ -43,7 +44,8 @@ export function HomePage() {
   const [askingPolicy, setAskingPolicy] = useState<PolicyView | null>(null);
   const [confirmingNewChat, setConfirmingNewChat] = useState(false);
   const [newChatError, setNewChatError] = useState<string | null>(null);
-  const hasStartedRef = useRef(false);
+  // 같은 응답을 두 번 심지 않기 위한 표시(캐시 재진입 포함).
+  const hydratedRef = useRef<ChatResponse | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -76,29 +78,29 @@ export function HomePage() {
   const { data: searchOptions } = useSearchOptions();
   const topK = topKOverride ?? searchOptions?.default_top_k ?? FALLBACK_DEFAULT_TOP_K;
 
-  const autoRecoMutation = useMutation({
-    mutationFn: getAutoRecommendations,
-    onSuccess: (response) => chat.hydrate(response),
-  });
+  // API-14 결과는 캐시한다 - 재진입 때 재검색하지 않고 캐시로 그린다
+  // (useAutoRecommendations). 진행 막대도 그리는데, 프로필만으로 도는 자동
+  // 추천이라 사용자가 아무것도 입력하지 않았을 뿐 그래프는 상담과 똑같이
+  // N1~N14를 돌기 때문이다.
+  const autoReco = useAutoRecommendations(true);
+  const resetAutoReco = useResetAutoRecommendations();
 
-  // 이 화면에 들어올 때마다(로그인 직후·로고 클릭·마이페이지 복귀 등) 자동
-  // 추천을 호출한다. hasStartedRef는 같은 마운트에서 StrictMode 등으로
-  // effect가 두 번 실행되는 것만 막는다 - 재마운트(재진입)마다 다시 false로
-  // 초기화되므로 실제 재진입 시에는 정상적으로 다시 호출된다.
+  // 캐시에서 왔든 방금 받았든, 받은 응답을 세션의 첫 턴으로 한 번만 심는다.
+  // 같은 응답 객체를 두 번 심으면 말풍선이 겹쳐 쌓인다.
   useEffect(() => {
-    if (hasStartedRef.current) return;
-    hasStartedRef.current = true;
-    autoRecoMutation.mutate();
+    if (!autoReco.data || hydratedRef.current === autoReco.data) return;
+    hydratedRef.current = autoReco.data;
+    chat.hydrate(autoReco.data);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [autoReco.data]);
 
   // 홈 화면은 로그인 직후 자동 추천 결과만 보여주는 화면이라, 사이드바의
   // "새 상담 시작"은 여기서 추천을 반복하는 게 아니라 자유롭게 대화할 수 있는
   // 채팅 화면(S-03)으로 보내는 게 맞다.
   const handleNewChat = async () => {
-    await chat.resetConversation();
     compare.clear();
     setAskingPolicy(null);
+    // 일반 상담은 별도 세션이다. 홈 추천 세션과 캐시는 재방문을 위해 유지한다.
     navigate("/chat");
   };
 
@@ -113,11 +115,15 @@ export function HomePage() {
   };
 
   const response = chat.latestResponse;
-  const showFollowupUi = response?.status === "needs_input";
+  const followupKind = followupKindOf(response);
+  // ChatPage와 같은 이유로 전송 중에는 폼을 내린다(진행 막대가 대신한다).
+  const isBusy = chat.isSending || autoReco.isFetching;
+  const showFollowupUi = followupKind !== "none" && !isBusy;
   const showPolicyUi = response?.status === "answered" && response.policies.length > 0;
   // 정책이 0건이거나(정상 0건) 그 외 판정 불가 상태 — final_answer 카드와
-  // 공식 확인 안내 문구를 함께 보여준다.
-  const showEmptyState = !showFollowupUi && !showPolicyUi;
+  // 공식 확인 안내 문구를 함께 보여준다. 전송 중에는 직전 턴의 final_answer가
+  // 비어 있을 수 있어(되묻기 응답) 빈 카드가 뜨므로 같이 막는다.
+  const showEmptyState = !showFollowupUi && !showPolicyUi && !isBusy && Boolean(response?.final_answer);
 
   const handleCompareClick = () => {
     if (compare.count >= 2) chat.openCompare();
@@ -137,7 +143,11 @@ export function HomePage() {
         await chat.resetConversation();
         compare.clear();
         setAskingPolicy(null);
-        autoRecoMutation.mutate();
+        // 세션을 지웠으니 그 session_id를 물고 있는 캐시도 같이 버린다 -
+        // 안 버리면 다음 진입에서 이미 삭제된 세션으로 정책 문의가 나간다.
+        resetAutoReco();
+        hydratedRef.current = null;
+        void autoReco.refetch();
       })();
       return;
     }
@@ -151,8 +161,10 @@ export function HomePage() {
   // 자동 추천 완료 뒤 같은 세션에 새 메시지를 보내면 API-14 자동 모드를
   // 끝내고 일반 상담 새 턴으로 넘어간다(API-14 시트 "후속 질문 D4/D5").
   const submitFollowup = (message: string) => void chat.send({ message });
+  const submitCalcAnswers = (answers: CalculationAnswers) =>
+    void chat.sendCalcAnswers(answers, "지원금 계산에 필요한 정보를 입력했어요.");
 
-  const autoRecoErrorMessage = autoRecoMutation.error ? toErrorMessage(autoRecoMutation.error) : null;
+  const autoRecoErrorMessage = autoReco.error ? toErrorMessage(autoReco.error) : null;
   const sendErrorMessage = chat.sendError ? toErrorMessage(chat.sendError) : null;
 
   return (
@@ -160,6 +172,7 @@ export function HomePage() {
       onBrandClick={handleBrandClick}
       sidebar={
         <Sidebar
+          showSearchScope={false}
           onNewChat={() => setConfirmingNewChat(true)}
           isResettingChat={chat.isResetting}
           supportConditions={supportConditions}
@@ -174,13 +187,8 @@ export function HomePage() {
       <div className="app-content">
         <p className="text-faint" style={{ fontSize: 12.5, margin: "0 0 16px" }}>{HOME_CAPTION}</p>
 
-        {autoRecoMutation.isPending && (
-          <div className="card" style={{ marginBottom: 20 }}>
-            <TypingIndicator />
-            <p className="text-muted" style={{ fontSize: 13, margin: "8px 0 0" }}>{HOME_LOADING_MESSAGE}</p>
-          </div>
-        )}
-        {chat.isSending && <TypingIndicator />}
+        {/* 자동 추천(API-14)도, 이어지는 상담(API-10/11)도 같은 진행 막대를 쓴다. */}
+        <ChatProgressBar token={autoReco.isFetching ? autoReco.progressToken : chat.progressToken} active={isBusy} />
 
         {autoRecoErrorMessage && (
           <ErrorBanner>
@@ -190,8 +198,8 @@ export function HomePage() {
                 type="button"
                 className="btn-outline"
                 style={{ width: "auto", padding: "6px 14px", fontSize: 13 }}
-                disabled={autoRecoMutation.isPending}
-                onClick={() => autoRecoMutation.mutate()}
+                disabled={autoReco.isFetching}
+                onClick={() => void autoReco.refetch()}
               >
                 다시 시도
               </button>
@@ -211,7 +219,14 @@ export function HomePage() {
 
         <div className="view-fade" key={`${chat.messages.length}-${chat.policyView}`}>
           {showFollowupUi && response && (
-            response.slot_conflicts ? (
+            followupKind === "calc" ? (
+              <CalcFollowupForm
+                response={response}
+                onSubmit={submitCalcAnswers}
+                onSkip={submitFollowup}
+                isSubmitting={chat.isSending}
+              />
+            ) : followupKind === "conflict" ? (
               <SlotConflictForm response={response} onSubmit={submitFollowup} isSubmitting={chat.isSending} />
             ) : (
               <SlotFollowupForm response={response} onSubmit={submitFollowup} isSubmitting={chat.isSending} />
@@ -277,7 +292,7 @@ export function HomePage() {
       <ConfirmModal
         open={confirmingNewChat}
         title="새 상담을 시작할까요?"
-        description="현재 진행 중인 검색 내용은 저장되지 않고 모두 사라져요."
+        description="홈의 추천 결과를 유지하고 새로운 상담으로 이동해요."
         confirmLabel="새 상담 시작"
         cancelLabel="취소"
         isSubmitting={chat.isResetting}

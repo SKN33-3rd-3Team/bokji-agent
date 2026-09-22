@@ -32,8 +32,8 @@ def get_me(
     response: Response, current: AuthSessionRecord = Depends(get_current_user)
 ) -> UserProfile:
     _no_store(response)
-    with user_operation(current):
-        return auth_adapter.get_profile(current.username, user_id=current.user_id)
+    # 읽기 전용 조회는 진행 중인 상담의 회원별 잠금을 기다리지 않는다.
+    return auth_adapter.get_profile(current.username, user_id=current.user_id)
 
 
 @router.patch("/me", response_model=UserProfile)

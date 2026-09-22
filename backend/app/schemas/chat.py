@@ -105,13 +105,27 @@ class ChatRequest(BaseModel):
     known_veteran_status: _KnownVeteranStatus = None
 
 
+_CalcSlotName = Literal["marital_status", "pregnancy_status", "children_count", "household_size"]
+
+
 class CalculationAnswers(BaseModel):
+    """API-11 계산 되묻기 답변.
+
+    ``unknown_slots``/``unknown_choices``는 "이 항목은 모름/해당 없음"이다.
+    그래프 내부 센티넬(``slot_schema.UNKNOWN``) 문자열을 ``slots``/``choices``
+    값으로 받지 않고 별도 목록으로 받는 이유는, 공개 API에서는 열거형 계약에
+    있는 값만 받는다는 기존 원칙 때문이다(``_validate_public_choice``의
+    "그래프 내부 unknown은 공개 코드가 아니다"와 같은 이유). 센티넬 변환은
+    ``request_calc_info.merge_structured_calc_answer``가 한다.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     interrupt_id: _NonBlankStr
-    slots: dict[Literal["marital_status", "pregnancy_status", "children_count", "household_size"],
-                StrictStr | StrictInt] = Field(default_factory=dict)
+    slots: dict[_CalcSlotName, StrictStr | StrictInt] = Field(default_factory=dict)
     choices: dict[str, StrictStr] = Field(default_factory=dict)
+    unknown_slots: list[_CalcSlotName] = Field(default_factory=list)
+    unknown_choices: list[StrictStr] = Field(default_factory=list)
 
 
 class FollowupRequest(BaseModel):
@@ -119,6 +133,8 @@ class FollowupRequest(BaseModel):
 
     message: _NonBlankStr | None = None
     calc_answers: CalculationAnswers | None = None
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    extra_interests: list[str] | None = None
 
     @model_validator(mode="after")
     def require_one_answer(self):
@@ -134,11 +150,21 @@ class PolicyQuestionRequest(BaseModel):
 
 
 class PolicyQuestionResponse(BaseModel):
-    """API-12 응답."""
+    """API-12 응답.
+
+    ``reason``/``reason_message``/``llm_status``는 2026-09-20 추가된 진단용
+    필드다. ``kind="guidance"``(안내로 물러남)일 때 화면 문구는 어느 경우든
+    같아서, 이 값들이 없으면 "계속 응답 불가"가 LLM 미연결 때문인지, 호출
+    실패인지, 근거 검증 탈락인지 구분할 방법이 없었다
+    (``light_followup.REASON_*`` 참고).
+    """
 
     kind: Literal["answer", "guidance"]
     text: str
     evidence_quotes: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    reason_message: str | None = None
+    llm_status: dict[str, Any] = Field(default_factory=dict)
 
 
 class PolicyDetail(BaseModel):
@@ -215,6 +241,23 @@ class CalculationChoice(BaseModel):
     policy_id: str
     labels: list[str]
     policy_title: str
+
+
+class ChatProgressResponse(BaseModel):
+    """``GET /api/v1/chat/progress/{token}`` - 진행 막대 한 칸의 상태.
+
+    ``src/rag_chatbot/progress.py``의 ``snapshot()`` 반환값을 그대로 받는다
+    (``status="unknown"``만 라우터가 직접 만든다 - 기록이 없을 때).
+    ``fraction``은 **어림값**이다: 실제 노드 수는 조건부 분기 때문에 끝나봐야
+    알 수 있어서, 끝나기 전에는 0.95를 넘지 않는다.
+    """
+
+    status: Literal["running", "done", "failed", "unknown"]
+    fraction: float = 0.0
+    message: str | None = None
+    completed_steps: int = 0
+    total_steps: int = 0
+    elapsed_seconds: float = 0.0
 
 
 class ChatResponse(BaseModel):

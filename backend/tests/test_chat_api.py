@@ -70,6 +70,45 @@ def test_chat_requires_login(client):
     assert r.json()["code"] == "UNAUTHORIZED"
 
 
+@pytest.mark.parametrize("forward_resume", [False, True], ids=["slot-form", "calculation-form"])
+def test_progress_accumulates_input_answers_but_resets_new_search(monkeypatch, forward_resume):
+    from backend.app.schemas.chat import ChatRequest
+    from src.rag_chatbot import progress
+
+    clock = [100.0]
+    monkeypatch.setattr(progress.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(chat_adapter, "PROGRESS", progress.ProgressRegistry())
+    monkeypatch.setattr(chat_adapter, "resumes_forward", lambda sid: forward_resume)
+
+    def ask(message, session_id, **kwargs):
+        clock[0] += 10
+        return _fake_chat_response(session_id, "needs_input")
+
+    monkeypatch.setattr(chat_adapter, "ask", ask)
+    response = chat_adapter.start_chat(ChatRequest(message="주거 지원"), user_id=1)
+    sid = response.session_id
+
+    def run_turn(expected_start, seconds, status):
+        clock[0] += 120  # 폼 작성 대기 시간은 누적하지 않는다. 진행률 보존 기간도 초과한다.
+
+        def answer(session_id, message, **kwargs):
+            snapshot = chat_adapter.PROGRESS.snapshot("current", owner=1)
+            assert snapshot["elapsed_seconds"] == expected_start
+            clock[0] += seconds
+            return _fake_chat_response(session_id, status)
+
+        monkeypatch.setattr(chat_adapter, "answer_followup", answer)
+        chat_adapter.continue_chat(sid, "추가 입력", user_id=1, progress_token="current")
+        assert chat_adapter.PROGRESS.snapshot("current", owner=1)["elapsed_seconds"] == expected_start + seconds
+
+    run_turn(10, 5, "needs_input")
+    run_turn(15, 7, "answered")
+    monkeypatch.setattr(chat_adapter, "resumes_forward", lambda sid: False)
+    run_turn(0, 3, "needs_input")  # 같은 세션의 두 번째 정책 질문
+    run_turn(3, 2, "answered")
+    run_turn(0, 4, "answered")  # 세 번째 정책 질문도 다시 초기화
+
+
 def test_chat_top_k_out_of_range_is_400(client):
     _signup(client, "chatuser1@example.com")
     r = client.post("/api/v1/chat/messages", json={"message": "안녕", "top_k": 21})
@@ -171,17 +210,21 @@ def test_chat_accepts_public_choices_and_optional_prefill(client, monkeypatch):
 
 def test_chat_start_and_followup_happy_path(client, monkeypatch):
     _signup(client, "chatuser3@example.com")
+    # HTTP 계약 테스트에서는 진행률의 재개 판정도 실제 벡터 DB를 열지 않는다.
+    monkeypatch.setattr(chat_adapter, "resumes_forward", lambda session_id: False)
 
     monkeypatch.setattr(
         chat_adapter,
         "ask",
         lambda message, session_id, **kwargs: _fake_chat_response(session_id, "needs_input"),
     )
-    monkeypatch.setattr(
-        chat_adapter,
-        "answer_followup",
-        lambda session_id, message: _fake_chat_response(session_id, "answered"),
-    )
+    received_options = []
+
+    def answer_followup(session_id, message, *, top_k=None, extra_interests=None):
+        received_options.append((top_k, extra_interests))
+        return _fake_chat_response(session_id, "answered")
+
+    monkeypatch.setattr(chat_adapter, "answer_followup", answer_followup)
 
     r = client.post("/api/v1/chat/messages", json={"message": "유치원비 지원 정책 있나요?"})
     assert r.status_code == 200
@@ -194,6 +237,19 @@ def test_chat_start_and_followup_happy_path(client, monkeypatch):
     body = r.json()
     assert body["status"] == "answered"
     assert body["policies"][0]["policy_id"] == "P1"
+
+    assert received_options == [(None, None)]
+    for top_k, interests in ((8, ["주거"]), (2, [])):
+        r = client.post(
+            f"/api/v1/chat/sessions/{session_id}/followup",
+            json={"message": "다시 찾아줘", "top_k": top_k, "extra_interests": interests},
+        )
+        assert r.status_code == 200
+        # 빈 배열은 known_household_types와 동일하게 "미변경"으로 정규화된다
+        # (continue_chat이 빈 배열을 None으로 바꾸지 않으면 request_missing_slots
+        # 재개 시 프로필에서 채워진 관심사를 지워버리는 회귀가 재현된다).
+        expected_interests = interests or None
+        assert received_options[-1] == (top_k, expected_interests)
 
 
 def test_chat_response_includes_parsed_required_documents_items(client, monkeypatch):

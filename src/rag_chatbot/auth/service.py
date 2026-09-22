@@ -101,9 +101,26 @@ _SIDO_VALUES = frozenset(
     }
 )
 
-# UI 의존 없이 API-01/05의 가입 관심조건을 검증한다. API 테스트가
-# API-09의 signup_interest_options와 일치하는지 확인한다.
-_INTEREST_VALUES = frozenset({"임신/출산", "노인/어르신", "농어업인", "청년"})
+# UI 의존 없이 API-01/05의 관심조건을 검증한다(streamlit_ui.constants의
+# SIGNUP_INTEREST_OPTIONS/INTEREST_FIELD_OPTIONS와 같은 값을 그대로 쓴다 -
+# 위 _SIDO_VALUES와 같은 이유로 streamlit_ui 패키지 자체는 import하지 않는다.
+# 값이 바뀌면 두 곳을 같이 고쳐야 한다).
+#
+# 회원가입(API-01) 화면도 마이페이지(API-05)와 같은 19종(interest_field_
+# options) 목록을 보여주므로 둘 다 이 값으로 검증한다(2026-09-22, 이전엔
+# 가입만 4종으로 더 좁았다). 예전 4종(signup_interest_options)으로 이미
+# 가입한 계정이 이후 다른 필드를 수정할 때 재검증에서 거부되지 않도록
+# 옛 4종도 합집합으로 남겨둔다.
+_INTEREST_VALUES = frozenset(
+    {
+        # signup_interest_options 예전 4종(하위 호환용)
+        "임신/출산", "노인/어르신", "농어업인", "청년",
+        # interest_field_options 19종 - 가입/마이페이지 공통
+        "육아", "출산", "보육", "주거", "취업", "일자리", "창업", "교육", "장학",
+        "의료", "건강", "돌봄", "노인", "장애인", "저소득", "다문화", "한부모",
+        "지원금",
+    }
+)
 
 # graph.slot_schema와 같은 한국 날짜·만 120세 상한. 인증 모듈은 무거운
 # graph 패키지를 import하지 않으며 경계 일치는 계약 테스트로 확인한다.

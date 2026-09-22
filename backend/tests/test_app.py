@@ -38,8 +38,12 @@ def test_app_preserves_lifespan_routes_and_preflight(monkeypatch):
     from src.rag_chatbot import service
 
     warmed = []
-    monkeypatch.setattr(service, "get_graph", lambda: warmed.append(True))
+    monkeypatch.setattr(service, "warm_up", lambda: warmed.append(True))
     with TestClient(app) as client:
+        # 워밍업은 별도 스레드에서 돈다(main.lifespan) - 임베딩 모델 로딩이
+        # 끝날 때까지 서버가 연결을 못 받으면 로그인/회원가입까지 같이 멈춰
+        # 보이기 때문이다. 시작됐는지만 결정적으로 확인한다.
+        app.state.warmup_thread.join(timeout=5)
         assert warmed == [True]
         assert client.get("/healthz").json() == {"status": "ok"}
         schema = client.get("/openapi.json").json()
