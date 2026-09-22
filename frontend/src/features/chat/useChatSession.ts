@@ -52,7 +52,15 @@ export function useChatSession() {
 
   const sendMutation = useMutation({
     mutationFn: async ({ payload, calcAnswers }: SendVariables): Promise<ChatResponse> => {
-      const token = newProgressToken();
+      // 되묻기(session_id 있음)는 새 토큰 대신 session_id 자체를 진행률
+      // 조회 키로 쓴다. progress.py의 추적 키가 session_id이고
+      // progress_token은 그 위에 거는 별칭일 뿐이라(_begin_progress) 동작은
+      // 동일하되, 서버가 응답하기 전까지 새 토큰엔 별칭이 아직 안 걸려있어
+      // useChatProgress가 매번 빈 상태(gcTime/staleTime 0)로 시작하는 문제를
+      // 피한다 - 이미 진행 중이던 막대가 되묻기 제출 순간 0%로 리셋됐다가
+      // 다시 점프하는 것처럼 보였다(계산 되묻기 폼에서 특히 눈에 띔).
+      // 최초 메시지(API-10, 아직 session_id 없음)는 그대로 새 토큰을 쓴다.
+      const token = sessionIdRef.current ?? newProgressToken();
       setProgressToken(token);
       setProgressStartedAt(Date.now());
       // session_id 보유 여부로 API-10(최초)/API-11(진행 중)을 분기 호출한다
