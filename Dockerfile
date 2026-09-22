@@ -21,8 +21,8 @@ COPY streamlit_ui/__init__.py streamlit_ui/constants.py ./streamlit_ui/
 
 RUN groupadd --gid 1000 app \
     && useradd --uid 1000 --gid 1000 --create-home app \
-    && mkdir -p /app/.runtime \
-    && chown app:app /app/.runtime
+    && mkdir -p /app/.runtime /app/logs \
+    && chown app:app /app/.runtime /app/logs
 
 USER app
 
