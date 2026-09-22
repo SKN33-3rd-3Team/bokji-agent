@@ -245,7 +245,11 @@ def test_chat_start_and_followup_happy_path(client, monkeypatch):
             json={"message": "다시 찾아줘", "top_k": top_k, "extra_interests": interests},
         )
         assert r.status_code == 200
-        assert received_options[-1] == (top_k, interests)
+        # 빈 배열은 known_household_types와 동일하게 "미변경"으로 정규화된다
+        # (continue_chat이 빈 배열을 None으로 바꾸지 않으면 request_missing_slots
+        # 재개 시 프로필에서 채워진 관심사를 지워버리는 회귀가 재현된다).
+        expected_interests = interests or None
+        assert received_options[-1] == (top_k, expected_interests)
 
 
 def test_chat_response_includes_parsed_required_documents_items(client, monkeypatch):

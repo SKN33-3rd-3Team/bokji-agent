@@ -213,6 +213,11 @@ def continue_chat(
     session_id: str, message: str | dict, *, user_id: int, progress_token: str | None = None,
     top_k: int | None = None, extra_interests: list[str] | None = None,
 ) -> ChatResponse:
+    # start_chat()과 동일하게 빈 배열은 "관심사 없음 전달"이 아니라 "관심사
+    # 미변경"으로 취급한다 - 그대로 넘기면 builder.resume_graph()가
+    # `is not None` 체크만 하므로 빈 배열도 갱신 신호로 보고 기존/프로필
+    # 관심사(예: 보훈 회원의 국가유공자 검색어)를 지워버린다.
+    extra_interests = extra_interests or None
     with chat_session_store.locked(session_id, user_id=user_id) as record:
         if record is None:
             raise ApiError(
