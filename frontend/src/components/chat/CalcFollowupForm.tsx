@@ -10,7 +10,23 @@ import {
   UNKNOWN_CHOICE_LABEL,
   UNKNOWN_FIELD_NOTE,
 } from "@/constants/labels";
-import type { CalculationAnswers, ChatResponse } from "@/types/chat";
+import type { CalculationAnswers, CalculationSlotInput, ChatResponse } from "@/types/chat";
+
+/**
+ * number 위젯 값을 정수로 변환·검증한다. `Number.parseInt`는 소수부를
+ * 자르고("2.5"→2) 지수 표기를 잘못 끊어 읽는다("1e1"→1) — 값 전체를
+ * `Number()`로 해석한 뒤 정수·범위를 확인해 둘 다 방지한다. 유효하지
+ * 않으면 null을 반환해 미입력과 동일하게 취급한다(제출 버튼 비활성화).
+ */
+function parseIntegerSlotValue(raw: string, input: CalculationSlotInput): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || !Number.isInteger(value)) return null;
+  if (input.minimum !== null && value < input.minimum) return null;
+  if (input.maximum !== null && value > input.maximum) return null;
+  return value;
+}
 
 interface CalcFollowupFormProps {
   response: ChatResponse;
@@ -56,7 +72,13 @@ export function CalcFollowupForm({ response, onSubmit, onSkip, isSubmitting }: C
     setSkipped((prev) => (prev[key] ? { ...prev, [key]: false } : prev));
 
   const allAnswered =
-    slotInputs.every((input) => skipped[input.slot] || Boolean(slotValues[input.slot])) &&
+    slotInputs.every(
+      (input) =>
+        skipped[input.slot] ||
+        (input.input_type === "number"
+          ? parseIntegerSlotValue(slotValues[input.slot] ?? "", input) !== null
+          : Boolean(slotValues[input.slot])),
+    ) &&
     choices.every((choice) => skipped[choice.policy_id] || Boolean(choiceValues[choice.policy_id]));
 
   const submit = () => {
@@ -74,7 +96,13 @@ export function CalcFollowupForm({ response, onSubmit, onSkip, isSubmitting }: C
       if (!raw) continue;
       // number 위젯 값은 반드시 정수로 보낸다 — 백엔드가 StrictInt로 검증해
       // 문자열이면 400(VALIDATION_ERROR)이 된다.
-      slots[input.slot] = input.input_type === "number" ? Number.parseInt(raw, 10) : raw;
+      if (input.input_type === "number") {
+        const parsed = parseIntegerSlotValue(raw, input);
+        if (parsed === null) continue;
+        slots[input.slot] = parsed;
+      } else {
+        slots[input.slot] = raw;
+      }
     }
     const answerChoices: Record<string, string> = {};
     const unknownChoices: string[] = [];
