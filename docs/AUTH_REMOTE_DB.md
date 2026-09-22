@@ -18,9 +18,14 @@ LLM 추론은 [RunPod/HuggingFace 안내](RUNPOD_SETUP_DRAFT.md), HTTP 인증·�
 | 환경변수 | `AUTH_DB_URL=mysql://<user>:<password>@<host>:<port>/<dbname>` |
 | 드라이버 | `pymysql>=1.1`. `backend/requirements-backend.txt`가 `requirements-auth.txt`를 포함하므로 백엔드 설치 시 함께 설치 |
 | 스킴 | `mysql://` `mariadb://` `mysql+pymysql://` 셋 다 허용 |
-| 테이블 | 첫 실행 시 `users` 를 자동 생성(`init_schema`) — 수동 DDL 불필요 |
+| 테이블 | 인증 서비스가 처음 DB를 사용할 때 `users` 테이블을 준비한다.  컨테이너 시작이나 `/healthz` 확인만으로 테이블이 생성되는 것은 아니다. Compose의 `MIGRATIONS=validate`는 Chroma 설정이며 인증 DB의 테이블 생성과는 관계없다. |
 | 암호화 키 | `AUTH_ENC_KEY` 를 **팀이 같은 값으로 공유**. DB 와 분리 보관 |
 | 연결 타임아웃 | `AUTH_DB_CONNECT_TIMEOUT`(초, 기본 10) |
+
+- 원격 MySQL 드라이버는 `PyMySQL>=1.2.3`을 사용한다.
+- `AUTH_DB_SSL_MODE=REQUIRED`는 TLS 암호화를 강제하되 서버 인증서와 호스트 이름은 검증하지 않는다. 비우면 기존 연결 동작을 유지하며, 그 외 값은 오류로 처리한다.
+- 배포용 MySQL 계정에는 `REQUIRE SSL`을 설정한다.
+- EC2 접속정보는 저장소 밖 `/home/ubuntu/.config/bokji-agent/backend.env`에 보관하고 Compose의 `env_file`로 전달한다. 전용 디렉터리 권한은 `700`, 파일 권한은 `600`으로 설정한다.
 
 DB 선택 순서는 명시적 `db_path`의 SQLite → `AUTH_DB_URL`의 MySQL/MariaDB → `AUTH_DB_PATH` 또는 기본 `.runtime/auth.db`의 SQLite다. 원격 연결 실패 후 SQLite로 자동 전환하거나 두 DB를 동기화하지 않는다. SQLite 장애 대체는 승인되지 않은 제안이다.
 
@@ -87,6 +92,10 @@ SHOW GRANTS FOR 'dev_account01'@'%';
    python scripts/check_auth_db.py
    ```
    (`AUTH_DB_URL` 을 읽는다. `--url mysql://...` 로 직접 넘겨도 된다.)
+   `check_auth_db.py`는 앱의 TLS 연결을 검증하는 읽기 전용 도구가 아니며,
+점검용 테이블을 생성·삭제할 수 있다.
+앱의 TLS 확인에는 `repository.get_backend().connect()`를 사용하고,
+`init_schema()` 없이 TLS 암호군과 접속 DB·계정만 조회한다.
 
 4. FastAPI에서 회원가입·로그인 확인:
    ```
