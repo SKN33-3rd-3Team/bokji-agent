@@ -20,7 +20,9 @@
 
 </div>
 
-최종 서비스 구성은 **React + FastAPI**입니다. 이 브랜치에는 FastAPI 백엔드가 있으며 React 화면은 별도 브랜치에서 개발 중입니다. Streamlit은 향후 제거할 레거시 데모입니다. 기준 자료와 확정 결정은 [프로젝트 준수 기준](docs/PROJECT_COMPLIANCE.md#서비스-전환-기준), 현재 승인 계약·구현·검증·담당은 [백엔드 계약 추적표](backend/README.md#원본-문서와-남은-계약-차이)에 정리합니다. 로그인 후 서버 저장 프로필로 질문 없이 추천하는 [API-14와 공용 계산 입력 명세](docs/AUTO_RECOMMENDATION_API.md)도 제공합니다.
+**운영 서비스는 React(S3) + FastAPI(AWS EC2), 원격 MySQL, RunPod + HuggingFace 폴백 구성으로 배포 완료되었습니다(사용자 확인).** 현재 체크아웃에도 `frontend/`와 `backend/`가 함께 있으며, 회원가입·로그인·마이페이지, 자동 추천, 일반 상담·되묻기, 정책 상세·비교·문의 화면이 API에 연결되어 있습니다. Streamlit은 레거시 데모로 남아 있습니다.
+
+기준 자료는 [프로젝트 준수 기준](docs/PROJECT_COMPLIANCE.md#서비스-전환-기준), 승인 계약은 [백엔드 계약 추적표](backend/README.md#원본-문서와-남은-계약-차이), 자동 추천은 [API-14와 공용 계산 입력 명세](docs/AUTO_RECOMMENDATION_API.md)를 참고하세요. 연결 문서에 남은 React 미포함·미완료 설명은 현재 배포 상태를 나타내지 않습니다. 이번 README 갱신은 로컬 코드 대조와 사용자 확인을 반영했으며, 운영 접속·동작을 직접 검증한 결과는 아닙니다.
 
 ---
 
@@ -48,6 +50,7 @@
   - [사전 요구사항](#사전-요구사항)
   - [설치 및 설정](#설치-및-설정)
   - [환경 변수 (.env)](#환경-변수-설정-env)
+  - [데이터 준비](#데이터-준비)
   - [실행](#서비스-실행)
 - [🧪 테스트 및 벤치마크](#-테스트-및-벤치마크-testing--evaluation)
 - [⚠️ 투명한 한계 및 엔지니어링 고려사항](#️-투명한-한계-및-엔지니어링-고려사항-known-limitations)
@@ -64,20 +67,24 @@
 ```
 
 1. **환각 억제를 위한 다단계 검증**
-   - 정책 문서에서 주장(Claim)을 추출하고 원문과의 교차 대조(N6) 및 Evidence Gate(N7)를 통과해야만 답변 생성에 반영됩니다.
+   - 정책 문서에서 주장(Claim)을 추출하고 색인된 정책 청크와의 문자열 대조(N6) 및 Evidence Gate(N7)를 거쳐 답변을 생성합니다. 실시간 공식 원문 조회나 모든 문장의 의미 검증을 수행하는 것은 아닙니다.
 2. **동적 슬롯 파싱 & 하드 게이팅 (Interrupt & Resume)**
    - 일반 상담은 지역 등 필수 조건이 누락되면 추가 질문을 합니다. 자동 추천(API-14)은 질문 없이 저장 프로필만 사용하며 지역이 없으면 확인된 전국 대상만 검색합니다.
 3. **자격 · 지원금 · 중복수급 삼각 판정**
    - 단순히 정책을 요약하는 것을 넘어, 사용자의 슬롯 조건을 기반으로 **충족/미충족/미확인**, **계산 가능한 지원금액**, **타 복지와의 중복수급 제한**을 구조화하여 산출합니다.
 4. **규칙 기반 안전 폴백(Graceful Fallback)**
-   - 설정에 따라 RunPod Pod 실패 시 남은 노드 실행 시간 안에서 HuggingFace로 전환합니다. 일반 상담의 비시간초과 오류에는 기존 규칙·템플릿/안내 경로가 있지만, 노드 총 90초 소진과 자동 추천의 최종 제공자 실패는 오류로 반환합니다. [한도와 실행 스레드의 제약](docs/RUNPOD_SETUP_DRAFT.md#노드-총-실행-한도)을 참고하세요.
+   - 운영 LLM은 RunPod를 우선 사용하고 HuggingFace로 폴백합니다. 코드의 Pod 경로는 HF 토큰이 있으면 실패 시 남은 실행 시간 안에서 HF를 호출합니다. 일반 상담의 비시간초과 오류에는 규칙·템플릿/안내 경로가 있지만, 시간 제한 대상 노드의 총 90초 소진과 자동 추천의 최종 제공자 실패는 오류로 반환합니다. [한도와 실행 스레드의 제약](docs/RUNPOD_SETUP_DRAFT.md#노드-총-실행-한도)을 참고하세요.
 
 ---
 
 <a name="system-architecture"></a>
 ## 🏗️ 시스템 아키텍처
 
-온라인 상담은 `React → FastAPI → 기존 서비스·LangGraph → Vector DB / LLM` 흐름을 목표로 합니다. 회원 정보는 별도의 SQLite 또는 MySQL/MariaDB에 저장합니다. React 통합은 아직 완료되지 않았으며, 기존 그래프·RAG를 재사용하면서 인증 서비스·저장소와 LLM 연동도 수정했습니다.
+배포 구조는 **S3의 React → EC2의 FastAPI → ChromaDB / RunPod(+ HuggingFace 폴백)**이며, 운영 회원 정보는 **원격 MySQL**에 저장합니다. 아래 실행 절차의 SQLite는 로컬 개발용 기본 선택지입니다. 배포 URL과 인프라 세부 설정은 이 문서에서 다루지 않습니다.
+
+온라인 상담은 `React → FastAPI → service.ask() / answer_followup() → LangGraph → ChromaDB / LLM`으로 연결되고, 브라우저 인증은 HttpOnly 세션 쿠키를 사용합니다. 홈은 API-14로 저장 프로필 기반 추천을 받아 앱 메모리에 캐시하며, 일반 상담은 API-10으로 시작해 API-11로 추가 질문·계산 입력 또는 새 턴을 처리합니다. 진행률은 별도 GET API로 조회합니다.
+
+정책 목록·상세·비교는 같은 `policies` 응답을 재사용합니다. 정책 문의(API-12)는 서버에 캐시된 해당 세션의 마지막 정책·프로필을 이용하는 `light_followup` 경로이며 전체 그래프를 재실행하지 않습니다.
 
 아래 이미지는 기존 Streamlit 구성의 참고 그림입니다. 현재 API 구성은 [백엔드 구조](backend/README.md#구성과-api-범위)를 따릅니다. 오프라인 수집·색인 경로는 상담 요청 처리와 분리합니다.
 
@@ -90,7 +97,7 @@
 
 ## 🧩 에이전트 파이프라인 (LangGraph N1-N14 Pipeline)
 
-복지 에이전트는 사용자의 질문을 단순 생성하지 않고, **14개의 LangGraph 상태 노드**를 통해 팩트체크 및 자격 검증을 거친 후 안전하게 답변합니다.
+복지 에이전트는 **N1~N14와 보조 노드 N2a·N10a, 근거 부족 보류 노드**를 LangGraph로 연결합니다. N2a의 일반 법령 검색은 아직 실제 검색에 연결되지 않아 빈 목록을 반환합니다.
 
 > 아래는 일반 상담의 기본 흐름입니다. API-14는 초기·계산 질문을 생략하고 최종 카드에 자동 추천 필터를 적용합니다. 완료된 상담은 같은 세션의 새 턴으로 이어갈 수 있으며, 계산 중에는 구조화 입력을 사용합니다. [현재 HTTP 계약](backend/README.md#상담-턴과-계산-입력)을 따릅니다.
 
@@ -102,7 +109,7 @@ flowchart TD
         direction LR
         n1["N1. 슬롯 파싱<br/><small>지역 · 생년월일 · 성별 · 소득 · 장애 · 취업 · 관심사 등</small>"]:::c_node
         n2["N2. 슬롯 완전성 체크 (Gate)<br/><small>지역 + 프로필 5종 하드 게이트 · 슬롯별 최대 2회 질문</small>"]:::c_gate
-        n2a["N2a. 일반 법령 참고 검색<br/><small>지역 부족 시 law_type=law · 전국 공통</small>"]:::c_node
+        n2a["N2a. 일반 법령 참고 경로<br/><small>현재 검색 미연결 · 빈 목록 반환</small>"]:::c_node
         n3["N3. 추가 정보 요청<br/><small>부족 슬롯 일괄 질문 · Interrupt & Resume</small>"]:::c_interrupt
 
         n1 -->|"E2: slots"| n2
@@ -117,7 +124,7 @@ flowchart TD
 
         subgraph S2_top [" "]
             direction LR
-            n4["🔍 N4. 정책 검색 Node<br/><small>프로필 필터 후 Top-N 후보 검색</small>"]:::c_search
+            n4["🔍 N4. 정책 검색 Node<br/><small>벡터 검색 · 프로필 필터 · 선택적 LLM 관련성 확인</small>"]:::c_search
             n5["📋 N5. Claim Plan 수립<br/><small>자격 · 금액 · 중복수급 Claim · 현재 doc_check_required=true</small>"]:::c_node
             n6["📑 N6. 색인 정책문서 근거 대조<br/><small>subsidy chunk에서 발췌 문장의 문자열 일치 확인</small>"]:::c_node
 
@@ -143,15 +150,18 @@ flowchart TD
 
         subgraph S3_mid [" "]
             direction LR
-            n10["🧮 N10. 지원금 처리<br/><small>지원내용 재검색 · 단일 금액 추출 · 근거가 있을 때 제한적 총액 계산</small>"]:::c_node
+            n10["🧮 N10. 지원금 처리<br/><small>지원내용 재검색 · 단일/구간/선택형 금액 · 제한적 총액 계산</small>"]:::c_node
             n11["🔗 N11. 중복수급 판정<br/><small>조건부 · 미확인 · 가능/불가 자동 격상 없음</small>"]:::c_node
         end
 
-        n12["📦 N12. 결과 조립<br/><small>정책별 결합 · 금액 계산 불가 시 관련 법령 링크 조회</small>"]:::c_node
+        n10a["N10a. 계산 정보 요청<br/><small>구조화 입력 · Interrupt & Resume</small>"]:::c_interrupt
+        n12["📦 N12. 결과 조립<br/><small>계산 되묻기 완료 후 결합 · 금액 계산 불가 시 관련 법령 링크 조회</small>"]:::c_node
 
         n9 -->|"E16: eligibility_verdicts"| n10
         n9 -->|"E17: eligibility_verdicts"| n11
-        n10 -->|"E18: benefit_amounts"| n12
+        n10 -->|"E18: 계산 완료 또는 추가 질문 없음"| n12
+        n10 -->|"E18a: 계산 정보 부족"| n10a
+        n10a -.->|"E18b: 입력 반영 후 재판정"| n9
         n11 -->|"E19: duplicate_verdicts"| n12
     end
 
@@ -197,22 +207,25 @@ flowchart TD
 <details>
 <summary><b>🔍 각 노드별 세부 역할 및 구현 파일 보기</b></summary>
 
+모듈 경로는 `src/rag_chatbot/graph/nodes/` 기준입니다.
+
 | 노드 | 구현 모듈 | 핵심 역할                                                |
 |:---:|:---|:-----------------------------------------------------|
-| **N1** | `graph/nodes/slot_parser.py` | LLM을 이용하여 사용자 입력 문장에서 슬롯(나이, 지역, 상황) 추출 (Rule + LLM) |
+| **N1** | `slot_parser.py` | 사용자 입력에서 슬롯 추출 및 저장 프로필과의 충돌 확인 (Rule + 선택적 LLM) |
 | **N2** | `slot_completeness_gate.py` | 서비스 진행을 위한 필수 조건(거주 지역 등) 충족 여부 판정                   |
-| **N2a**| `general_law_reference_search.py` | 지역 정보 미확인 상태에서 안내할 수 있는 전국 단위 참고 법령 탐색               |
+| **N2a**| `general_law_reference_search.py` | 지역 정보 부족 시 참고 검색 경로 호출. 현재 `../retrieval_gateway.py`는 빈 목록 반환 |
 | **N3** | `request_missing_slots.py` | 사용자에게 빠진 슬롯을 되묻고 그래프 실행 일시 정지 (`interrupt`)          |
 | **N4** | `policy_search.py` | 사용자 슬롯 조건에 부합하는 후보 지원제도 Top-K 벡터 검색                  |
-| **N5** | `claim_plan.py` | LLM을 이용하여 후보 정책 원문에서 자격·지원금·중복수급 주장(Claim) 추출                  |
-| **N6** | `document_verification.py` | 추출된 주장이 실제 수집 원문에 존재하는지 팩트체크 대조                      |
+| **N5** | `claim_plan.py` | LLM 또는 규칙으로 후보 정책 청크의 자격·지원금·중복수급 주장(Claim) 추출 |
+| **N6** | `document_verification.py` | 발췌 문장이 색인된 정책 청크에 포함되는지 문자열 대조 |
 | **N7** | `evidence_gate.py` | 근거의 충분성·시행일자 유효성·법령 충돌 여부를 통제하는 슈퍼바이저 게이트            |
-| **N8** | `targeted_law_search.py` | 선언된 법령명 기반 정밀 타겟 메타데이터 검색                            |
-| **N9** | `eligibility_verdict.py` | LLM을 이용하여 조건 대조를 통한 현재 구현 범위 내 자격 판정 (`충족` / `미충족` / `미확인`)    |
-| **N10**| `benefit_calculator.py` | 공식 근거가 확보된 명확한 산식에 한해서만 지원금액 계산                      |
+| **N8** | `targeted_law_search.py` | `required_law_sources`의 `law_type`·`source_id`로 법령 메타데이터 조회 |
+| **N9** | `eligibility_verdict.py` | 규칙으로 조건 대조·자격 판정 (`충족` / `미충족` / `미확인`), 선택적 LLM으로 사유 문장 정리 |
+| **N10**| `benefit_calculator.py` | 자격 충족 정책의 금액·구간·선택형 규칙 추출 및 입력값에 따른 제한적 계산 |
+| **N10a**| `request_calc_info.py` | 계산에 필요한 슬롯·선택지를 되묻고 N9로 재개. 자동 추천에서는 질문 생략 |
 | **N11**| `duplicate_benefit.py` | 타 정부지원 사업과의 중복수급 허용 여부 판정                            |
 | **N12**| `result_assembly.py` | 정책별 판정 및 근거 데이터 정합성 조립 (근거 없는 합산 방지)                 |
-| **N13**| `answer_generation.py` | 신뢰할 수 있는 최종 사용자 맞춤형 설명문 LLM을 이용하여 생성                           |
+| **N13**| `answer_generation.py` | 규칙 템플릿과 선택적 LLM 요약으로 설명문·인용 조립 |
 | **N14**| `final_verification.py` | 인용 `chunk_id` 존재 여부 확인 및 최종 응답 상태 결정                 |
 
 </details>
@@ -223,30 +236,33 @@ flowchart TD
 
 | 계층 | 기술 / 도구 | 선정 및 사용 이유 |
 | :--- | :--- | :--- |
-| **Orchestration** | `LangGraph`, `LangChain` | 14개 노드 간 조건부 라우팅 및 Stateful Checkpointing (`MemorySaver`) |
-| **LLM & Inference** | HuggingFace API, RunPod Pod / Serverless | Pod 우선, HF 자격 증명이 있으면 호출 실패 시 HF 폴백. 모델은 환경설정으로 지정 |
+| **Orchestration** | `LangGraph 1.2.11` (LangChain Core 기반) | 조건부 라우팅·되묻기 및 메모리 체크포인트 (`MemorySaver`) |
+| **LLM & Inference** | 운영: RunPod + HuggingFace 폴백 | 코드의 Pod 경로가 우선. 별도 선택지로 RunPod Serverless·로컬 Ollama 지원 |
 | **Embedding & Vector DB** | `ChromaDB`, `intfloat/multilingual-e5-base` | 768차원 다국어 고밀도 벡터 임베딩 및 메타데이터 필터링 |
-| **Frontend UI** | React (목표), `Streamlit 1.62.0` (레거시) | React는 별도 브랜치에서 개발 중. 기존 데모는 Streamlit으로 실행 |
+| **Frontend UI** | React 18, TypeScript, Vite 5, React Router 6, TanStack Query 5, Axios | S3에 배포된 프론트엔드. 로컬은 Vite, 레거시 데모는 `Streamlit 1.62.0` |
 | **HTTP API** | FastAPI, Pydantic, Uvicorn | 회원·옵션·상담·자동 추천 API-01~14, 서버 세션 및 소유권 검증 |
-| **Data & Scraping** | `Python 3.11`, `Requests`, `xmltodict` | 공공데이터포털(공공서비스) 및 국가법령정보센터 대규모 수집 |
-| **Security & Storage** | SQLite / MySQL·MariaDB, `bcrypt`, `cryptography (Fernet)` | 회원 저장소 선택, 민감 프로필 암호화. 원격 DB 드라이버는 별도 설치 |
-| **Quality & Testing** | `pytest`, `pytest-subtests`, FastAPI TestClient, Streamlit AppTest | 코어·HTTP 계약 및 레거시 UI 검사. 실제 서비스 통합은 별도 검증 |
+| **Data & Scraping** | `Python 3.11`, `Requests`, 표준 `json` | 공공서비스 및 국가법령정보센터 목록 수집·정규화 |
+| **Security & Storage** | 운영: 원격 MySQL, PyMySQL, `bcrypt`, `cryptography (Fernet)` | 민감 프로필 암호화. 로컬 기본은 SQLite이며 코드상 MariaDB도 지원. PyMySQL은 백엔드 설치에 포함 |
+| **Deployment** | AWS EC2(백엔드) + S3(프론트엔드) | 사용자 확인 기준 배포 완료. 이번 문서 작업에서는 운영 접속·검증 미실행 |
+| **Quality & Testing** | `pytest`, `unittest`, FastAPI TestClient, Streamlit AppTest, Playwright | 코어·HTTP·레거시 UI 및 별도 브라우저 회귀 검사. 실제 서비스 통합은 별도 검증 |
 
 ---
 
 ## 📊 데이터셋 및 벡터 색인 사양 (Dataset & Index)
 
-신뢰할 수 있는 공공 출처의 데이터를 가공하여 다중 인덱스를 운용합니다.
+공공서비스 문서와 법령 목록 메타데이터를 별도 논리 인덱스로 운용합니다. 전체 원천·처리 문서와 벡터 DB는 런타임 산출물이며 Git에 포함되지 않습니다. 저장소에는 [공공서비스 manifest](data/processed/subsidy_manifest.json), [법령 manifest](data/processed/law_manifest.json)와 `data/samples/`의 공개 샘플을 추적합니다. 문서·청크 수와 용량은 준비한 스냅샷에 따라 달라집니다.
 
 ### 1. 원천 데이터 (`data/processed/`)
-- **공공서비스 지원제도 문서 (`subsidy_documents.jsonl`)**: `10,968건` (43.3 MB)
-- **국가법령정보센터 법령 메타데이터 (`law_documents.jsonl`)**: `190,445건` (396.0 MB)
+- **공공서비스 지원제도 문서 (`subsidy_documents.jsonl`)**: 목록·상세·지원조건을 병합해 변환한 Document JSONL
+- **국가법령정보센터 법령 메타데이터 (`law_documents.jsonl`)**: 법령·행정규칙·자치법규 목록을 정규화한 Document JSONL (본문·조문 제외)
 
-### 2. 벡터 색인 사양 (`data/vector_db/`, 총 2.9 GB)
-| 제공자 (Provider) | 차원 | Subsidy 청크 | Law 청크 | 특징 및 용도 |
-| :--- | :---: | :---: | :---: | :--- |
-| **`korean`** *(운영 표준)* | **768** | **60,497** | **111,500** | `multilingual-e5-base` 기반 실 서비스 의미론적 검색 |
-| **`local-hash-v1`** | 128 | 45,413 | 1,465 | 네트워크/GPU가 없는 오프라인 스모크 테스트 전용 |
+### 2. 벡터 색인 사양 (`data/vector_db/`)
+| 설정 (`EMBEDDING_PROVIDER`) | 기본 차원 | 특징 및 용도 |
+| :--- | :---: | :--- |
+| **`korean`** *(서비스 기본값)* | **768** | `intfloat/multilingual-e5-base` 기반 의미 검색 |
+| **`hash`** | 128 | `local-hash-v1:128` 제공자. 테스트·오프라인 스모크 전용 |
+
+서비스의 컬렉션 접두사는 `bokji_rag`입니다. 색인과 검색의 제공자·모델·차원이 일치해야 합니다. 기본 재색인 스크립트는 E5 768차원, 청크 최대 800자·겹침 100자를 사용합니다.
 
 > ⚠️ **법령 데이터 범위 준수:** 국가법령정보센터 목록조회 메타데이터(`metadata_only`)를 의도적으로 타겟팅하여, 법적 자격을 무단 확정하지 않고 관련 법률 목록 및 공식 웹사이트 이동 링크만을 안전하게 안내합니다.
 
@@ -257,6 +273,7 @@ flowchart TD
 ```plaintext
 bokji-agent/
 ├── backend/                       # FastAPI 앱, 스키마, 세션 저장소, HTTP 테스트
+├── frontend/                      # React·TypeScript 화면, API 클라이언트, Vite 및 브라우저 검사
 ├── app.py                         # 레거시 Streamlit 데모 진입점
 ├── streamlit_ui/                  # 레거시 화면 계층(API-09가 constants.py 재사용)
 │   ├── pages/                     # chat / auth / mypage 뷰
@@ -265,6 +282,7 @@ bokji-agent/
 │   └── session.py                 # 세션 및 사용자 상태 관리
 ├── src/rag_chatbot/               # 핵심 백엔드 패키지
 │   ├── service.py                 # ask() / answer_followup() 메인 인터페이스
+│   ├── light_followup.py          # 정책 상세 문의(API-12), 전체 그래프 재실행 없음
 │   ├── graph/                     # LangGraph 파이프라인 엔진
 │   │   ├── builder.py             # N1~N14 노드 배선 및 그래프 빌더
 │   │   ├── nodes/                 # 개별 기능 노드 모듈 (N1 ~ N14)
@@ -272,14 +290,17 @@ bokji-agent/
 │   │   └── llm_gateway.py         # LLM 호출 제어 및 보정 게이트웨이
 │   ├── auth/                      # 회원 관리 및 PII 암호화 (Fernet/bcrypt)
 │   ├── collectors/                # 공공서비스 / 법령정보센터 수집 스크립트
+│   ├── llm/                       # HF·RunPod·Ollama 클라이언트
+│   ├── progress.py                # 상담 진행률 기록
 │   └── timing.py                  # 노드별 레이턴시 계측 프로파일러
 ├── rag_design/                    # 데이터 청크/벡터스토어 스키마 공용 계약
 ├── scripts/                       # 진단, 재색인 및 벤치마크 유틸리티
 ├── tests/                         # 코어·인증·LLM·레거시 UI 검증
+├── data/                          # 공개 샘플·manifest·평가 질문, 미추적 런타임 데이터
 └── docs/                          # 시스템 설계서 및 준수 기준(Gate 0~6)
 ```
 
-`frontend/`는 별도 React 브랜치의 개발 대상이며 현재 체크아웃에는 포함되지 않습니다. 화면 목록·상세·비교는 같은 상담 응답을 재사용하고, 정책 문의는 별도 다이얼로그로 제공하는 설계입니다.
+`frontend/src/pages/`에는 로그인·회원가입·홈·상담·마이페이지가 있고, `features/`는 인증·상담 상태와 캐시, `api/`는 HTTP 호출을 담당합니다. 정책 상세·비교·문의는 별도 URL 없이 화면 상태와 다이얼로그로 전환합니다.
 
 ---
 
@@ -287,52 +308,97 @@ bokji-agent/
 
 ### 사전 요구사항
 - **Python**: `3.11.x` 권장
-- **React**: 별도 브랜치 개발·통합 후 해당 실행 절차 확인 필요
+- **Node.js / npm**: 프론트엔드 설치·실행에 필요. 잠금 파일의 Vite 엔진 조건은 Node.js `18.x` 또는 `20 이상`
+- **검색 데이터**: 전체 Document JSONL, 지원조건 파일 및 일치하는 ChromaDB 색인. E5 모델 캐시가 없으면 최초 로딩 시 다운로드 필요
 - **Streamlit**: 레거시 데모 실행 시에만 `requirements-streamlit.txt`의 `1.62.0` 사용
 
 ### 설치 및 설정
 
-```bash
+아래는 **로컬 개발 절차**이며 EC2·S3 배포 명령이 아닙니다. 명령은 별도 표시가 없으면 저장소 루트에서 실행합니다. 예시는 PowerShell 기준이며 Bash에서는 가상환경을 `source .venv/bin/activate`로 활성화하고 `Copy-Item` 대신 `cp`를 사용합니다. 기존 환경 파일은 덮어쓰지 말고 필요한 항목만 반영하세요.
+
+```powershell
 # 1. 저장소 복제
 git clone https://github.com/SKN33-3rd-3Team/bokji-agent.git
 cd bokji-agent
 
-# 2. 의존성 패키지 설치
+# 2. 가상환경 및 백엔드 의존성 설치
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r backend/requirements-backend.txt
 
-# 3. 환경 변수 템플릿 복사
-cp .env.example .env
+# 3. 최초 설정 시 환경 변수 템플릿 복사
+Copy-Item .env.example .env
+Copy-Item frontend/.env.example frontend/.env
+
+# 4. 프론트엔드 의존성 설치
+cd frontend
+npm ci
+cd ..
 ```
 
 ### 환경 변수 설정 (`.env`)
 
-주요 설정 항목은 다음과 같습니다. (`.env` 파일은 보안상 절대 커밋하지 마세요.)
+백엔드는 루트 `.env`, Vite는 `frontend/.env`를 읽습니다. `.env.example`의 값은 설정 예시이며 운영 실값이 아닙니다. 이미 셸에 설정된 값은 루트 `.env`보다 우선합니다. 중복된 변수는 한 번만 정의하고, 변경 후 해당 개발 서버를 재시작하세요. 프론트 정적 배포본에는 재빌드해야 반영됩니다. 환경 파일과 비밀값은 커밋하지 않습니다.
 
-| 변수명 | 필수 여부 | 기본값 / 예시 | 설명 |
-| :--- | :---: | :--- | :--- |
-| `EMBEDDING_PROVIDER` | **필수** | `korean` | 임베딩 엔진 (`korean`: e5-base, `hash`: 오프라인용) |
-| `EMBEDDING_MODEL_NAME`| 선택 | `intfloat/multilingual-e5-base` | 사용할 HuggingFace 임베딩 모델명 |
-| `HF_TOKEN` | 선택 | `hf_...` | HuggingFace Inference API 액세스 토큰 |
-| `LLM_MODEL_NAME` | 선택 | `Qwen/Qwen3.5-9B` | 추론 모델명 |
-| `LLM_MAX_NEW_TOKENS` | 선택 | `8192` | HF 클라이언트 기본 생성 토큰 상한. 잘림 발생 시 설정 확인 |
-| `BOKJI_TRACE` | 선택 | `1` | `1`로 설정 시 콘솔에 노드별 추론 로그 출력 |
-| `AUTH_ENC_KEY` | 선택 | `(Fernet key)` | 개인정보(PII) DB 암호화 대칭키 |
-| `AUTH_DB_URL` | 선택 | `mysql://<user>:<password>@<host>:<port>/<dbname>` | 원격 회원 DB 선택. 미설정 시 SQLite, 자동 장애 전환 없음 |
-| `RUNPOD_POD_ID` | 선택 | `(Pod ID)` | 설정 시 Pod 우선. [선택 규칙](docs/RUNPOD_SETUP_DRAFT.md) 참고 |
-| `CORS_ORIGINS` | 선택 | `http://localhost:5173` | credentials를 허용할 프론트 origin 목록 |
-| `COOKIE_SECURE` | 운영 필수 | 개발 `false`, HTTPS 운영 `true` | 세션 쿠키의 Secure 속성 |
+| 변수명 | 설정 조건 / 코드 기본값 | 설명 |
+| :--- | :--- | :--- |
+| `EMBEDDING_PROVIDER` | 선택 / `korean` | `hash`는 오프라인 스모크용. 색인과 검색 설정을 맞춤 |
+| `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSION` | Korean 기본 `intfloat/multilingual-e5-base`, `768` | Hash 기본 차원은 `128`. 템플릿의 `768`을 그대로 두고 provider만 바꾸지 않음 |
+| `RUNPOD_POD_ID`, `RUNPOD_POD_PORT`, `RUNPOD_POD_API_KEY` | Pod 사용 시 / 포트 `8000` | Pod ID가 있으면 `LLM_BACKEND`보다 우선. API 키는 서빙 설정에 맞춤 |
+| `HF_TOKEN` | HF 호출·Pod 폴백 시 필요 | 하위 호환 이름 `HUGGINGFACE_TOKEN`도 지원 |
+| `LLM_BACKEND` | Pod 미설정 시 / `hf` | `hf`·`huggingface`, `runpod`(Serverless), `ollama` 중 선택 |
+| `RUNPOD_ENDPOINT_ID`, `RUNPOD_API_KEY`, `RUNPOD_MODEL_NAME` | Serverless 선택 시 | Pod가 없고 `LLM_BACKEND=runpod`일 때 사용 |
+| `LLM_MODEL_NAME`, `LLM_HF_MODEL` | HF 모델은 앞 이름 우선 | HF 코드 기본은 `Bllossom/llama-3.2-Korean-Bllossom-3B`, 템플릿은 `Qwen/Qwen3.5-9B`. 실제 운영 모델을 뜻하지 않음 |
+| `LLM_PROVIDER` | HF 선택 / 미설정 시 자동 라우팅 | 템플릿은 `featherless-ai`. 사용 가능한 제공자·모델 조합에 맞춤 |
+| `LLM_MAX_NEW_TOKENS`, `LLM_DISABLE_THINKING` | HF 코드 기본 `8192`, 사고 끄기는 `1`일 때 요청 | 템플릿은 각각 `1024`, `1`. 제공자별 지원 여부는 별도 확인 |
+| `LLM_TIMEOUT_SECONDS`, `LLM_PREFETCH_WORKERS` | 각각 `120`, `4` | 전자는 Pod·Serverless·Ollama 호출 한도, 후자는 N5 병렬 추출 수(템플릿 `5`). N1/N5/N9/N10/N10a/N13은 LLM 사용 시 노드별 총 90초 한도가 별도로 적용됨 |
+| `OLLAMA_BASE_URL`, `OLLAMA_NUM_CTX` | 로컬 Ollama 선택 / `http://localhost:11434`, `4096` | `LLM_MODEL_NAME` 필수, loopback 주소만 허용. 자동 폴백 대상이 아님 |
+| `AUTH_DB_URL` | 운영 원격 MySQL 연결에 필요 | 형식 `mysql://<user>:<password>@<host>:<port>/<dbname>`. 미설정 시 로컬 SQLite이며 DB 장애 시 자동 전환·동기화 없음 |
+| `AUTH_DB_PATH` | 로컬 SQLite / `.runtime/auth.db` | `AUTH_DB_URL`이 없을 때만 사용 |
+| `AUTH_ENC_KEY` | 운영·공유 DB에 필요 | 회원 PII 암호화 키. 미설정 시 로컬 개발 키 `.runtime/auth_dev.key` 자동 생성 |
+| `AUTH_DB_CONNECT_TIMEOUT`, `AUTH_DB_SSL_MODE` | 원격 DB / `10`초, SSL 모드 미지정 | SSL 모드는 빈 값 또는 `REQUIRED`. `REQUIRED`는 TLS 암호화만 강제하고 인증서·호스트 이름은 검증하지 않음 |
+| `AUTH_MAX_LOGIN_ATTEMPTS`, `AUTH_LOCKOUT_MINUTES` | 선택 / `5`, `15` | 연속 로그인 실패 잠금 기준 |
+| `CORS_ORIGINS`, `COOKIE_SECURE`, `AUTH_SESSION_TTL_DAYS` | 로컬 기본 `http://localhost:5173`, `false`, `7` | 운영은 실제 프론트 origin과 쿠키 전송 조건에 맞춤. HTTPS 사용 시 `COOKIE_SECURE=true`; 운영 HTTPS 구성 여부를 여기서 가정하지 않음 |
+| `GOV24_SERVICE_KEY`, `LAW_OC`, `SIGUNGU_CODE_CSV` | 직접 수집 시 | 각각 공공서비스 API 키, 법령 API 사용자 식별자, 선택적 법정동코드 CSV 경로. CSV 미지정 시 시도 코드까지만 채움 |
+| `BOKJI_TRACE` | 선택 / 미설정 시 비활성 | `1`로 설정 시 노드 실행·시간 진단 출력 |
+| `VITE_API_BASE_URL` | **`frontend/.env`** / 미설정 시 `http://localhost:8000` | API 접두사 `/api/v1`을 붙이지 않은 백엔드 주소. 빈 문자열은 기본 주소로 대체되지 않음. 운영 프론트 빌드에는 실제 백엔드 주소를 사용하며 비밀값을 넣지 않음 |
 
-> ⚠️ **데이터 준비:** 전체 공공서비스 문서와 법령 메타데이터, ChromaDB 벡터 인덱스는 Git 저장소에 포함되지 않습니다. 서비스 실행 전에 원천 문서를 준비한 뒤 `python scripts/reindex_korean.py`로 인덱스를 생성해 주세요.
-> **LLM 미설정:** 선택한 클라이언트를 구성할 자격 증명이 없으면 코어의 규칙·템플릿 경로를 사용합니다. 정책 문의는 안내로 제한될 수 있으며, 벡터 데이터와 임베딩 준비는 별도로 필요합니다. 원격 회원 DB는 [별도 드라이버·암호화 키 설정](docs/AUTH_REMOTE_DB.md)을 확인하세요.
+`AUTH_ENC_KEY` 신규 생성 도구는 `python src/rag_chatbot/auth/__main__.py keygen`입니다. 생성된 키는 DB와 분리해 보관하고, 기존 공유 DB에는 동일한 키를 사용하세요. 원격 DB는 데이터베이스·접속 계정이 준비되어 있어야 하며 [회원 DB 설정](docs/AUTH_REMOTE_DB.md)을 따릅니다. PyMySQL은 백엔드 의존성에 포함됩니다.
+
+로컬에서 Pod→HF 폴백을 구성하려면 Pod 설정과 HF 토큰을 함께 설정합니다. Pod가 없을 때 HF 경로의 토큰이 없거나 Serverless 경로의 필수 자격 증명이 빠지면 LLM 없이 규칙·템플릿 경로를 사용하며, 정책 문의는 안내로 제한될 수 있습니다. 잘못된 backend 값·Ollama 모델 누락은 설정 오류입니다. LLM 미사용 상태에서도 검색 데이터는 필요합니다.
+
+### 데이터 준비
+
+준비된 데이터를 사용할 때는 `data/processed/subsidy_documents.jsonl`, `data/processed/law_documents.jsonl`, `data/raw/gov24_support_conditions.json`을 배치합니다. 이미 구축된 색인을 받았다면 `data/vector_db/` 전체를 함께 배치하고 제공자·모델·차원을 맞춥니다. 샘플 파일만으로 전체 서비스 색인이 준비되지는 않습니다.
+
+직접 수집하는 경우 아래 명령이 외부 API를 호출하고 원천·처리 문서, manifest·샘플을 갱신합니다. API 자격 증명을 먼저 설정하세요.
+
+```powershell
+python -m pip install -r requirements-collection.txt
+python -m src.rag_chatbot.collectors.gov_24
+python -m src.rag_chatbot.collectors.law
+
+# 전체 Document JSONL을 준비한 뒤 실행. 기존 색인이 있으면 재색인 여부를 먼저 결정
+New-Item -ItemType Directory -Force data/vector_db | Out-Null
+python scripts/reindex_korean.py
+```
+
+재색인 스크립트는 `data/vector_db/` 디렉터리가 없으면 종료하므로 먼저 만듭니다(Bash: `mkdir -p data/vector_db`). E5 768차원으로 두 소스를 색인하며 기본 장치는 CPU, GPU 환경은 `--device cuda`로 선택합니다. 같은 제공자의 기존 색인은 갱신됩니다. 서비스는 `data/vector_db/chroma.sqlite3`를 요구하며 자동으로 데이터를 수집·색인하지 않습니다. 지원조건 파일이나 처리된 공공서비스 문서가 없거나 잘못되면 해당 조건·사용자구분 필터를 생략하므로, 벡터 DB만 배치한 상태는 완전한 프로필 필터링과 다릅니다.
 
 ### 서비스 실행
 
-```bash
-# 저장소 루트에서 FastAPI 실행
+```powershell
+# 터미널 1: 가상환경을 활성화한 저장소 루트에서 로컬 FastAPI 실행
 python -m uvicorn backend.app.main:app --reload --port 8000
+
+# 터미널 2: 저장소 루트에서 로컬 React 실행
+cd frontend
+npm run dev
 ```
 
-실행 후 `http://localhost:8000/docs`에서 API를 확인할 수 있습니다. 브라우저에서 인증 API를 사용할 때는 `credentials: 'include'` 또는 `withCredentials: true`가 필요합니다. 현재 로그인·채팅 세션은 메모리 저장이므로 단일 프로세스로 실행하며 재시작하면 사라집니다.
+로컬 화면은 `http://localhost:5173`, API 문서는 `http://localhost:8000/docs`입니다. 프론트엔드 Axios 클라이언트에 `withCredentials: true`가 설정되어 있습니다. 주소·포트를 바꾸면 `VITE_API_BASE_URL`과 `CORS_ORIGINS`를 함께 맞추세요. 백엔드는 시작 시 검색 엔진 워밍업을 수행하며 `GET /api/v1/config/status`로 상태를 조회합니다. `/healthz`의 `ok`는 DB·검색·LLM 준비 완료를 보장하지 않습니다. 로그인·채팅 세션은 메모리 저장이므로 단일 프로세스로 실행하며 재시작하면 사라집니다.
+
+운영 프론트 정적 산출물은 `frontend/`에서 `npm run build`로 만드는 `dist/`입니다. 위 `--reload`와 Vite 개발 서버는 로컬 개발용이며 EC2·S3의 실제 배포 설정을 재현하는 안내는 아닙니다.
 
 레거시 데모가 필요한 경우:
 
@@ -341,7 +407,7 @@ python -m pip install -r requirements-streamlit.txt
 python -m streamlit run app.py
 ```
 
-최종 React 화면은 이 브랜치에 없어 여기서 실행할 수 없습니다. React 통합과 API-09 상수 의존성 정리가 끝나기 전에는 `streamlit_ui/`를 일괄 삭제하지 않습니다.
+API-09는 아직 `streamlit_ui/constants.py`의 순수 상수를 재사용합니다. FastAPI 실행에 Streamlit 패키지는 필요하지 않지만 이 폴더 전체를 삭제할 수는 없습니다.
 
 <details>
 <summary><b>🛠️ 유용한 CLI 진단 도구들</b></summary>
@@ -350,10 +416,10 @@ python -m streamlit run app.py
 # 1. 터미널 대화형 챗봇 실행
 python scripts/interactive_console_chat.py
 
-# 2. 파이프라인 노드별 레이턴시 및 전체 흐름 수동 진단
+# 2. 서비스 응답·정책 카드·LLM 상태 수동 진단
 python scripts/manual_test_service.py
 
-# 3. LLM API 연결 상태 및 할당량 진단
+# 3. HuggingFace 토큰·모델 호출 진단 (RunPod 연결 검사가 아님)
 python scripts/check_llm_connection.py
 
 # 4. 한국어 벡터 인덱스 재생성 (GPU 가속 지원)
@@ -366,23 +432,33 @@ python scripts/reindex_korean.py --device cuda
 
 ## 🧪 테스트 및 벤치마크 (Testing & Evaluation)
 
-안정적인 복지 서비스 제공을 위해 단위 기능부터 E2E UI 위젯 렌더링까지 다층 회귀 테스트 파이프라인을 운영합니다.
+코어·백엔드·레거시 UI 검사와 별도 프론트 브라우저 검사가 있습니다. 다음 명령은 검증 절차이며 이번 README 갱신에서 실행한 결과가 아닙니다.
 
 ```bash
+# 테스트 의존성 (레거시 UI 검사 포함)
+python -m pip install -r backend/requirements-test.txt -r requirements-streamlit.txt -r requirements-collection.txt
+
 # 전체 코어·백엔드 테스트 실행
-python -m pytest -q
+python -m pytest tests/ backend/tests/ -q
 
 # 핵심 영역별 개별 테스트
 python -m pytest backend/tests/ -q                   # FastAPI HTTP 계약
-python -m pytest -q tests/test_graph_nodes.py          # 14개 노드 개별 로직
+python -m pytest -q tests/test_graph_nodes.py          # 자격 판정 로직
 python -m pytest -q tests/test_service.py              # ask() 서비스 계약
 python -m pytest -q tests/test_streamlit_rendering.py  # Streamlit 위젯 렌더링
 
-# 표준 100문항 벤치마크 자동 검증 실행
+# 프론트엔드 TypeScript 검사 + 정적 빌드
+cd frontend
+npm run build
+cd ..
+
+# 검색 데이터·선택한 LLM을 준비한 뒤 고정 Dev 질문 평가 (보고서 생성)
 python scripts/run_dev_validation.py
 ```
 
-위 명령은 검증 방법이며 현재 실행 결과를 뜻하지 않습니다. 실제 DB·벡터 인덱스·LLM·React 통합 여부와 skip은 각 실행 결과에 별도로 기록합니다.
+`pytest.ini`의 기본 수집 대상은 `tests/`이므로 인자 없는 `python -m pytest -q`에는 `backend/tests/`가 포함되지 않습니다. 프론트 브라우저 회귀 검사는 [별도 절차](frontend/tests/README.md)에 따라 Vite·Edge·Playwright를 준비하고 `frontend/`에서 `node tests/progress-cache.cjs`, `node tests/chat-results.cjs`로 실행합니다. 이 검사는 API를 가상 응답으로 대체하며 운영 DB·LLM 연동을 검증하지 않습니다.
+
+Dev 러너의 기본 입력은 `data/evaluation/dev_questions.jsonl`, 출력은 `artifacts/evaluation/dev/`입니다. 비교 실행은 `--output-dir`로 별도 경로를 지정해 Baseline을 보존하고, Holdout은 최종 설정 확정 뒤 Gate 6에서만 사용합니다. 실제 DB·벡터 인덱스·LLM·브라우저 통합 결과와 skip은 각 실행에서 별도로 기록합니다. 이번 문서 검증에서는 설치·서버 기동·데이터 생성·평가·전체 테스트를 실행하지 않았습니다.
 
 ---
 
@@ -390,9 +466,12 @@ python scripts/run_dev_validation.py
 
 우리는 프로젝트의 기술적 한계를 투명하게 공유합니다 ([`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md)).
 
-- **응답 대기 시간(Latency)**: 다단계 환각 검증(N5~N7) 과정에서 후보 정책마다 세부 주장을 추출하므로 수십 초가 소요될 수 있습니다. (진행률 표시줄 및 캐싱으로 완화 중)
+- **응답 대기 시간(Latency)**: 후보 정책별 주장 추출·판정에 여러 검색·LLM 호출이 필요합니다. 화면에 진행률을 표시하고 홈 추천을 앱 메모리에 캐시합니다. 노드별 90초 제한은 전체 상담의 90초 완료 보장이 아니며, 이번 작업에서 응답 시간을 측정하지 않았습니다.
 - **세션 영속성**: 로그인 세션·채팅 소유권·`MemorySaver`는 단일 프로세스 메모리에 저장됩니다. 재시작 시 유실되며 여러 worker 간 공유는 지원하지 않습니다. 로그인 TTL은 기본 7일, 채팅 TTL은 없습니다.
-- **서비스 완성도**: React 개발·실환경 통합은 미완료입니다. [계약 추적표](backend/README.md#원본-문서와-남은-계약-차이)의 구현·검증 범위와 PM 미결 D9/D10을 확인하세요. 일반 상담은 보류 카드를 유지하고 React에서 `자격 미확인`으로 표시해야 하며, API-14는 전역 보류 시 모든 카드를 제외합니다. 카드 존재나 일부 조건의 충족이 모든 조건의 검증 완료를 뜻하지 않습니다.
+- **대화 문맥**: 완료된 상담의 새 턴은 알려진 프로필을 이어받지만 이전 문답 전체를 LLM 대화 문맥으로 전달하지 않습니다. 정책 문의 이력은 프론트 상태이며 서버에 영속 저장하지 않습니다.
+- **근거 검증 범위**: N2a 참고 검색은 미연결이며, N6는 색인 문장의 문자열 포함 여부, N14는 인용 `chunk_id` 존재와 응답 상태를 검사합니다. N7의 `safety_blocked` 신호를 계산하는 별도 안전 필터는 현재 그래프에 연결되어 있지 않습니다. 이러한 검사를 전면적인 의미 검증·인젝션 차단 보장으로 해석하지 않습니다.
+- **판정 범위**: 일반 상담은 보류 상태에서도 정책 카드를 유지할 수 있습니다. API-14는 자격 판정이 `충족`인 정책만 남기고 전역 보류 시 모든 카드를 제외합니다. 카드 존재나 일부 조건의 충족이 모든 자격 조건의 검증 완료를 뜻하지 않으며, 법령 목록 메타데이터만으로 조문·법률 해석을 확정하지 않습니다.
+- **배포 상태와 검증 범위**: 운영 배포 완료는 사용자 확인 사항입니다. 위 한계는 현재 로컬 코드의 동작 범위이며 배포 미완료를 뜻하지 않습니다. 이번 작업에서는 실제 운영 접속, DB·LLM 연결, 인프라 설정을 검증하지 않았습니다.
 
 ---
 
@@ -402,12 +481,13 @@ python scripts/run_dev_validation.py
 | :--- | :--- |
 | 📋 [`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md) | 프로젝트 준수 기준, Gate 0~6 단계별 통과 규정 및 법령 데이터 범위 |
 | 🔌 [`backend/README.md`](backend/README.md) | API-01~14, 인증·세션·계산 입력·구비서류, 원본 대비 승인 결정·구현·검증·담당 |
+| 🖥️ [`frontend/README.md`](frontend/README.md) | React 화면·구성 참고. 현재 로컬 실행 절차는 이 README 기준 |
 | [`docs/AUTO_RECOMMENDATION_API.md`](docs/AUTO_RECOMMENDATION_API.md) | API-14 v1.0 및 공용 D5/API-11 필드·예시·React 인계 |
 | 🗃️ [`docs/AUTH_REMOTE_DB.md`](docs/AUTH_REMOTE_DB.md) | SQLite/MySQL·MariaDB 선택, 드라이버 설치, DB 장애 동작 |
 | ⚙️ [`docs/RUNPOD_SETUP_DRAFT.md`](docs/RUNPOD_SETUP_DRAFT.md) | Pod/HF/Serverless 선택과 확인되지 않은 운영 항목 |
 | 📐 [`docs/RAG_DESIGN_PLAN.md`](docs/RAG_DESIGN_PLAN.md) | RAG 청킹, 검색, 노드 인터페이스 통합 아키텍처 설계서 |
 | 🗄️ [`docs/VECTOR_STORE.md`](docs/VECTOR_STORE.md) | ChromaDB 스키마 계약 및 메타데이터 정합성 규격 |
-| 🧪 [`docs/EVALUATION_AUTOMATION.md`](docs/EVALUATION_AUTOMATION.md) | 100건의 평가 데이터셋 기반 자동 정량 평가 가이드 |
+| 🧪 [`docs/EVALUATION_AUTOMATION.md`](docs/EVALUATION_AUTOMATION.md) | 고정 Dev 질문 기반 평가 절차·지표 가이드 |
 | 🔒 [`docs/PII_LOGGING.md`](docs/PII_LOGGING.md) | 사용자 민감정보(소득, 주민등록상황 등) 처리 및 로깅 정책 |
 | 🤝 [`CONTRIBUTING.md`](CONTRIBUTING.md) | 브랜치 네이밍 컨벤션 (`type/#이슈-설명`) 및 코드 리뷰 규칙 |
 
