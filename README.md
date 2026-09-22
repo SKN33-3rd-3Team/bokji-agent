@@ -8,8 +8,13 @@
 <br/>
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square)](backend/README.md)
+[![Frontend](https://img.shields.io/badge/Frontend-React-3776AB?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](backend/README.md)
 [![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-000000?style=flat-square&logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
+
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](#)
+[![AWS](https://custom-icon-badges.demolab.com/badge/AWS-%23FF9900.svg?style=flat-square&logo=aws&logoColor=white)](https://aws.amazon.com/)
+[![MySQL](https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white)](#)
 [![VectorDB](https://img.shields.io/badge/VectorDB-ChromaDB-blueviolet?style=flat-square)](https://www.trychroma.com/)
 [![Tests](https://img.shields.io/badge/Tests-pytest-blue?style=flat-square&logo=pytest&logoColor=white)](tests/)
 
