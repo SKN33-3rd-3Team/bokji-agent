@@ -156,12 +156,16 @@ def test_signup_invalid_interest_is_400(client):
     assert r.json()["code"] == "VALIDATION_ERROR"
 
 
-def test_signup_and_profile_interests_follow_signup_options(client):
+def test_signup_interests_are_limited_to_signup_options(client):
+    """회원가입(API-01) 화면은 signup_interest_options(4종)만 보여준다 -
+    그 밖의 값(마이페이지 전용 interest_field_options 19종 포함)은 여전히
+    거부한다(fail-closed)."""
+
     options = client.get("/api/v1/config/search-options").json()
     allowed = options["signup_interest_options"]
-    sidebar_only = set(options["sidebar_interest_options"]) - set(allowed)
-    assert sidebar_only
-    for interest in sidebar_only:
+    field_only = set(options["interest_field_options"]) - set(allowed)
+    assert field_only
+    for interest in field_only:
         r = _signup(client, interests=[interest])
         assert r.status_code == 400
         assert r.json()["code"] == "VALIDATION_ERROR"
@@ -169,15 +173,33 @@ def test_signup_and_profile_interests_follow_signup_options(client):
     r = _signup(client, interests=allowed)
     assert r.status_code == 201
     assert r.json()["user"]["interests"] == allowed
-    for interest in sidebar_only:
-        r = client.patch("/api/v1/users/me", json={"interests": [interest]})
-        assert r.status_code == 400
-        assert r.json()["code"] == "VALIDATION_ERROR"
-        assert client.get("/api/v1/users/me").json()["interests"] == allowed
 
-    r = client.patch("/api/v1/users/me", json={"interests": allowed[::-1]})
+
+def test_profile_update_accepts_wider_interest_field_options(client):
+    """마이페이지 수정(API-05)은 회원가입보다 넓은 interest_field_options(19종)
+    까지 허용한다 - 화면(interest_field_options)과 서버 허용값이 어긋나
+    전체 PATCH가 거부되던 회귀(가입 때 고른 4종 값도 함께 저장 안 되던
+    버그)의 재발 방지용. 계약 밖 값은 여전히 거부한다."""
+
+    options = client.get("/api/v1/config/search-options").json()
+    signup_allowed = options["signup_interest_options"]
+    field_options = options["interest_field_options"]
+    _signup(client, interests=signup_allowed)
+
+    r = client.patch("/api/v1/users/me", json={"interests": field_options})
     assert r.status_code == 200
-    assert r.json()["interests"] == allowed[::-1]
+    assert r.json()["interests"] == field_options
+
+    # 가입 때 고른 4종 값도 이후 재검증에서 계속 통과해야 한다(합집합).
+    r = client.patch("/api/v1/users/me", json={"interests": signup_allowed})
+    assert r.status_code == 200
+    assert r.json()["interests"] == signup_allowed
+
+    r = client.patch("/api/v1/users/me", json={"interests": ["존재하지-않는-관심조건"]})
+    assert r.status_code == 400
+    assert r.json()["code"] == "VALIDATION_ERROR"
+    assert client.get("/api/v1/users/me").json()["interests"] == signup_allowed
+
     r = client.patch("/api/v1/users/me", json={"interests": None})
     assert r.status_code == 200
     assert r.json()["interests"] == []

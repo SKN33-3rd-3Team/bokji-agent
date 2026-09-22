@@ -15,6 +15,7 @@ import {
   DISABILITY_NONE,
   FALLBACK_HOUSEHOLD_TYPE_OPTIONS,
   FALLBACK_INCOME_BRACKET_OPTIONS,
+  FALLBACK_INTEREST_FIELD_OPTIONS,
   GENDER_LABELS_KO,
   GENDER_NONE,
   HOUSEHOLD_TYPE_LABELS_KO,
@@ -98,7 +99,10 @@ export function MyPage() {
   const householdOptions = householdTypeOptions.map((o) => o.label);
   const householdLabelToCode = Object.fromEntries(householdTypeOptions.map((o) => [o.label, o.code]));
   const selectedHouseholdLabels = householdTypes.map((code) => HOUSEHOLD_TYPE_LABELS_KO[code] ?? code);
-  const interestFieldOptions = options?.interest_field_options ?? Object.values(HOUSEHOLD_TYPE_LABELS_KO);
+  // 마이페이지는 회원가입(4종)보다 넓은 19종 관심 분야를 보여준다 - 서버
+  // 쪽 허용값(auth/service.py _INTEREST_VALUES)도 이 19종을 포함하도록
+  // 맞춰뒀으니, 여기서 고른 값은 그대로 저장된다.
+  const interestFieldOptions = options?.interest_field_options ?? FALLBACK_INTEREST_FIELD_OPTIONS;
 
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();

@@ -101,9 +101,26 @@ _SIDO_VALUES = frozenset(
     }
 )
 
-# UI 의존 없이 API-01/05의 가입 관심조건을 검증한다. API 테스트가
-# API-09의 signup_interest_options와 일치하는지 확인한다.
-_INTEREST_VALUES = frozenset({"임신/출산", "노인/어르신", "농어업인", "청년"})
+# UI 의존 없이 API-01/05의 관심조건을 검증한다(streamlit_ui.constants의
+# SIGNUP_INTEREST_OPTIONS/INTEREST_FIELD_OPTIONS와 같은 값을 그대로 쓴다 -
+# 위 _SIDO_VALUES와 같은 이유로 streamlit_ui 패키지 자체는 import하지 않는다.
+# 값이 바뀌면 두 곳을 같이 고쳐야 한다).
+#
+# 회원가입(API-01)은 4종(signup_interest_options)만 허용한다 - 계약 밖 값은
+# 여전히 거부한다(fail-closed, test_signup_and_profile_interests_follow_
+# signup_options).
+_SIGNUP_INTEREST_VALUES = frozenset({"임신/출산", "노인/어르신", "농어업인", "청년"})
+
+# 마이페이지 수정(API-05)은 19종(interest_field_options)까지 넓게 허용한다.
+# 가입 때 고른 4종 값도 이후 마이페이지에서 재검증(다른 필드 수정 시 함께
+# 전송됨) 시 거부되지 않도록 두 목록의 합집합이다.
+_PROFILE_INTEREST_VALUES = _SIGNUP_INTEREST_VALUES | frozenset(
+    {
+        "육아", "출산", "보육", "주거", "취업", "일자리", "창업", "교육", "장학",
+        "의료", "건강", "돌봄", "노인", "장애인", "저소득", "다문화", "한부모",
+        "지원금",
+    }
+)
 
 # graph.slot_schema와 같은 한국 날짜·만 120세 상한. 인증 모듈은 무거운
 # graph 패키지를 import하지 않으며 경계 일치는 계약 테스트로 확인한다.
@@ -198,15 +215,18 @@ def _clean_region(value: object) -> str:
     return text
 
 
-def _clean_interests(values: object) -> tuple[str, ...]:
+def _clean_interests(values: object, *, allowed: frozenset[str]) -> tuple[str, ...]:
     """관심 지원조건 목록을 검증한다. 계약 밖 값이 하나라도 있으면 거부한다
-    (폼 위조 방지 - fail-closed). 중복은 제거하고 입력 순서는 유지한다."""
+    (폼 위조 방지 - fail-closed). 중복은 제거하고 입력 순서는 유지한다.
+
+    ``allowed``는 호출부(가입/마이페이지 수정)마다 다르다 - 위
+    _SIGNUP_INTEREST_VALUES/_PROFILE_INTEREST_VALUES 주석 참고."""
 
     if values is None:
         return ()
     items = [str(x).strip() for x in values if str(x).strip()]
     for item in items:
-        if item not in _INTEREST_VALUES:
+        if item not in allowed:
             raise AuthError("관심 지원조건 값이 올바르지 않습니다.")
     return tuple(dict.fromkeys(items))
 
@@ -492,7 +512,7 @@ def sign_up(
     region = _clean_region(region)
     gender = _clean_gender(gender)
     birth_date = _clean_birth_date(birth_date)
-    interest_items = _clean_interests(interests)
+    interest_items = _clean_interests(interests, allowed=_SIGNUP_INTEREST_VALUES)
     disability_status = _clean_disability_status(disability_status)
     veteran_status = _clean_veteran_status(veteran_status)
     income_bracket = _clean_income_bracket(income_bracket)
@@ -673,7 +693,9 @@ def update_profile(
             cleaned = _clean_birth_date(birth_date)
             changes["birth_date_enc"] = encrypt_pii(cleaned) if cleaned else None
         if interests is not None:
-            changes["interests_enc"] = _encrypt_interests(_clean_interests(interests))
+            changes["interests_enc"] = _encrypt_interests(
+                _clean_interests(interests, allowed=_PROFILE_INTEREST_VALUES)
+            )
         if disability_status is not None:
             cleaned = _clean_disability_status(disability_status)
             changes["disability_status_enc"] = encrypt_pii(cleaned) if cleaned else None
