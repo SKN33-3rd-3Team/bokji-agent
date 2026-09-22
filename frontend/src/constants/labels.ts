@@ -88,9 +88,6 @@ export const FALLBACK_SIDO_OPTIONS = [
   "제주특별자치도",
 ];
 
-/** API-09 로딩 전 폴백 — signup_interest_options (회원가입 전용 4종) */
-export const FALLBACK_SIGNUP_INTEREST_OPTIONS = ["임신/출산", "노인/어르신", "농어업인", "청년"];
-
 /** API-09 로딩 전 폴백 — sidebar_interest_options (사이드바 지원조건 전체 8종) */
 export const FALLBACK_SIDEBAR_INTEREST_OPTIONS = [
   "기초생활수급/차상위",
