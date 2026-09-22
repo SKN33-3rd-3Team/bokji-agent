@@ -109,7 +109,7 @@
 
 아래 이미지는 Streamlit 데모의 구조입니다. FastAPI 구성은 [백엔드 구조](backend/README.md#구성과-api-범위)를 참고하세요. 데이터 수집·색인은 상담 요청과 별도로 실행합니다.
 
-![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture_fixed.png)
+![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture_v2.png)
 
 > N1~N14 제어 흐름은 아래 [에이전트 파이프라인](#-에이전트-파이프라인-langgraph-n1-n14-pipeline)을 참고하세요.
 
