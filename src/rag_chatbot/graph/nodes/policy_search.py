@@ -48,6 +48,16 @@ DEFAULT_TOP_K = 5
 MIN_TOP_K = 1
 MAX_TOP_K = 20
 SEMANTIC_CANDIDATE_LIMIT = 2_000
+# 관련성 게이트(_filter_relevant_candidates)에 top_k개만 넘기면, 그중
+# 일부가 "무관"으로 떨어져도 filter_candidates를 통과한 다음 순위 후보로
+# 채우지 않아 결과가 조용히 top_k보다 적게 나온다(실측: 넓은 질문일수록
+# 5개 중 다수가 탈락해 1개만 남는 사례). top_k의 배수만큼 더 넓게 뽑아
+# 관련성 심사를 거친 뒤, 살아남은 후보 중 상위 top_k만 최종 채택한다 -
+# 이미 유사도순으로 정렬돼 있으므로 앞에서부터 자르면 된다. 배수·상한은
+# LLM 판정 프롬프트 크기(스니펫당 800자)와 그래프 노드 90초 공유 예산을
+# 고려해 보수적으로 잡았다 - 무제한으로 넓히지 않는다.
+_RELEVANCE_POOL_MULTIPLIER = 2
+_MAX_RELEVANCE_POOL = 12
 # interests가 비어있을 때 쓰는 넓은 검색어. 결정사항 로그의 "interests 없음
 # 처리: 넓게 검색 후 안내문구만 첨부, 재질문 없음" 정책을 따른다.
 _FALLBACK_QUERY = "생활 지원 복지 서비스"
@@ -358,7 +368,10 @@ def _judge_relevance(
         raw = llm_client.complete(
             _relevance_prompt(question, candidates),
             system=_RELEVANCE_SYSTEM_PROMPT,
-            max_tokens=256,
+            # 후보 풀이 top_k보다 넓어진 만큼(_RELEVANCE_POOL_MULTIPLIER) id
+            # 목록도 길어질 수 있어 여유를 둔다 - source_id는 12자리 숫자라
+            # 최대 풀(12개)도 256으로 충분하지만 자르림 걱정을 없앤다.
+            max_tokens=400,
         )
         data = loads_json_object(raw)
         relevant_ids = data["relevant_policy_ids"]
@@ -501,14 +514,23 @@ def search_policies(
     filtered = filter_candidates(
         results, support_conditions, filter_plan, user_types=user_types
     )
-    selected = _select_top_policies(filtered, resolved_top_k)
+    # 관련성 게이트가 일부를 "무관"으로 떨어뜨려도 top_k를 채울 수 있게,
+    # top_k보다 넓은 풀을 먼저 추리고 심사는 그 풀 전체를 대상으로 한다
+    # (위 _RELEVANCE_POOL_MULTIPLIER/_MAX_RELEVANCE_POOL 주석 참고).
+    pool_size = max(resolved_top_k, min(resolved_top_k * _RELEVANCE_POOL_MULTIPLIER, _MAX_RELEVANCE_POOL))
+    pool = _select_top_policies(filtered, pool_size)
     # _build_query의 검색 질의는 redact_sensitive_text를 거치지만, 관련성
     # 게이트로 가는 질문은 그 정제를 타지 않았다 - 이메일·전화번호·주민번호가
     # 섞인 원문이 그대로 LLM 판정 prompt에 실려 provider로 나갈 수 있었다.
     # 검색 로그·임베딩 provider로 PII가 나가면 안 된다는 원칙(_build_query
     # 주석 참고)은 이 경로에도 똑같이 적용돼야 한다.
     redacted_question = redact_sensitive_text(state.get("initial_user_input") or "")
-    selected = _filter_relevant_candidates(llm_client, redacted_question, selected)
+    relevant = _filter_relevant_candidates(llm_client, redacted_question, pool)
+    # relevant는 풀 안에서의 유사도 순서를 그대로 유지하므로 앞에서부터
+    # top_k만 자르면 된다. rank는 풀 기준(구멍이 생길 수 있음)이라 최종
+    # 노출 순서 1..N으로 다시 매긴다 - 화면이 rank로 "가장 적합 #N"을
+    # 표시하므로 중간이 비면 이상해 보인다.
+    selected = [replace(c, rank=i + 1) for i, c in enumerate(relevant[:resolved_top_k])]
     return {
         "subsidy_chunks": selected,
         "subsidy_legal_basis_chunks": _load_legal_basis_chunks(store, selected),

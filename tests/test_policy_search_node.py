@@ -593,6 +593,37 @@ class ConfigurableTopKTests(unittest.TestCase):
         # FakeLLMClient가 두 번 다 무관하다고 답해서 최종적으로 0건이 된다.
         self.assertEqual(len(llm.calls), 2)
 
+    def test_relevance_gate_backfills_from_beyond_top_k_when_top_candidates_are_rejected(
+        self,
+    ) -> None:
+        """관련성 게이트가 상위 후보 일부를 무관 판정해도, top_k보다 넓게
+        뽑아둔 풀에서 다음 순위 후보로 채워 top_k를 최대한 유지한다.
+
+        예전 코드는 top_k(여기선 3)개만 골라서 그 안에서만 심사했다 -
+        그중 2개가 무관 판정을 받으면 자동 확정된 1등만 남아 결과가
+        1건으로 끝났다(실측 버그: "청년 혜택"처럼 넓은 질문에서 5개 중
+        1개만 나옴). 지금은 6개짜리 풀 전체를 심사해 4·5등으로 채운다."""
+
+        store = self._Store(
+            tuple(self._candidate(f"service-{rank}", rank) for rank in range(1, 7))
+        )
+        state = self._state(3)
+        state["initial_user_input"] = "지원금 뭐 받을 수 있어요"
+        # rank 1(score 0.1)은 거리 사전 필터로 자동 확정된다. 나머지
+        # 2~6은 LLM 판정 대상인데, 2·3은 무관, 4·5·6은 관련 있다고
+        # 답해 top_k(3) 밖에 있던 후보가 백필돼야 함을 확인한다.
+        llm = FakeLLMClient(
+            '{"relevant_policy_ids": ["service-4", "service-5", "service-6"]}'
+        )
+
+        result = search_policies(state, store, llm_client=llm)
+
+        ids = [c.chunk.metadata["source_id"] for c in result["subsidy_chunks"]]
+        self.assertEqual(ids, ["service-1", "service-4", "service-5"])
+        # 화면에 "가장 적합 #N"으로 보여줄 순위는 풀 안에서의 원래 등수
+        # (1, 4, 5)가 아니라 최종 노출 순서 1..N으로 다시 매겨진다.
+        self.assertEqual([c.rank for c in result["subsidy_chunks"]], [1, 2, 3])
+
     def test_no_llm_client_preserves_previous_behaviour(self) -> None:
         store = self._Store((self._candidate("service-1", 1),))
         result = search_policies(self._state(), store)
