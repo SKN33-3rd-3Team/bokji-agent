@@ -70,6 +70,45 @@ def test_chat_requires_login(client):
     assert r.json()["code"] == "UNAUTHORIZED"
 
 
+@pytest.mark.parametrize("forward_resume", [False, True], ids=["slot-form", "calculation-form"])
+def test_progress_accumulates_input_answers_but_resets_new_search(monkeypatch, forward_resume):
+    from backend.app.schemas.chat import ChatRequest
+    from src.rag_chatbot import progress
+
+    clock = [100.0]
+    monkeypatch.setattr(progress.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(chat_adapter, "PROGRESS", progress.ProgressRegistry())
+    monkeypatch.setattr(chat_adapter, "resumes_forward", lambda sid: forward_resume)
+
+    def ask(message, session_id, **kwargs):
+        clock[0] += 10
+        return _fake_chat_response(session_id, "needs_input")
+
+    monkeypatch.setattr(chat_adapter, "ask", ask)
+    response = chat_adapter.start_chat(ChatRequest(message="주거 지원"), user_id=1)
+    sid = response.session_id
+
+    def run_turn(expected_start, seconds, status):
+        clock[0] += 120  # 폼 작성 대기 시간은 누적하지 않는다. 진행률 보존 기간도 초과한다.
+
+        def answer(session_id, message, **kwargs):
+            snapshot = chat_adapter.PROGRESS.snapshot("current", owner=1)
+            assert snapshot["elapsed_seconds"] == expected_start
+            clock[0] += seconds
+            return _fake_chat_response(session_id, status)
+
+        monkeypatch.setattr(chat_adapter, "answer_followup", answer)
+        chat_adapter.continue_chat(sid, "추가 입력", user_id=1, progress_token="current")
+        assert chat_adapter.PROGRESS.snapshot("current", owner=1)["elapsed_seconds"] == expected_start + seconds
+
+    run_turn(10, 5, "needs_input")
+    run_turn(15, 7, "answered")
+    monkeypatch.setattr(chat_adapter, "resumes_forward", lambda sid: False)
+    run_turn(0, 3, "needs_input")  # 같은 세션의 두 번째 정책 질문
+    run_turn(3, 2, "answered")
+    run_turn(0, 4, "answered")  # 세 번째 정책 질문도 다시 초기화
+
+
 def test_chat_top_k_out_of_range_is_400(client):
     _signup(client, "chatuser1@example.com")
     r = client.post("/api/v1/chat/messages", json={"message": "안녕", "top_k": 21})

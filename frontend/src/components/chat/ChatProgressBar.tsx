@@ -65,7 +65,7 @@ export function ChatProgressBar({ token, active, startedAt }: ChatProgressBarPro
     >
       <div className="progress-head">
         <span className="progress-message">{message}</span>
-        {elapsed > 0 && <span className="progress-elapsed">{Math.round(elapsed)}초</span>}
+        <span className="progress-elapsed">{Math.round(elapsed)}초</span>
       </div>
 
       <div

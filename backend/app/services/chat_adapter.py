@@ -85,9 +85,12 @@ def _augment_required_documents(raw: dict) -> dict:
     return raw
 
 
-def _cache_last_response(session_id: str, raw: dict) -> None:
+def _cache_last_response(session_id: str, raw: dict, *, user_id: int) -> None:
     """API-12(정책 문의)가 세션의 마지막 policies/profile을 조회할 수 있게 캐시."""
 
+    record = chat_session_store.get(session_id, user_id=user_id)
+    if record is not None:
+        record.awaiting_input = raw.get("status") == "needs_input"
     if raw.get("status") == "answered":
         chat_session_store.update_last_response(
             session_id,
@@ -187,7 +190,7 @@ def _start_chat(
         raw = _augment_required_documents(raw)
         response = ChatResponse.model_validate(raw)
         chat_session_store.create(session_id, user_id=user_id)
-        _cache_last_response(session_id, raw)
+        _cache_last_response(session_id, raw, user_id=user_id)
         _finish_progress(session_id, user_id=user_id)
         return response
     except Exception:
@@ -227,7 +230,7 @@ def continue_chat(
             user_id=user_id,
             progress_token=progress_token,
             resuming=resumes_forward(session_id),
-            carry_elapsed=True,
+            carry_elapsed=record.awaiting_input,
         )
         try:
             raw = _run(
@@ -235,8 +238,8 @@ def continue_chat(
                 top_k=top_k, extra_interests=extra_interests,
             )
             raw = _augment_required_documents(raw)
-            _cache_last_response(session_id, raw)
             response = ChatResponse.model_validate(raw)
+            _cache_last_response(session_id, raw, user_id=user_id)
         except Exception:
             _finish_progress(session_id, user_id=user_id, failed=True)
             raise
