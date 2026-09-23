@@ -15,7 +15,6 @@ from backend.app.api.deps import get_current_user
 from backend.app.services import auth_adapter, chat_adapter
 from backend.app.session_store.auth_session import auth_session_store
 from backend.app.session_store.chat_session import chat_session_store
-from backend.tests.test_chat_session_lifecycle import ObservedLock
 from src.rag_chatbot.auth.service import AuthBackendUnavailableError
 
 
@@ -173,17 +172,25 @@ def test_already_authenticated_chat_cannot_run_after_withdrawal(accounts, monkey
 
 
 @pytest.mark.parametrize("operation", ["start", "resume"])
-def test_withdrawal_waits_for_running_chat_without_blocking_other_users(accounts, monkeypatch, operation):
+def test_withdrawal_revokes_running_chat_access_without_blocking_other_users(accounts, monkeypatch, operation):
     a = accounts
-    lock = ObservedLock()
-    chat_session_store._user_locks[a.owner_id] = lock
-    entered, release = Event(), Event()
+    entered, release, cleanup_entered = Event(), Event(), Event()
     written = []
     token = a.owner.cookies.get("session_id")
+    other_record = chat_session_store.get(a.other_session, user_id=a.other_id)
+    other_checkpoints = checkpoints(a.graph, a.other_session)
     chat_client = TestClient(a.owner.app, cookies=a.owner.cookies)
     withdrawal_client = TestClient(a.owner.app, cookies=a.owner.cookies)
     original_ask = chat_adapter.ask
     original_resume = chat_adapter.answer_followup
+    original_cleanup = chat_adapter.delete_all_chat_sessions
+
+    def cleanup(*, user_id):
+        cleanup_entered.set()
+        original_cleanup(user_id=user_id)
+        if operation == "resume":
+            # 기존 세션은 실행이 끝난 뒤 정리되어야 한다. 회원 잠금 종류에는 의존하지 않는다.
+            assert release.is_set()
 
     def pause(session_id, response):
         assert checkpoints(a.graph, session_id)
@@ -203,6 +210,7 @@ def test_withdrawal_waits_for_running_chat_without_blocking_other_users(accounts
 
     monkeypatch.setattr(chat_adapter, "ask", ask)
     monkeypatch.setattr(chat_adapter, "answer_followup", resume)
+    monkeypatch.setattr(chat_adapter, "delete_all_chat_sessions", cleanup)
     path = "/api/v1/chat/messages" if operation == "start" else f"/api/v1/chat/sessions/{a.owned[0]}/followup"
     with ThreadPoolExecutor(max_workers=3) as pool:
         pending_chat = pool.submit(chat_client.post, path, json={"message": "inflight"})
@@ -211,18 +219,30 @@ def test_withdrawal_waits_for_running_chat_without_blocking_other_users(accounts
             if operation == "start":
                 assert chat_session_store.get(written[0], user_id=a.owner_id) is None
             pending_withdrawal = pool.submit(withdraw, withdrawal_client)
-            assert lock.waiting.wait(5)
-            assert not pending_withdrawal.done()
-            assert auth_session_store.get(token) is not None
+            assert cleanup_entered.wait(5)
+            if operation == "start":
+                assert pending_withdrawal.result(timeout=5).status_code == 200
+            assert auth_session_store.get(token) is None
             independent = pool.submit(start, a.other).result(timeout=5)
             assert chat_session_store.get(independent, user_id=a.other_id) is not None
         finally:
             release.set()
         assert pending_chat.result(timeout=5).status_code == 200
         assert pending_withdrawal.result(timeout=5).status_code == 200
-    assert all(record.user_id != a.owner_id for record in chat_session_store._sessions.values())
-    assert all(not checkpoints(a.graph, sid) for sid in a.owned + written)
+    assert all(chat_session_store.get(sid, user_id=a.owner_id) is None for sid in a.owned)
+    assert all(not checkpoints(a.graph, sid) for sid in a.owned)
+    if operation == "resume":
+        assert all(record.user_id != a.owner_id for record in chat_session_store._sessions.values())
+    # 승인된 한계: 새 상담이 탈퇴 뒤 완료되면 프로세스 메모리에 남을 수 있다.
+    # 잔존 자체는 요구하지 않는다. 향후 정리가 개선돼도 아래 접근 차단 계약은 같다.
     assert auth_session_store.get(token) is None
-    # 실행/대기 중인 작업만 잠금을 소유하며 완료된 회원 ID는 따로 남지 않는다.
-    del lock
+    assert chat_client.get("/api/v1/users/me").status_code == 401
+    assert chat_client.post("/api/v1/chat/messages", json={"message": "late"}).status_code == 401
+    assert chat_session_store.get(a.other_session, user_id=a.other_id) is other_record
+    assert other_record.last_profile and other_record.last_policies
+    assert checkpoints(a.graph, a.other_session) == other_checkpoints
+    replacement_id = signup(a.owner, "owner@example.com")
+    assert replacement_id != a.owner_id
+    assert a.owner.post(f"/api/v1/chat/sessions/{written[0]}/followup", json={"message": "late"}).status_code == 404
+    # 실행/대기가 끝난 회원 잠금은 별도로 남지 않는다.
     assert not chat_session_store._user_locks

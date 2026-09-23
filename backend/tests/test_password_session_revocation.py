@@ -83,7 +83,7 @@ def test_failed_password_change_preserves_sessions(sessions, isolated_auth_db, f
     ("POST", "/api/v1/chat/sessions/owned/followup", {"message": "late"}),
     ("DELETE", "/api/v1/chat/sessions/owned", None),
 ])
-def test_preauthenticated_waiter_is_rejected_after_revocation(sessions, monkeypatch, method, path, payload):
+def test_preauthenticated_requests_respect_revocation_boundary(sessions, monkeypatch, method, path, payload):
     current, second, _, user_id = sessions
     authenticated, release = Event(), Event()
     stale_token = second.cookies.get("session_id")
@@ -111,7 +111,14 @@ def test_preauthenticated_waiter_is_rejected_after_revocation(sessions, monkeypa
         finally:
             release.set()
         response = pending.result(timeout=10)
-    assert (response.status_code, response.json().get("code")) == (401, "UNAUTHORIZED")
+    if (method, path) == ("GET", "/api/v1/users/me"):
+        # 승인된 계약: 폐기 전에 인증한 읽기 요청은 200으로 완료될 수 있다.
+        assert response.status_code == 200 and response.json()["id"] == user_id
+        assert response.headers["cache-control"] == "no-store"
+    else:
+        assert (response.status_code, response.json().get("code")) == (401, "UNAUTHORIZED")
+    after_revocation = second.request(method, path, json=payload)
+    assert (after_revocation.status_code, after_revocation.json().get("code")) == (401, "UNAUTHORIZED")
     start.assert_not_called()
     resume.assert_not_called()
     delete.assert_not_called()
@@ -220,10 +227,8 @@ def test_token_issuance_finishes_before_change_then_is_revoked(sessions, monkeyp
     assert current.get("/api/v1/users/me").status_code == 200
 
 
-def test_request_queued_on_password_change_lock_rechecks_revocation(sessions, monkeypatch):
+def test_profile_get_during_password_change_finishes_but_new_requests_are_revoked(sessions, monkeypatch):
     current, second, _, user_id = sessions
-    lock = ObservedLock()
-    chat_session_store._user_locks[user_id] = lock
     changed, release = Event(), Event()
     original = auth_adapter.change_password
 
@@ -237,11 +242,14 @@ def test_request_queued_on_password_change_lock_rechecks_revocation(sessions, mo
         changing = pool.submit(change, current)
         try:
             assert changed.wait(10)
+            # DB 변경 뒤 토큰 폐기 전의 GET은 회원 잠금을 기다리지 않는다.
             waiting = pool.submit(second.get, "/api/v1/users/me")
-            assert lock.waiting.wait(5)
-            assert not waiting.done()
+            result = waiting.result(timeout=5)
+            assert result.status_code == 200 and result.json()["id"] == user_id
         finally:
             release.set()
         assert changing.result(timeout=10).status_code == 200
-        result = waiting.result(timeout=10)
-    assert (result.status_code, result.json()["code"]) == (401, "UNAUTHORIZED")
+    after_revocation = second.get("/api/v1/users/me")
+    assert (after_revocation.status_code, after_revocation.json()["code"]) == (401, "UNAUTHORIZED")
+    active = current.get("/api/v1/users/me")
+    assert active.status_code == 200 and active.json()["id"] == user_id

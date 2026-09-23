@@ -178,8 +178,19 @@ def test_preauthenticated_auto_waiter_cannot_outlive_withdrawal(client, auto_gra
     assert not chat_session_store._sessions and not list(auto_graph[0].checkpointer.list(None))
 
 
-def test_running_auto_finishes_before_withdrawal_then_all_state_is_deleted(client, auto_graph, monkeypatch):
-    signup(client)
+def test_withdrawal_revokes_access_while_new_auto_request_finishes_later(client, auto_graph, monkeypatch):
+    user_id = signup(client)["user"]["id"]
+    completed = client.post("/api/v1/chat/recommendations")
+    assert completed.status_code == 200
+    completed_sid = completed.json()["session_id"]
+    other = TestClient(client.app)
+    other_id = signup(other, email="other@example.com")["user"]["id"]
+    other_response = other.post("/api/v1/chat/recommendations")
+    assert other_response.status_code == 200
+    other_sid = other_response.json()["session_id"]
+    other_record = chat_session_store.get(other_sid, user_id=other_id)
+    graph = auto_graph[0]
+    other_checkpoints = list(graph.checkpointer.list({"configurable": {"thread_id": other_sid}}))
     entered, release = Event(), Event()
     original = chat_adapter.ask
     def pause(*args, **kwargs):
@@ -189,10 +200,7 @@ def test_running_auto_finishes_before_withdrawal_then_all_state_is_deleted(clien
         return result
     monkeypatch.setattr(chat_adapter, "ask", pause)
     from backend.app.session_store.auth_session import auth_session_store
-    user_id = auth_session_store.get(client.cookies.get("session_id")).user_id
-    from backend.tests.test_account_chat_cleanup import ObservedLock
-    lock = ObservedLock()
-    chat_session_store._user_locks[user_id] = lock
+    token = client.cookies.get("session_id")
     chat_client = TestClient(client.app, cookies=client.cookies)
     delete_client = TestClient(client.app, cookies=client.cookies)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -200,9 +208,23 @@ def test_running_auto_finishes_before_withdrawal_then_all_state_is_deleted(clien
         try:
             assert entered.wait(5)
             deleting = pool.submit(delete_client.request, "DELETE", "/api/v1/users/me", json={"password": "StrongPass1!"})
-            assert lock.waiting.wait(5) and not deleting.done()
+            assert deleting.result(timeout=5).status_code == 200
+            assert not pending.done()
+            assert auth_session_store.get(token) is None
+            assert other.get("/api/v1/users/me").status_code == 200
         finally:
             release.set()
-        assert pending.result(timeout=5).status_code == 200
-        assert deleting.result(timeout=5).status_code == 200
-    assert not chat_session_store._sessions and not list(auto_graph[0].checkpointer.list(None))
+        response = pending.result(timeout=5)
+    assert response.status_code == 200
+    # 승인된 한계: 실행 중이던 새 자동 추천의 늦은 등록/메모리 잔존은 허용한다.
+    # 이미 등록된 상담은 정리하고, 잔존 여부와 무관하게 폐기된 인증은 거절해야 한다.
+    assert chat_session_store.get(completed_sid, user_id=user_id) is None
+    assert not list(graph.checkpointer.list({"configurable": {"thread_id": completed_sid}}))
+    assert auth_session_store.get(token) is None
+    assert chat_client.get("/api/v1/users/me").status_code == 401
+    assert chat_client.post("/api/v1/chat/recommendations").status_code == 401
+    assert chat_session_store.get(other_sid, user_id=other_id) is other_record
+    assert list(graph.checkpointer.list({"configurable": {"thread_id": other_sid}})) == other_checkpoints
+    replacement_id = signup(client)["user"]["id"]
+    assert replacement_id != user_id
+    assert client.post(f"/api/v1/chat/sessions/{response.json()['session_id']}/followup", json={"message": "late"}).status_code == 404
