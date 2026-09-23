@@ -240,7 +240,7 @@ flowchart TD
 | **N2** | `slot_completeness_gate.py` | 서비스 진행을 위한 필수 조건(거주 지역 등) 충족 여부 판정                   |
 | **N2a**| `general_law_reference_search.py` | 지역 정보 부족 시 참고 검색 경로 호출. `../retrieval_gateway.py`는 미연결 상태로 빈 목록 반환 |
 | **N3** | `request_missing_slots.py` | 사용자에게 빠진 슬롯을 되묻고 그래프 실행 일시 정지 (`interrupt`)          |
-| **N4** | `policy_search.py` | 사용자 슬롯 조건에 부합하는 후보 지원제도 Top-K 벡터 검색                  |
+| **N4** | `policy_search.py` | 슬롯·프로필 조건으로 후보 지원제도를 넓게 벡터 검색한 뒤, LLM이 있으면 관련성 게이트로 무관 후보를 걷어내고 상위 Top-K만 채택 |
 | **N5** | `claim_plan.py` | LLM 또는 규칙으로 후보 정책 청크의 자격·지원금·중복수급 주장(Claim) 추출 |
 | **N6** | `document_verification.py` | 발췌 문장이 색인된 정책 청크에 포함되는지 문자열 대조 |
 | **N7** | `evidence_gate.py` | 근거의 충분성·시행일자 유효성·법령 충돌 여부 검사 |
