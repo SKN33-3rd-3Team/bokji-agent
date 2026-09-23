@@ -35,32 +35,28 @@
 
 ### 4차 프로젝트
 
-
-| 팀원 |       역할        |       담당 업무        |
-| :---: |:----------------------------------------------------------:|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **이수연**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-lesoo-181717?style=flat-square&logo=github)](https://github.com/lesoo) |          **팀장, PM**           | • 중복 검색 내용 확인<br>• 지원금 계산기 재확인<br>• 자격검증 재확인<br>• 구비서류 데이터 VectorDB 요소 추가<br>• 평가지표·방법 다양화 평가<br>• React+FastAPI Migration 계획, API 문서, 화면 기획서 작성<br>• Frontend/Backend 병합 |
-| **김일환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-KangDohwa-181717?style=flat-square&logo=github)](https://github.com/KangDohwa) | **[Role Placeholder]**  | • 검색 기능 고도화(사용자 적합성, 소요시간 단축)<br>• LLM 모델별 답변 분석 및 선정<br>• Backend Migration<br>• AWS EC2/S3 배포 |
-| **허유나**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-Heoyuna0819-181717?style=flat-square&logo=github)](https://github.com/Heoyuna0819) |   **[Role Placeholder]**   | • Streamlit 화면 디자인 고도화<br>• 구비서류 안내<br>• LLM Output 정형화<br>• LLM 모델별 답변 분석 및 선정<br>• Frontend Migration<br>• Production QA/QC |
-| **김길환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-amygdalis24-181717?style=flat-square&logo=github)](https://github.com/amygdalis24) |   **[Role Placeholder]**    | • 단순 질의 대화형 챗봇 기능 추가<br>• Frontend Migration<br>• Production QA/QC |
-| **주상현**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-shju0924--ai-181717?style=flat-square&logo=github)](https://github.com/shju0924-ai) |   **[Role Placeholder]**     | • 회원정보 기반 정책 조회 기능 추가(Node4 활용)<br>• Backend Migration<br>• Production QA/QC |
-
+|                                                                         팀원                                                                          |          역할          | 담당 업무                                                                                                                                                                                                                            |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------: | :--------------------: | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|       **이수연**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-lesoo-181717?style=flat-square&logo=github)](https://github.com/lesoo)        |      **팀장, PM**      | • 중복 검색 내용 확인<br>• 지원금 계산기 재확인<br>• 자격검증 재확인<br>• 구비서류 데이터 VectorDB 요소 추가<br>• 평가지표·방법 다양화 평가<br>• React+FastAPI Migration 계획, API 문서, 화면 기획서 작성<br>• Frontend/Backend 병합 |
+|   **김일환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-KangDohwa-181717?style=flat-square&logo=github)](https://github.com/KangDohwa)    | **[Role Placeholder]** | • 검색 기능 고도화(사용자 적합성, 소요시간 단축)<br>• LLM 모델별 답변 분석 및 선정<br>• Backend Migration<br>• AWS EC2/S3 배포                                                                                                       |
+| **허유나**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-Heoyuna0819-181717?style=flat-square&logo=github)](https://github.com/Heoyuna0819)  | **[Role Placeholder]** | • Streamlit 화면 디자인 고도화<br>• 구비서류 안내<br>• LLM Output 정형화<br>• LLM 모델별 답변 분석 및 선정<br>• Frontend Migration<br>• Production QA/QC                                                                             |
+| **김길환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-amygdalis24-181717?style=flat-square&logo=github)](https://github.com/amygdalis24)  | **[Role Placeholder]** | • 단순 질의 대화형 챗봇 기능 추가<br>• Frontend Migration<br>• Production QA/QC                                                                                                                                                      |
+| **주상현**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-shju0924--ai-181717?style=flat-square&logo=github)](https://github.com/shju0924-ai) | **[Role Placeholder]** | • 회원정보 기반 정책 조회 기능 추가(Node4 활용)<br>• Backend Migration<br>• Production QA/QC                                                                                                                                         |
 
 <details>
 <summary>3차 프로젝트 역할 보기</summary>
 
 ### 3차 프로젝트
 
-| 팀원 |                             역할                             | 담당 노드 및 핵심 파이프라인                                                                                                                                                                                                                                                                                                                                                                                          |
-| :---: |:----------------------------------------------------------:|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **이수연**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-lesoo-181717?style=flat-square&logo=github)](https://github.com/lesoo) |          **팀장, PM** <br>Graph Builder & Reasoning          | • **그래프 오케스트레이션**: LangGraph 전체 노드 배선(StateGraph) 및 파이프라인 최적화<br>• **추론·판정·검증 노드 전담 (N9 ~ N14)**<br>  - N9 자격 판정 / N10 지원금 계산 / N11 중복수급 판정<br>  - N12 결과 조립 / N13 답변 생성 / N14 최종 인용 검증<br>• **벡터 인덱싱**: Document 청킹 및 ChromaDB 벡터 적재 파이프라인 구축<br>• **평가 파이프라인**: 100문항 벤치마크 및 다중 턴 되묻기 자동 평가 러너 구축<br>• **프로젝트 총괄/통합**: 일정·품질 관리, LangGraph 노드 배선, Streamlit 연동, 코드 리뷰 및 브랜치 통합                          |
-| **김일환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-KangDohwa-181717?style=flat-square&logo=github)](https://github.com/KangDohwa) | **TL(Tech Lead)** <br>Evidence Gate & Service Architecture | • **근거 검증 및 법령 검색 노드 (N7, N8)**<br>  - N7 Evidence Gate (슈퍼바이저 4-way 검증) / N8 표적 법령 정밀 검색<br>• **RAG 아키텍처 및 데이터 계약**: 계층형 지역명 표준화 및 법령 메타데이터 계약 수립<br>• **서비스 연동 & 세션 관리**: LangGraph 파이프라인과 Streamlit UI 간 E2E 어댑터 구현<br>• **코드 품질 관리**: 기술 의사결정 자문, 개발·코드 품질 기준 수립, 코드 리뷰 및 브랜치 통합                                                                                                                      |
-| **허유나**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-Heoyuna0819-181717?style=flat-square&logo=github)](https://github.com/Heoyuna0819) |               **Law Data & Retrieval Nodes**               | • **정책 검색 및 원문 대조 노드 (N4 ~ N6)**<br>  - N4 정책 검색 Agent / N5 Claim Plan 분해 / N6 공식 공고·지침 대조<br>• **법령 데이터 파이프라인**: 국가법령정보센터 19만 건(법령·규칙·조례) 대규모 수집 및 정제<br>• **모델 평가 실험**: 구조화 출력(Structured Output) 및 LLM-as-judge 원문 대조 실험                                                                                                                                                                               |
-| **김길환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-amygdalis24-181717?style=flat-square&logo=github)](https://github.com/amygdalis24) |                **Subsidy Data Engineering**                | • **공공서비스 데이터 파이프라인**: 공공데이터포털 공공서비스 API 3종(목록·상세·조건) 전수 수집<br>• **데이터 정규화**: 10,968건 복지 정책 데이터 병합, 결측치 정제 및 Document 스키마 변환<br>• **데이터 품질 관리**: 수집 데이터 인수 검증(Handoff Validation) 및 매니페스트 명세화                                                                                                                                                                                                             |
-| **주상현**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-shju0924--ai-181717?style=flat-square&logo=github)](https://github.com/shju0924-ai) |            **Slot Parsing, Frontend UI & Auth**            | • **슬롯 파싱 및 대화 제어 노드 (N1 ~ N3)**<br>  - N1 슬롯 파싱 / N2 적합성 체크(지역 하드 게이트) / N2a 일반 법령 참고 / N3 재질문(되묻기)<br>• **프론트엔드 UI**: Streamlit 기반 대화형 웹 챗봇, 요약 진단 카드 및 정책 캐러셀 구현<br>• **사용자 인증 & 보안**: SQLite 회원 관리 및 Fernet 대칭키 기반 개인정보(PII) 암호화 저장소 구축<br>• **RAG 기초 설계**: 1차 Document/Chunk 스키마 정의 및 초기 ChromaDB 벡터스토어 구축                                                                                           |
+|                                                                         팀원                                                                          |                            역할                            | 담당 노드 및 핵심 파이프라인                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|       **이수연**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-lesoo-181717?style=flat-square&logo=github)](https://github.com/lesoo)        |         **팀장, PM** <br>Graph Builder & Reasoning         | • **그래프 오케스트레이션**: LangGraph 전체 노드 배선(StateGraph) 및 파이프라인 최적화<br>• **추론·판정·검증 노드 전담 (N9 ~ N14)**<br> - N9 자격 판정 / N10 지원금 계산 / N11 중복수급 판정<br> - N12 결과 조립 / N13 답변 생성 / N14 최종 인용 검증<br>• **벡터 인덱싱**: Document 청킹 및 ChromaDB 벡터 적재 파이프라인 구축<br>• **평가 파이프라인**: 100문항 벤치마크 및 다중 턴 되묻기 자동 평가 러너 구축<br>• **프로젝트 총괄/통합**: 일정·품질 관리, LangGraph 노드 배선, Streamlit 연동, 코드 리뷰 및 브랜치 통합 |
+|   **김일환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-KangDohwa-181717?style=flat-square&logo=github)](https://github.com/KangDohwa)    | **TL(Tech Lead)** <br>Evidence Gate & Service Architecture | • **근거 검증 및 법령 검색 노드 (N7, N8)**<br> - N7 Evidence Gate (슈퍼바이저 4-way 검증) / N8 표적 법령 정밀 검색<br>• **RAG 아키텍처 및 데이터 계약**: 계층형 지역명 표준화 및 법령 메타데이터 계약 수립<br>• **서비스 연동 & 세션 관리**: LangGraph 파이프라인과 Streamlit UI 간 E2E 어댑터 구현<br>• **코드 품질 관리**: 기술 의사결정 자문, 개발·코드 품질 기준 수립, 코드 리뷰 및 브랜치 통합                                                                                                                         |
+| **허유나**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-Heoyuna0819-181717?style=flat-square&logo=github)](https://github.com/Heoyuna0819)  |               **Law Data & Retrieval Nodes**               | • **정책 검색 및 원문 대조 노드 (N4 ~ N6)**<br> - N4 정책 검색 Agent / N5 Claim Plan 분해 / N6 공식 공고·지침 대조<br>• **법령 데이터 파이프라인**: 국가법령정보센터 19만 건(법령·규칙·조례) 대규모 수집 및 정제<br>• **모델 평가 실험**: 구조화 출력(Structured Output) 및 LLM-as-judge 원문 대조 실험                                                                                                                                                                                                                     |
+| **김길환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-amygdalis24-181717?style=flat-square&logo=github)](https://github.com/amygdalis24)  |                **Subsidy Data Engineering**                | • **공공서비스 데이터 파이프라인**: 공공데이터포털 공공서비스 API 3종(목록·상세·조건) 전수 수집<br>• **데이터 정규화**: 10,968건 복지 정책 데이터 병합, 결측치 정제 및 Document 스키마 변환<br>• **데이터 품질 관리**: 수집 데이터 인수 검증(Handoff Validation) 및 매니페스트 명세화                                                                                                                                                                                                                                       |
+| **주상현**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-shju0924--ai-181717?style=flat-square&logo=github)](https://github.com/shju0924-ai) |            **Slot Parsing, Frontend UI & Auth**            | • **슬롯 파싱 및 대화 제어 노드 (N1 ~ N3)**<br> - N1 슬롯 파싱 / N2 적합성 체크(지역 하드 게이트) / N2a 일반 법령 참고 / N3 재질문(되묻기)<br>• **프론트엔드 UI**: Streamlit 기반 대화형 웹 챗봇, 요약 진단 카드 및 정책 캐러셀 구현<br>• **사용자 인증 & 보안**: SQLite 회원 관리 및 Fernet 대칭키 기반 개인정보(PII) 암호화 저장소 구축<br>• **RAG 기초 설계**: 1차 Document/Chunk 스키마 정의 및 초기 ChromaDB 벡터스토어 구축                                                                                           |
 
 </details>
-
-
 
 ---
 
@@ -104,6 +100,7 @@
 ---
 
 <a name="system-architecture"></a>
+
 ## 🏗️ 시스템 아키텍처
 
 배포 구조는 **S3의 React → EC2의 FastAPI → ChromaDB / RunPod + HuggingFace 폴백**이며, 운영 회원 정보는 **원격 MySQL**에 저장합니다.
@@ -114,7 +111,7 @@
 
 아래 이미지는 Streamlit 데모의 구조입니다. FastAPI 구성은 [백엔드 구조](backend/README.md#구성과-api-범위)를 참고하세요. 데이터 수집·색인은 상담 요청과 별도로 실행합니다.
 
-![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture_v2.png)
+![Bokji Agent 시스템 아키텍처](docs/images/bokji-agent-system-architecture_v3.png)
 
 > N1~N14 제어 흐름은 아래 [에이전트 파이프라인](#-에이전트-파이프라인-langgraph-n1-n14-pipeline)을 참고하세요.
 
@@ -234,24 +231,24 @@ flowchart TD
 
 모듈 경로는 `src/rag_chatbot/graph/nodes/` 기준입니다.
 
-| 노드 | 구현 모듈 | 핵심 역할                                                |
-|:---:|:---|:-----------------------------------------------------|
-| **N1** | `slot_parser.py` | 규칙과 선택적 LLM으로 슬롯 추출, 저장 프로필과의 충돌 확인 |
-| **N2** | `slot_completeness_gate.py` | 서비스 진행을 위한 필수 조건(거주 지역 등) 충족 여부 판정                   |
-| **N2a**| `general_law_reference_search.py` | 지역 정보 부족 시 참고 검색 경로 호출. `../retrieval_gateway.py`는 미연결 상태로 빈 목록 반환 |
-| **N3** | `request_missing_slots.py` | 사용자에게 빠진 슬롯을 되묻고 그래프 실행 일시 정지 (`interrupt`)          |
-| **N4** | `policy_search.py` | 슬롯·프로필 조건으로 후보 지원제도를 넓게 벡터 검색한 뒤, LLM이 있으면 관련성 게이트로 무관 후보를 걷어내고 상위 Top-K만 채택 |
-| **N5** | `claim_plan.py` | LLM 또는 규칙으로 후보 정책 청크의 자격·지원금·중복수급 주장(Claim) 추출 |
-| **N6** | `document_verification.py` | 발췌 문장이 색인된 정책 청크에 포함되는지 문자열 대조 |
-| **N7** | `evidence_gate.py` | 근거의 충분성·시행일자 유효성·법령 충돌 여부 검사 |
-| **N8** | `targeted_law_search.py` | `required_law_sources`의 `law_type`·`source_id`로 법령 메타데이터 조회 |
-| **N9** | `eligibility_verdict.py` | 규칙으로 조건 대조·자격 판정 (`충족` / `미충족` / `미확인`), 선택적 LLM으로 사유 문장 정리 |
-| **N10**| `benefit_calculator.py` | 자격 충족 정책의 금액·구간·선택형 규칙 추출 및 입력값에 따른 제한적 계산 |
-| **N10a**| `request_calc_info.py` | 계산에 필요한 슬롯·선택지를 되묻고 N9로 재개. 자동 추천에서는 질문 생략 |
-| **N11**| `duplicate_benefit.py` | 타 정부지원 사업과의 중복수급 허용 여부 판정                            |
-| **N12**| `result_assembly.py` | 정책별 판정 및 근거 데이터 정합성 조립 (근거 없는 합산 방지)                 |
-| **N13**| `answer_generation.py` | 규칙 템플릿과 선택적 LLM 요약으로 설명문·인용 조립 |
-| **N14**| `final_verification.py` | 인용 `chunk_id` 존재 여부 확인 및 최종 응답 상태 결정                 |
+|   노드   | 구현 모듈                         | 핵심 역할                                                                                                                     |
+| :------: | :-------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+|  **N1**  | `slot_parser.py`                  | 규칙과 선택적 LLM으로 슬롯 추출, 저장 프로필과의 충돌 확인                                                                    |
+|  **N2**  | `slot_completeness_gate.py`       | 서비스 진행을 위한 필수 조건(거주 지역 등) 충족 여부 판정                                                                     |
+| **N2a**  | `general_law_reference_search.py` | 지역 정보 부족 시 참고 검색 경로 호출. `../retrieval_gateway.py`는 미연결 상태로 빈 목록 반환                                 |
+|  **N3**  | `request_missing_slots.py`        | 사용자에게 빠진 슬롯을 되묻고 그래프 실행 일시 정지 (`interrupt`)                                                             |
+|  **N4**  | `policy_search.py`                | 슬롯·프로필 조건으로 후보 지원제도를 넓게 벡터 검색한 뒤, LLM이 있으면 관련성 게이트로 무관 후보를 걷어내고 상위 Top-K만 채택 |
+|  **N5**  | `claim_plan.py`                   | LLM 또는 규칙으로 후보 정책 청크의 자격·지원금·중복수급 주장(Claim) 추출                                                      |
+|  **N6**  | `document_verification.py`        | 발췌 문장이 색인된 정책 청크에 포함되는지 문자열 대조                                                                         |
+|  **N7**  | `evidence_gate.py`                | 근거의 충분성·시행일자 유효성·법령 충돌 여부 검사                                                                             |
+|  **N8**  | `targeted_law_search.py`          | `required_law_sources`의 `law_type`·`source_id`로 법령 메타데이터 조회                                                        |
+|  **N9**  | `eligibility_verdict.py`          | 규칙으로 조건 대조·자격 판정 (`충족` / `미충족` / `미확인`), 선택적 LLM으로 사유 문장 정리                                    |
+| **N10**  | `benefit_calculator.py`           | 자격 충족 정책의 금액·구간·선택형 규칙 추출 및 입력값에 따른 제한적 계산                                                      |
+| **N10a** | `request_calc_info.py`            | 계산에 필요한 슬롯·선택지를 되묻고 N9로 재개. 자동 추천에서는 질문 생략                                                       |
+| **N11**  | `duplicate_benefit.py`            | 타 정부지원 사업과의 중복수급 허용 여부 판정                                                                                  |
+| **N12**  | `result_assembly.py`              | 정책별 판정 및 근거 데이터 정합성 조립 (근거 없는 합산 방지)                                                                  |
+| **N13**  | `answer_generation.py`            | 규칙 템플릿과 선택적 LLM 요약으로 설명문·인용 조립                                                                            |
+| **N14**  | `final_verification.py`           | 인용 `chunk_id` 존재 여부 확인 및 최종 응답 상태 결정                                                                         |
 
 </details>
 
@@ -259,17 +256,17 @@ flowchart TD
 
 ## 🛠 기술 스택 (Tech Stack)
 
-| 계층 | 기술 / 도구 | 선정 및 사용 이유 |
-| :--- | :--- | :--- |
-| **Orchestration** | `LangGraph 1.2.11` (LangChain Core 기반) | 조건부 라우팅·되묻기 및 메모리 체크포인트 (`MemorySaver`) |
-| **LLM & Inference** | 운영: RunPod + HuggingFace 폴백 | Pod 우선 사용. RunPod Serverless·로컬 Ollama도 선택 가능 |
-| **Embedding & Vector DB** | `ChromaDB`, `intfloat/multilingual-e5-base` | 768차원 다국어 고밀도 벡터 임베딩 및 메타데이터 필터링 |
-| **Frontend UI** | React 18, TypeScript, Vite 5, React Router 6, TanStack Query 5, Axios | S3에 배포된 프론트엔드. 로컬은 Vite, 레거시 데모는 `Streamlit 1.62.0` |
-| **HTTP API** | FastAPI, Pydantic, Uvicorn | 회원·옵션·상담·자동 추천 API-01~14, 서버 세션 및 소유권 검증 |
-| **Data & Scraping** | `Python 3.11`, `Requests`, 표준 `json` | 공공서비스 및 국가법령정보센터 목록 수집·정규화 |
-| **Security & Storage** | 운영: 원격 MySQL, PyMySQL, `bcrypt`, `cryptography (Fernet)` | 민감 프로필 암호화. 로컬 기본은 SQLite이며 MariaDB도 지원. PyMySQL은 백엔드 설치에 포함 |
-| **Deployment** | AWS EC2(백엔드) + S3(프론트엔드) | API 서버와 프론트엔드 정적 파일을 분리해 운영 |
-| **Quality & Testing** | `pytest`, `unittest`, FastAPI TestClient, Streamlit AppTest, Playwright | 코어·HTTP·레거시 UI 테스트 및 브라우저 회귀 검사 |
+| 계층                      | 기술 / 도구                                                             | 선정 및 사용 이유                                                                       |
+| :------------------------ | :---------------------------------------------------------------------- | :-------------------------------------------------------------------------------------- |
+| **Orchestration**         | `LangGraph 1.2.11` (LangChain Core 기반)                                | 조건부 라우팅·되묻기 및 메모리 체크포인트 (`MemorySaver`)                               |
+| **LLM & Inference**       | 운영: RunPod + HuggingFace 폴백                                         | Pod 우선 사용. RunPod Serverless·로컬 Ollama도 선택 가능                                |
+| **Embedding & Vector DB** | `ChromaDB`, `intfloat/multilingual-e5-base`                             | 768차원 다국어 고밀도 벡터 임베딩 및 메타데이터 필터링                                  |
+| **Frontend UI**           | React 18, TypeScript, Vite 5, React Router 6, TanStack Query 5, Axios   | S3에 배포된 프론트엔드. 로컬은 Vite, 레거시 데모는 `Streamlit 1.62.0`                   |
+| **HTTP API**              | FastAPI, Pydantic, Uvicorn                                              | 회원·옵션·상담·자동 추천 API-01~14, 서버 세션 및 소유권 검증                            |
+| **Data & Scraping**       | `Python 3.11`, `Requests`, 표준 `json`                                  | 공공서비스 및 국가법령정보센터 목록 수집·정규화                                         |
+| **Security & Storage**    | 운영: 원격 MySQL, PyMySQL, `bcrypt`, `cryptography (Fernet)`            | 민감 프로필 암호화. 로컬 기본은 SQLite이며 MariaDB도 지원. PyMySQL은 백엔드 설치에 포함 |
+| **Deployment**            | AWS EC2(백엔드) + S3(프론트엔드)                                        | API 서버와 프론트엔드 정적 파일을 분리해 운영                                           |
+| **Quality & Testing**     | `pytest`, `unittest`, FastAPI TestClient, Streamlit AppTest, Playwright | 코어·HTTP·레거시 UI 테스트 및 브라우저 회귀 검사                                        |
 
 ---
 
@@ -278,14 +275,16 @@ flowchart TD
 공공서비스 문서와 법령 목록 메타데이터를 별도 인덱스로 관리합니다. 전체 원천·처리 문서와 벡터 DB는 수집·색인 시 생성하며 Git에 포함하지 않습니다. 저장소에는 [공공서비스 manifest](data/processed/subsidy_manifest.json), [법령 manifest](data/processed/law_manifest.json)와 `data/samples/`의 공개 샘플이 있습니다. 문서·청크 수와 용량은 데이터 스냅샷에 따라 달라집니다.
 
 ### 1. 원천 데이터 (`data/processed/`)
+
 - **공공서비스 지원제도 문서 (`subsidy_documents.jsonl`)**: 목록·상세·지원조건을 병합해 변환한 Document JSONL
 - **국가법령정보센터 법령 메타데이터 (`law_documents.jsonl`)**: 법령·행정규칙·자치법규 목록을 정규화한 Document JSONL (본문·조문 제외)
 
 ### 2. 벡터 색인 사양 (`data/vector_db/`)
-| 설정 (`EMBEDDING_PROVIDER`) | 기본 차원 | 특징 및 용도 |
-| :--- | :---: | :--- |
-| **`korean`** *(서비스 기본값)* | **768** | `intfloat/multilingual-e5-base` 기반 의미 검색 |
-| **`hash`** | 128 | `local-hash-v1:128` 제공자. 테스트·오프라인 스모크 전용 |
+
+| 설정 (`EMBEDDING_PROVIDER`)    | 기본 차원 | 특징 및 용도                                            |
+| :----------------------------- | :-------: | :------------------------------------------------------ |
+| **`korean`** _(서비스 기본값)_ |  **768**  | `intfloat/multilingual-e5-base` 기반 의미 검색          |
+| **`hash`**                     |    128    | `local-hash-v1:128` 제공자. 테스트·오프라인 스모크 전용 |
 
 서비스의 컬렉션 접두사는 `bokji_rag`입니다. 색인과 검색의 제공자·모델·차원이 일치해야 합니다. 기본 재색인 스크립트는 E5 768차원, 청크 최대 800자·겹침 100자를 사용합니다.
 
@@ -332,6 +331,7 @@ bokji-agent/
 ## 🚀 시작하기 (Quick Start)
 
 ### 사전 요구사항
+
 - **Python**: `3.11.x` 권장
 - **Node.js / npm**: 프론트엔드 설치·실행에 Node.js `18.x` 또는 `20 이상`과 npm 필요
 - **검색 데이터**: 전체 Document JSONL, 지원조건 파일 및 일치하는 ChromaDB 색인. E5 모델 캐시가 없으면 최초 로딩 시 다운로드 필요
@@ -365,28 +365,28 @@ cd ..
 
 백엔드는 루트 `.env`, Vite는 `frontend/.env`를 읽습니다. `.env.example`을 참고해 사용할 환경에 맞게 설정하세요. 셸에 설정된 값이 루트 `.env`보다 우선합니다. 각 변수는 한 번만 정의하고, 변경 후 개발 서버를 재시작하세요. 프론트엔드 배포본에는 다시 빌드해야 반영됩니다. 환경 파일과 비밀값은 커밋하지 않습니다.
 
-| 변수명 | 설정 조건 / 기본값 | 설명 |
-| :--- | :--- | :--- |
-| `EMBEDDING_PROVIDER` | 선택 / `korean` | `hash`는 오프라인 스모크용. 색인과 검색 설정을 맞춤 |
-| `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSION` | Korean 기본 `intfloat/multilingual-e5-base`, `768` | Hash 기본 차원은 `128`. 제공자를 바꿀 때 차원도 함께 설정 |
-| `RUNPOD_POD_ID`, `RUNPOD_POD_PORT`, `RUNPOD_POD_API_KEY` | Pod 사용 시 / 포트 `8000` | Pod ID가 있으면 `LLM_BACKEND`보다 우선. API 키는 서빙 설정에 맞춤 |
-| `HF_TOKEN` | HF 호출·Pod 폴백 시 필요 | 하위 호환 이름 `HUGGINGFACE_TOKEN`도 지원 |
-| `LLM_BACKEND` | Pod 미설정 시 / `hf` | `hf`·`huggingface`, `runpod`(Serverless), `ollama` 중 선택 |
-| `RUNPOD_ENDPOINT_ID`, `RUNPOD_API_KEY`, `RUNPOD_MODEL_NAME` | Serverless 선택 시 | Pod가 없고 `LLM_BACKEND=runpod`일 때 사용 |
-| `LLM_MODEL_NAME`, `LLM_HF_MODEL` | HF 모델은 앞 변수 우선 | HF 기본 모델은 `Bllossom/llama-3.2-Korean-Bllossom-3B`, 템플릿 예시는 `Qwen/Qwen3.5-9B` |
-| `LLM_PROVIDER` | HF 선택 / 미설정 시 자동 라우팅 | 템플릿은 `featherless-ai`. 사용 가능한 제공자·모델 조합에 맞춤 |
-| `LLM_MAX_NEW_TOKENS`, `LLM_DISABLE_THINKING` | HF 기본 `8192`, 사고 끄기는 `1`일 때 요청 | 템플릿은 각각 `1024`, `1`. 사고 끄기 지원 여부는 제공자에 따라 다름 |
-| `LLM_TIMEOUT_SECONDS`, `LLM_PREFETCH_WORKERS` | 각각 `120`, `4` | Pod·Serverless·Ollama 호출 한도(초)와 N5 병렬 추출 수. 템플릿의 병렬 추출 수는 `5`. N1/N4/N5/N9/N10/N10a/N13은 LLM 사용 시 노드별 총 90초 제한 |
-| `OLLAMA_BASE_URL`, `OLLAMA_NUM_CTX` | 로컬 Ollama 선택 / `http://localhost:11434`, `4096` | `LLM_MODEL_NAME` 필수, loopback 주소만 허용. 자동 폴백 대상이 아님 |
-| `AUTH_DB_URL` | 운영 원격 MySQL 연결에 필요 | 형식 `mysql://<user>:<password>@<host>:<port>/<dbname>`. 미설정 시 로컬 SQLite이며 DB 장애 시 자동 전환·동기화 없음 |
-| `AUTH_DB_PATH` | 로컬 SQLite / `.runtime/auth.db` | `AUTH_DB_URL`이 없을 때만 사용 |
-| `AUTH_ENC_KEY` | 운영·공유 DB에 필요 | 회원 PII 암호화 키. 미설정 시 로컬 개발 키 `.runtime/auth_dev.key` 자동 생성 |
-| `AUTH_DB_CONNECT_TIMEOUT`, `AUTH_DB_SSL_MODE` | 원격 DB / `10`초, SSL 모드 미지정 | SSL 모드는 빈 값 또는 `REQUIRED`. `REQUIRED`는 TLS 암호화만 강제하고 인증서·호스트 이름은 검증하지 않음 |
-| `AUTH_MAX_LOGIN_ATTEMPTS`, `AUTH_LOCKOUT_MINUTES` | 선택 / `5`, `15` | 연속 로그인 실패 잠금 기준 |
-| `CORS_ORIGINS`, `COOKIE_SECURE`, `AUTH_SESSION_TTL_DAYS` | 로컬 기본 `http://localhost:5173`, `false`, `7` | 프론트 origin, 쿠키의 Secure 속성, 로그인 세션 유효기간(일). 운영 주소·쿠키 전송 조건에 맞추고 HTTPS에서는 `COOKIE_SECURE=true` 사용 |
-| `GOV24_SERVICE_KEY`, `LAW_OC`, `SIGUNGU_CODE_CSV` | 직접 수집 시 | 각각 공공서비스 API 키, 법령 API 사용자 식별자, 선택적 법정동코드 CSV 경로. CSV 미지정 시 시도 코드까지만 채움 |
-| `BOKJI_TRACE` | 선택 / 미설정 시 비활성 | `1`로 설정 시 노드 실행·시간 진단 출력 |
-| `VITE_API_BASE_URL` | **`frontend/.env`** / 미설정 시 `http://localhost:8000` | API 접두사 `/api/v1`을 붙이지 않은 백엔드 주소. 빈 문자열은 기본 주소로 대체되지 않음. 운영 프론트 빌드에는 실제 백엔드 주소를 사용하며 비밀값을 넣지 않음 |
+| 변수명                                                      | 설정 조건 / 기본값                                      | 설명                                                                                                                                                       |
+| :---------------------------------------------------------- | :------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMBEDDING_PROVIDER`                                        | 선택 / `korean`                                         | `hash`는 오프라인 스모크용. 색인과 검색 설정을 맞춤                                                                                                        |
+| `EMBEDDING_MODEL_NAME`, `EMBEDDING_DIMENSION`               | Korean 기본 `intfloat/multilingual-e5-base`, `768`      | Hash 기본 차원은 `128`. 제공자를 바꿀 때 차원도 함께 설정                                                                                                  |
+| `RUNPOD_POD_ID`, `RUNPOD_POD_PORT`, `RUNPOD_POD_API_KEY`    | Pod 사용 시 / 포트 `8000`                               | Pod ID가 있으면 `LLM_BACKEND`보다 우선. API 키는 서빙 설정에 맞춤                                                                                          |
+| `HF_TOKEN`                                                  | HF 호출·Pod 폴백 시 필요                                | 하위 호환 이름 `HUGGINGFACE_TOKEN`도 지원                                                                                                                  |
+| `LLM_BACKEND`                                               | Pod 미설정 시 / `hf`                                    | `hf`·`huggingface`, `runpod`(Serverless), `ollama` 중 선택                                                                                                 |
+| `RUNPOD_ENDPOINT_ID`, `RUNPOD_API_KEY`, `RUNPOD_MODEL_NAME` | Serverless 선택 시                                      | Pod가 없고 `LLM_BACKEND=runpod`일 때 사용                                                                                                                  |
+| `LLM_MODEL_NAME`, `LLM_HF_MODEL`                            | HF 모델은 앞 변수 우선                                  | HF 기본 모델은 `Bllossom/llama-3.2-Korean-Bllossom-3B`, 템플릿 예시는 `Qwen/Qwen3.5-9B`                                                                    |
+| `LLM_PROVIDER`                                              | HF 선택 / 미설정 시 자동 라우팅                         | 템플릿은 `featherless-ai`. 사용 가능한 제공자·모델 조합에 맞춤                                                                                             |
+| `LLM_MAX_NEW_TOKENS`, `LLM_DISABLE_THINKING`                | HF 기본 `8192`, 사고 끄기는 `1`일 때 요청               | 템플릿은 각각 `1024`, `1`. 사고 끄기 지원 여부는 제공자에 따라 다름                                                                                        |
+| `LLM_TIMEOUT_SECONDS`, `LLM_PREFETCH_WORKERS`               | 각각 `120`, `4`                                         | Pod·Serverless·Ollama 호출 한도(초)와 N5 병렬 추출 수. 템플릿의 병렬 추출 수는 `5`. N1/N4/N5/N9/N10/N10a/N13은 LLM 사용 시 노드별 총 90초 제한             |
+| `OLLAMA_BASE_URL`, `OLLAMA_NUM_CTX`                         | 로컬 Ollama 선택 / `http://localhost:11434`, `4096`     | `LLM_MODEL_NAME` 필수, loopback 주소만 허용. 자동 폴백 대상이 아님                                                                                         |
+| `AUTH_DB_URL`                                               | 운영 원격 MySQL 연결에 필요                             | 형식 `mysql://<user>:<password>@<host>:<port>/<dbname>`. 미설정 시 로컬 SQLite이며 DB 장애 시 자동 전환·동기화 없음                                        |
+| `AUTH_DB_PATH`                                              | 로컬 SQLite / `.runtime/auth.db`                        | `AUTH_DB_URL`이 없을 때만 사용                                                                                                                             |
+| `AUTH_ENC_KEY`                                              | 운영·공유 DB에 필요                                     | 회원 PII 암호화 키. 미설정 시 로컬 개발 키 `.runtime/auth_dev.key` 자동 생성                                                                               |
+| `AUTH_DB_CONNECT_TIMEOUT`, `AUTH_DB_SSL_MODE`               | 원격 DB / `10`초, SSL 모드 미지정                       | SSL 모드는 빈 값 또는 `REQUIRED`. `REQUIRED`는 TLS 암호화만 강제하고 인증서·호스트 이름은 검증하지 않음                                                    |
+| `AUTH_MAX_LOGIN_ATTEMPTS`, `AUTH_LOCKOUT_MINUTES`           | 선택 / `5`, `15`                                        | 연속 로그인 실패 잠금 기준                                                                                                                                 |
+| `CORS_ORIGINS`, `COOKIE_SECURE`, `AUTH_SESSION_TTL_DAYS`    | 로컬 기본 `http://localhost:5173`, `false`, `7`         | 프론트 origin, 쿠키의 Secure 속성, 로그인 세션 유효기간(일). 운영 주소·쿠키 전송 조건에 맞추고 HTTPS에서는 `COOKIE_SECURE=true` 사용                       |
+| `GOV24_SERVICE_KEY`, `LAW_OC`, `SIGUNGU_CODE_CSV`           | 직접 수집 시                                            | 각각 공공서비스 API 키, 법령 API 사용자 식별자, 선택적 법정동코드 CSV 경로. CSV 미지정 시 시도 코드까지만 채움                                             |
+| `BOKJI_TRACE`                                               | 선택 / 미설정 시 비활성                                 | `1`로 설정 시 노드 실행·시간 진단 출력                                                                                                                     |
+| `VITE_API_BASE_URL`                                         | **`frontend/.env`** / 미설정 시 `http://localhost:8000` | API 접두사 `/api/v1`을 붙이지 않은 백엔드 주소. 빈 문자열은 기본 주소로 대체되지 않음. 운영 프론트 빌드에는 실제 백엔드 주소를 사용하며 비밀값을 넣지 않음 |
 
 `python src/rag_chatbot/auth/__main__.py keygen`으로 `AUTH_ENC_KEY`를 생성합니다. 키는 DB와 분리해 보관하고, 기존 공유 DB에는 동일한 키를 사용하세요. 원격 DB의 데이터베이스·접속 계정을 준비한 뒤 [회원 DB 설정](docs/AUTH_REMOTE_DB.md)을 따릅니다.
 
@@ -515,45 +515,41 @@ Dev 평가의 기본 입력은 `data/evaluation/dev_questions.jsonl`, 출력은 
 
 ## 📄 관련 문서 (Documentation)
 
-| 문서명 | 내용 요약 |
-| :--- | :--- |
-| 📋 [`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md) | 프로젝트 준수 기준, Gate 0~6 단계별 통과 규정 및 법령 데이터 범위 |
-| 🔌 [`backend/README.md`](backend/README.md) | API-01~14, 인증·세션·계산 입력·구비서류, 원본 대비 승인 결정·구현·검증·담당 |
-| 🖥️ [`frontend/README.md`](frontend/README.md) | React 화면 구성·개발 가이드 |
-| [`docs/AUTO_RECOMMENDATION_API.md`](docs/AUTO_RECOMMENDATION_API.md) | API-14 v1.0 및 공용 D5/API-11 필드·예시·React 인계 |
-| 🗃️ [`docs/AUTH_REMOTE_DB.md`](docs/AUTH_REMOTE_DB.md) | SQLite/MySQL·MariaDB 선택, 드라이버 설치, DB 장애 동작 |
-| ⚙️ [`docs/RUNPOD_SETUP_DRAFT.md`](docs/RUNPOD_SETUP_DRAFT.md) | Pod·HF·Serverless 설정과 연결 점검 |
-| 📐 [`docs/RAG_DESIGN_PLAN.md`](docs/RAG_DESIGN_PLAN.md) | RAG 청킹, 검색, 노드 인터페이스 통합 아키텍처 설계서 |
-| 🗄️ [`docs/VECTOR_STORE.md`](docs/VECTOR_STORE.md) | ChromaDB 스키마 계약 및 메타데이터 정합성 규격 |
-| 🧪 [`docs/EVALUATION_AUTOMATION.md`](docs/EVALUATION_AUTOMATION.md) | 고정 Dev 질문 기반 평가 절차·지표 가이드 |
-| 🔒 [`docs/PII_LOGGING.md`](docs/PII_LOGGING.md) | 사용자 민감정보(소득, 주민등록상황 등) 처리 및 로깅 정책 |
-| 🤝 [`CONTRIBUTING.md`](CONTRIBUTING.md) | 브랜치 네이밍 컨벤션 (`type/#이슈-설명`) 및 코드 리뷰 규칙 |
-
-
+| 문서명                                                               | 내용 요약                                                                   |
+| :------------------------------------------------------------------- | :-------------------------------------------------------------------------- |
+| 📋 [`docs/PROJECT_COMPLIANCE.md`](docs/PROJECT_COMPLIANCE.md)        | 프로젝트 준수 기준, Gate 0~6 단계별 통과 규정 및 법령 데이터 범위           |
+| 🔌 [`backend/README.md`](backend/README.md)                          | API-01~14, 인증·세션·계산 입력·구비서류, 원본 대비 승인 결정·구현·검증·담당 |
+| 🖥️ [`frontend/README.md`](frontend/README.md)                        | React 화면 구성·개발 가이드                                                 |
+| [`docs/AUTO_RECOMMENDATION_API.md`](docs/AUTO_RECOMMENDATION_API.md) | API-14 v1.0 및 공용 D5/API-11 필드·예시·React 인계                          |
+| 🗃️ [`docs/AUTH_REMOTE_DB.md`](docs/AUTH_REMOTE_DB.md)                | SQLite/MySQL·MariaDB 선택, 드라이버 설치, DB 장애 동작                      |
+| ⚙️ [`docs/RUNPOD_SETUP_DRAFT.md`](docs/RUNPOD_SETUP_DRAFT.md)        | Pod·HF·Serverless 설정과 연결 점검                                          |
+| 📐 [`docs/RAG_DESIGN_PLAN.md`](docs/RAG_DESIGN_PLAN.md)              | RAG 청킹, 검색, 노드 인터페이스 통합 아키텍처 설계서                        |
+| 🗄️ [`docs/VECTOR_STORE.md`](docs/VECTOR_STORE.md)                    | ChromaDB 스키마 계약 및 메타데이터 정합성 규격                              |
+| 🧪 [`docs/EVALUATION_AUTOMATION.md`](docs/EVALUATION_AUTOMATION.md)  | 고정 Dev 질문 기반 평가 절차·지표 가이드                                    |
+| 🔒 [`docs/PII_LOGGING.md`](docs/PII_LOGGING.md)                      | 사용자 민감정보(소득, 주민등록상황 등) 처리 및 로깅 정책                    |
+| 🤝 [`CONTRIBUTING.md`](CONTRIBUTING.md)                              | 브랜치 네이밍 컨벤션 (`type/#이슈-설명`) 및 코드 리뷰 규칙                  |
 
 ## 4차 프로젝트 한줄 회고
 
-
-| 이름 |   |
-|---|-------------|
+| 이름     |       |
+| -------- | ----- |
 | **수연** | [TDB] |
 | **일환** | [TDB] |
 | **유나** | [TDB] |
 | **길환** | [TDB] |
 | **상현** | [TDB] |
 
-
 <details>
 <summary>3차 프로젝트 회고 보기</summary>
 
 ## 3차 프로젝트 한줄 회고
 
-| 이름 | 회고                                                                                                                                                                      |
-|---|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **수연** | 팀장이자 PM을 처음 맡게 되었는데, 프로젝트 난이도를 낮게 예상한 탓에 일정이 밀린것이 가장 아쉬웠지만 동시에 기술적으로도 많은 걸 시도해보고 배울 수 있었다. 진행이 순탄치는 않았지만 목표로 정한 수치는 달성해서 다행이라고 생각하고, 끝까지 함께 해준 팀원분들께 감사하다.              |
-| **일환** | 흥미가 있던 주제였기에 생각보다 수월하고 간단할 것 같았던 프로젝트였으나, 진행 과정에서 전혀 만만치 않았음을 느꼈다. 그럼에도 팀장님의 리드와 팀원분들의 도움으로 무사히 프로젝트를 마칠 수 있었다고 생각하여 감사하다.                                              |
-| **유나** | 처음엔 그냥 챗봇 하나 만드는 줄 알았는데, 실제로 해보니 검색-검증-계산을 다 따로 쪼개고 검증해야 겨우 믿을 만한 답이 나온다는 걸 알게 된 프로젝트였다. 데이터 하나, 모델 하나를 정하는 데도 실험으로 근거를 만들어야 한다는 걸 몸으로 익히게 되는 경험이었다.                    |
-| **길환** | 개인사정으로 인해 프로젝트 개발부분에서 참여도가 낮았던 부분이 가장 아쉽습니다. 그래도 발표자였던 덕분에 이번 프로젝트와 관련된 지식과 설계과정에 대해서 공부할 수 있었으며, 4차 프로젝트 때는 현 프로젝트에 대한 이해도를 높여 개발과정에도 더 기여할 수 있었으면 좋겠습니다.              |
+| 이름     | 회고                                                                                                                                                                                                                                                                                          |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **수연** | 팀장이자 PM을 처음 맡게 되었는데, 프로젝트 난이도를 낮게 예상한 탓에 일정이 밀린것이 가장 아쉬웠지만 동시에 기술적으로도 많은 걸 시도해보고 배울 수 있었다. 진행이 순탄치는 않았지만 목표로 정한 수치는 달성해서 다행이라고 생각하고, 끝까지 함께 해준 팀원분들께 감사하다.                   |
+| **일환** | 흥미가 있던 주제였기에 생각보다 수월하고 간단할 것 같았던 프로젝트였으나, 진행 과정에서 전혀 만만치 않았음을 느꼈다. 그럼에도 팀장님의 리드와 팀원분들의 도움으로 무사히 프로젝트를 마칠 수 있었다고 생각하여 감사하다.                                                                       |
+| **유나** | 처음엔 그냥 챗봇 하나 만드는 줄 알았는데, 실제로 해보니 검색-검증-계산을 다 따로 쪼개고 검증해야 겨우 믿을 만한 답이 나온다는 걸 알게 된 프로젝트였다. 데이터 하나, 모델 하나를 정하는 데도 실험으로 근거를 만들어야 한다는 걸 몸으로 익히게 되는 경험이었다.                                 |
+| **길환** | 개인사정으로 인해 프로젝트 개발부분에서 참여도가 낮았던 부분이 가장 아쉽습니다. 그래도 발표자였던 덕분에 이번 프로젝트와 관련된 지식과 설계과정에 대해서 공부할 수 있었으며, 4차 프로젝트 때는 현 프로젝트에 대한 이해도를 높여 개발과정에도 더 기여할 수 있었으면 좋겠습니다.                |
 | **상현** | 이번 프로젝트는 간단할거라 생각했는데 생각보다 설계해야할것도 많았고 구현하고, 고려해야할 요소들도 많았었다.<br>그래도 팀원들이랑 으쌰으쌰 하고 많은 도움을 받아서 이번 프로젝트를 잘 마무리 할 수 있었던것 같다.<br>보완 할수 있는 부분 보완하고 4차때는 조금 더 발전 할 수 있도록 해야겠다. |
 
 </details>
