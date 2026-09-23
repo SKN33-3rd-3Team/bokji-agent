@@ -278,7 +278,7 @@ def build_graph(
                 user_types=user_types,
                 llm_client=llm_client,
             ),
-            llm=llmclient is not None,
+            llm=llm_client is not None,
         ),
     )
     graph.add_node(
