@@ -27,7 +27,7 @@ python -m uvicorn backend.app.main:app --reload --port 8000
 | `CORS_ORIGINS` | 기본 `http://localhost:5173`. 쉼표로 허용 origin을 지정하며 브라우저 요청에 credentials를 포함한다 |
 | `COOKIE_SECURE` | 개발 기본값 `false`. HTTPS 운영에서는 반드시 `true` |
 | `AUTH_SESSION_TTL_DAYS` | 로그인 세션 유효기간, 기본 7일 |
-| `BOKJI_LOG_DIR` | 로그 디렉터리. 미설정 시 `backend/logs`. `backend.log`에 기록하며 파일당 5,000,000바이트, 백업 3개로 로테이션한다. 콘솔 로그도 함께 출력한다 |
+| `BOKJI_LOG_DIR` | 로그 디렉터리. 미설정 시 `<root_dir>/logs`. `backend.log`에 기록하며 파일당 5,000,000바이트, 백업 3개로 로테이션한다. 콘솔 로그도 함께 출력한다 |
 | `AUTH_DB_URL` / `AUTH_ENC_KEY` | [회원 DB 설정](https://github.com/SKN33-3rd-3Team/bokji-agent/blob/72b5db730120b12dcfb650c3b9662e7144593927/docs/AUTH_REMOTE_DB.md). 원격 MySQL/MariaDB용 `pymysql`은 백엔드 의존성에 포함 |
 | `RUNPOD_POD_ID` / `HF_TOKEN` 등 | [LLM 선택 및 폴백](https://github.com/SKN33-3rd-3Team/bokji-agent/blob/72b5db730120b12dcfb650c3b9662e7144593927/docs/RUNPOD_SETUP_DRAFT.md) |
 
