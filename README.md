@@ -376,7 +376,7 @@ cd ..
 | `LLM_MODEL_NAME`, `LLM_HF_MODEL` | HF 모델은 앞 변수 우선 | HF 기본 모델은 `Bllossom/llama-3.2-Korean-Bllossom-3B`, 템플릿 예시는 `Qwen/Qwen3.5-9B` |
 | `LLM_PROVIDER` | HF 선택 / 미설정 시 자동 라우팅 | 템플릿은 `featherless-ai`. 사용 가능한 제공자·모델 조합에 맞춤 |
 | `LLM_MAX_NEW_TOKENS`, `LLM_DISABLE_THINKING` | HF 기본 `8192`, 사고 끄기는 `1`일 때 요청 | 템플릿은 각각 `1024`, `1`. 사고 끄기 지원 여부는 제공자에 따라 다름 |
-| `LLM_TIMEOUT_SECONDS`, `LLM_PREFETCH_WORKERS` | 각각 `120`, `4` | Pod·Serverless·Ollama 호출 한도(초)와 N5 병렬 추출 수. 템플릿의 병렬 추출 수는 `5`. N1/N5/N9/N10/N10a/N13은 LLM 사용 시 노드별 총 90초 제한 |
+| `LLM_TIMEOUT_SECONDS`, `LLM_PREFETCH_WORKERS` | 각각 `120`, `4` | Pod·Serverless·Ollama 호출 한도(초)와 N5 병렬 추출 수. 템플릿의 병렬 추출 수는 `5`. N1/N4/N5/N9/N10/N10a/N13은 LLM 사용 시 노드별 총 90초 제한 |
 | `OLLAMA_BASE_URL`, `OLLAMA_NUM_CTX` | 로컬 Ollama 선택 / `http://localhost:11434`, `4096` | `LLM_MODEL_NAME` 필수, loopback 주소만 허용. 자동 폴백 대상이 아님 |
 | `AUTH_DB_URL` | 운영 원격 MySQL 연결에 필요 | 형식 `mysql://<user>:<password>@<host>:<port>/<dbname>`. 미설정 시 로컬 SQLite이며 DB 장애 시 자동 전환·동기화 없음 |
 | `AUTH_DB_PATH` | 로컬 SQLite / `.runtime/auth.db` | `AUTH_DB_URL`이 없을 때만 사용 |
