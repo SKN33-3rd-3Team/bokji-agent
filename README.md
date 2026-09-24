@@ -35,13 +35,13 @@
 
 ### 4차 프로젝트
 
-|                                                                         팀원                                                                          |          역할          | 담당 업무                                                                                                                                                                                                                            |
-| :---------------------------------------------------------------------------------------------------------------------------------------------------: | :--------------------: | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|       **이수연**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-lesoo-181717?style=flat-square&logo=github)](https://github.com/lesoo)        |      **팀장, PM**      | • 중복 검색 내용 확인<br>• 지원금 계산기 재확인<br>• 자격검증 재확인<br>• 구비서류 데이터 VectorDB 요소 추가<br>• 평가지표·방법 다양화 평가<br>• React+FastAPI Migration 계획, API 문서, 화면 기획서 작성<br>• Frontend/Backend 병합 |
-|   **김일환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-KangDohwa-181717?style=flat-square&logo=github)](https://github.com/KangDohwa)    | **[Role Placeholder]** | • 검색 기능 고도화(사용자 적합성, 소요시간 단축)<br>• LLM 모델별 답변 분석 및 선정<br>• Backend Migration<br>• AWS EC2/S3 배포                                                                                                       |
-| **허유나**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-Heoyuna0819-181717?style=flat-square&logo=github)](https://github.com/Heoyuna0819)  | **[Role Placeholder]** | • Streamlit 화면 디자인 고도화<br>• 구비서류 안내<br>• LLM Output 정형화<br>• LLM 모델별 답변 분석 및 선정<br>• Frontend Migration<br>• Production QA/QC                                                                             |
-| **김길환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-amygdalis24-181717?style=flat-square&logo=github)](https://github.com/amygdalis24)  | **[Role Placeholder]** | • 단순 질의 대화형 챗봇 기능 추가<br>• Frontend Migration<br>• Production QA/QC                                                                                                                                                      |
-| **주상현**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-shju0924--ai-181717?style=flat-square&logo=github)](https://github.com/shju0924-ai) | **[Role Placeholder]** | • 회원정보 기반 정책 조회 기능 추가(Node4 활용)<br>• Backend Migration<br>• Production QA/QC                                                                                                                                         |
+|                                                                         팀원                                                                          |               역할               | 담당 업무                                                                                                                                                                                              |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------: |:------------------------------:|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|       **이수연**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-lesoo-181717?style=flat-square&logo=github)](https://github.com/lesoo)        |             **PM**             | • 중복 검색 내용 확인<br>• 지원금 계산기 재확인<br>• 자격검증 재확인<br>• 검색 기능 고도화(평가 지표 향상)<br>• 구비서류 데이터 VectorDB 요소 추가<br>• 평가지표·방법 다양화 평가<br>• React+FastAPI Migration 계획, API 문서, 화면 기획서 작성<br>• Frontend/Backend 병합 |
+|   **김일환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-KangDohwa-181717?style=flat-square&logo=github)](https://github.com/KangDohwa)    |         **Tech Leadr**         | • 검색 기능 고도화(사용자 적합성, 소요시간 단축)<br>• LLM 모델별 답변 분석 및 선정<br>• Backend Migration<br>• AWS EC2/S3 배포                                                                                                    |
+| **허유나**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-Heoyuna0819-181717?style=flat-square&logo=github)](https://github.com/Heoyuna0819)  | **Frontend Developer, Tester** | • Streamlit 화면 디자인 고도화<br>• 구비서류 안내<br>• LLM Output 정형화<br>• LLM 모델별 답변 분석 및 선정<br>• Frontend Migration<br>• Production QA/QC                                                                      |
+| **김길환**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-amygdalis24-181717?style=flat-square&logo=github)](https://github.com/amygdalis24)  |         **UI Design**          | • 단순 질의 대화형 챗봇 기능 추가<br>• Frontend Migration<br>• Production QA/QC                                                                                                                                 |
+| **주상현**<br><br> [![GitHub](https://img.shields.io/badge/GitHub-shju0924--ai-181717?style=flat-square&logo=github)](https://github.com/shju0924-ai) |     **Backend Developer**      | • 회원정보 기반 정책 조회 기능 추가(Node4 활용)<br>• Backend Migration<br>• Production QA/QC                                                                                                                       |
 
 <details>
 <summary>3차 프로젝트 역할 보기</summary>
@@ -531,13 +531,13 @@ Dev 평가의 기본 입력은 `data/evaluation/dev_questions.jsonl`, 출력은 
 
 ## 4차 프로젝트 한줄 회고
 
-| 이름     |       |
-| -------- | ----- |
-| **수연** | [TDB] |
-| **일환** | [TDB] |
-| **유나** | [TDB] |
-| **길환** | [TDB] |
-| **상현** | [TDB] |
+| 이름     |  |
+| -------- |  |
+| **수연** | PM으로서 프로젝트를 진행하며, RAG 구조 설계와 프롬프트 개선, 응답 정확도를 높이기 위한 반복적인 테스트 과정에서 많은 시행착오를 경험했습니다. 다사다난한 과정이었지만 프로젝트를 끝까지 잘 마무리하며 기술적으로도 많이 배우고 성장할 수 있었고, 끝까지 잘 따라와 준 팀원들에게 감사드립니다. |
+| **일환** | 최적화라는 작업은 늘 머리아프지만, 그만큼 해냈을 때의 보람이 크다고 생각합니다. 4차로 넘어오면서 정성을 더 쏟은 프로젝트였고, 종종 난관에 부딪힐 때 늘 도움을 주신 팀장님과 팀원들 덕분에 완주할 수 있었다고 생각하고, 이끌어주셔서 정말 감사합니다. |
+| **유나** | 3차 프로젝트에 이어 프론트엔드 구현을 맡으면서, 화면 하나하나가 실제 백엔드 로직·API와 정확히 맞물려야 사용자가 매끄럽게 쓸 수 있다는 걸 직접 버그를 고쳐가며 체감했습니다. 각자 맡은 부분이 모여 하나의 서비스로 완성되는 걸 보니 팀원들과 함께 만들어냈다는 게 뿌듯했습니다. |
+| **길환** | 3차 프로젝트에 이어 4차 프로젝트에서도 좋은 팀원들과 함께 할 수 있었던 것이 너무 좋았습니다. 프론트 위주로 프로젝트에 기여했었는데, 직접적으로 보이는 화면이어서 그런지 더욱 보람차게 느껴졌던 프로젝트였습니다. |
+| **상현** | 백엔드 설계와 DB를 맡아 진행하면서 흔히 이야기하는 프로그램 구동이 어떻게 이루어지는지 깊게 배울수 있었습니다. 또한 3차, 4차를 이어진 프로젝트로 진행하면서 같은 팀원들과 함께할 수 있어 즐겁고 행복했고, 좋은 분들과 두 번 연속 완주할 수 있어 감사한 마음입니다. |
 
 <details>
 <summary>3차 프로젝트 회고 보기</summary>
