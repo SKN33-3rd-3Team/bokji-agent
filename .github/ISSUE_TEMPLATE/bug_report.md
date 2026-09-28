@@ -2,8 +2,9 @@
 name: Bug Report
 about: 발생한 버그 및 비정상 동작을 보고합니다.
 title: "[fix] "
-labels: ["bug"]
-assignees: ""
+labels: bug, enhancement
+assignees: ''
+
 ---
 
 ## 🐛 문제 설명

@@ -2,8 +2,9 @@
 name: Feature / Task
 about: 새로운 기능 구현 또는 작업 항목을 정의합니다.
 title: "[feat] "
-labels: ["enhancement"]
-assignees: ""
+labels: enhancement
+assignees: ''
+
 ---
 
 ## 🎯 작업 목적 (Why)
